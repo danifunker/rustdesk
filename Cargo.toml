@@ -1,3 +1,24 @@
+# ============================================================================
+# BRANCH `ppc-agent` -- PowerPC Mac OS X (G4/G5, 10.4/10.5) agent build.
+#
+# Base commit 1931cb8c7 (v1.1.8, 2022-01-05): the last era with a GUI-free
+# `cli` feature AND `direct_server` (direct-IP access, no ID server required).
+# Built with mrustc, NOT cargo -- see rustdesk-ppc/ and
+# docs/powerpc-mrustc-scope.md.
+#
+# Goal: run `rustdesk --server` on a G5 so a modern client can connect *into*
+# it. Viewer/GUI half is out of scope; `--features cli` drops `mod ui`.
+#
+# DEVIATIONS FROM UPSTREAM 1931cb8c7 (each is an mrustc or platform constraint):
+#   - libc: pinned `=0.2.174`. 0.2.175 introduced the `src/new/` module tree,
+#       whose cfg_if'd glob re-exports mrustc's resolver cannot follow on Apple
+#       targets ("Cannot find component 1 of crate::new::pthread_::spawn").
+#       0.2.174 is the last release before it. Nothing else in the graph needs
+#       a newer libc at this vintage.
+#   - sciter-rs: REMOVED. A prebuilt closed-source binary with no PowerPC build
+#       and no possibility of one. Only ever referenced from `src/ui/`, which
+#       `--features cli` compiles out entirely (see src/lib.rs).
+# ============================================================================
 [package]
 name = "rustdesk"
 version = "1.1.8"
@@ -29,7 +50,7 @@ cfg-if = "1.0"
 lazy_static = "1.4"
 sha2 = "0.10"
 repng = "0.2"
-libc = "0.2"
+libc = "=0.2.174"   # DEVIATION: last release before the `src/new/` tree (see header)
 parity-tokio-ipc = { git = "https://github.com/open-trade/parity-tokio-ipc" }
 flexi_logger = "0.22"
 runas = "0.2"
@@ -45,12 +66,18 @@ rpassword = "5.0"
 base64 = "0.13"
 
 [target.'cfg(not(any(target_os = "android")))'.dependencies]
-cpal = { git = "https://github.com/open-trade/cpal" }
+# DEVIATION: de-forked. The open-trade fork of cpal 0.13.4 differs from the
+# published crate in exactly two files -- src/host/alsa/mod.rs (Linux) and
+# src/host/asio/stream.rs (Windows ASIO). src/host/coreaudio/ is byte-identical,
+# so for a macOS/PowerPC target the fork carries no change at all. Verified by
+# diffing the vendored fork against crates.io 0.13.4.
+cpal = "=0.13.4"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 machine-uid = "0.2"
 mac_address = "1.1"
-sciter-rs = { git = "https://github.com/open-trade/rust-sciter", branch = "dyn" }
+# DEVIATION: sciter-rs removed -- no PowerPC build exists; `--features cli`
+# compiles out `mod ui`, its only consumer.
 ctrlc = "3.2"
 arboard = "2.0"
 clipboard-master = "3.1"
@@ -74,6 +101,13 @@ libpulse-binding = "2.25"
 rust-pulsectl = { git = "https://github.com/open-trade/pulsectl" }
 
 [target.'cfg(not(any(target_os = "windows", target_os = "android", target_os = "ios")))'.dependencies]
+# NOT de-forkable, despite appearances. The fork's src/ is BYTE-IDENTICAL to
+# published psutil 3.2.1 -- the fork exists purely to bump its `platforms`
+# dependency off 0.2.1, and EVERY platforms 0.2.x is now yanked, so the
+# published crate can no longer be resolved at all:
+#   error: failed to select a version for the requirement `platforms = "^0.2.1"`
+#          version 0.2.1 is yanked
+# Keep the git dependency. (Audited 2026-08-04.)
 psutil = { version = "3.2", features = [ "process" ], git = "https://github.com/open-trade/rust-psutil" }
 
 [target.'cfg(target_os = "android")'.dependencies]
@@ -104,6 +138,17 @@ identifier = "com.carriez.rustdesk"
 icon = ["32x32.png", "128x128.png", "128x128@2x.png"]
 deb_depends = ["libgtk-3-0", "libxcb-randr0", "libxdo3", "libxfixes3", "libxcb-shape0", "libxcb-xfixes0", "libasound2", "libsystemd0", "pulseaudio"]
 osx_minimum_system_version = "10.14"
+
+# PPC branch: this vintage's `protobuf-codegen-pure` (hbb_common's build script)
+# has a slice-indexing UB that modern std's debug-only precondition checks abort
+# on, so a host `cargo check` dies in the build script before compiling anything:
+#   unsafe precondition(s) violated: slice::get_unchecked_mut ...
+# Only affects build scripts run by *cargo* on the host; mrustc/minicargo do not
+# enable those checks. Turning them off here keeps `cargo check` usable as a
+# syntax/type gate for the agent sources.
+[profile.dev.build-override]
+debug-assertions = false
+opt-level = 1
 
 #https://github.com/johnthagen/min-sized-rust
 #!!! rembember call "strip target/release/rustdesk"

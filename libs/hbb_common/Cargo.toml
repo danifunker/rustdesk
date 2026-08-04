@@ -11,7 +11,7 @@ protobuf = "3.0.0-alpha.2"
 tokio = { version = "1.15", features = ["full"] }
 tokio-util = { version = "0.6", features = ["full"] }
 futures = "0.3"
-bytes = "1.1"
+bytes = "=1.10.1"   # PPC DEVIATION: 1.11+ trips mrustc "Lifetime bound '#local0: 'static failed"
 log = "0.4"
 env_logger = "0.9"
 socket2 = { version = "0.3", features = ["reuseport"] }
