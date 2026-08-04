@@ -109,18 +109,68 @@ fn main() {
 #[cfg(feature = "cli")]
 fn main() {
     use clap::App;
+    // NOTE: upstream advertised `--server` here but never implemented the arm;
+    // the agent build needs it, plus a headless `--cm` and headless config
+    // setters (there is no GUI to set the password or the ID server from).
     let args = format!(
         "-p, --port-forward=[PORT-FORWARD-OPTIONS] 'Format: remote-id:local-port:remote-port[:remote-host]'
-       -s, --server... 'Start server'",
+       -s, --server 'Start the agent (accept incoming connections)'
+           --cm 'Run the headless connection manager (spawned by --server)'
+           --password=[PASSWORD] 'Set the permanent password and exit'
+           --rendezvous-server=[HOST] 'Set the self-hosted ID server (host or host:port) and exit'
+           --key=[KEY] 'Set the self-hosted server public key and exit'
+           --get-id 'Print this machine''s RustDesk ID and exit'",
     );
     let matches = App::new("rustdesk")
-        .version(crate::VERSION)
+        .version(VERSION)
         .author("CarrieZ Studio<info@rustdesk.com>")
         .about("RustDesk command line tool")
         .args_from_usage(&args)
         .get_matches();
     use hbb_common::env_logger::*;
     init_from_env(Env::default().filter_or(DEFAULT_FILTER_ENV, "info"));
+
+    // ---- headless configuration (no GUI to do this from) --------------------
+    use hbb_common::config::Config;
+    let mut configured = false;
+    if let Some(v) = matches.value_of("password") {
+        Config::set_password(v);
+        println!("permanent password set");
+        configured = true;
+    }
+    if let Some(v) = matches.value_of("rendezvous-server") {
+        // Config::get_rendezvous_server() appends the default port if absent.
+        Config::set_option("custom-rendezvous-server".to_owned(), v.to_owned());
+        println!("id server set to {}", v);
+        configured = true;
+    }
+    if let Some(v) = matches.value_of("key") {
+        Config::set_option("key".to_owned(), v.to_owned());
+        println!("server key set");
+        configured = true;
+    }
+    if matches.is_present("get-id") {
+        println!("{}", Config::get_id());
+        return;
+    }
+    if configured {
+        return;
+    }
+
+    if matches.is_present("cm") {
+        cm_headless::start();
+        return;
+    }
+    if matches.is_present("server") {
+        // Refuse to come up wide open -- the headless CM authorizes everyone.
+        if let Err(e) = cm_headless::check_password_set() {
+            eprintln!("{}", e);
+            std::process::exit(1);
+        }
+        println!("rustdesk agent starting, id = {}", Config::get_id());
+        start_server(true, true);
+        return;
+    }
     if let Some(p) = matches.value_of("port-forward") {
         let options: Vec<String> = p.split(":").map(|x| x.to_owned()).collect();
         if options.len() < 3 {

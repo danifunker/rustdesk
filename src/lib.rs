@@ -25,6 +25,9 @@ pub mod mobile_ffi;
 use common::*;
 #[cfg(feature = "cli")]
 pub mod cli;
+// GUI-free replacement for `mod ui`'s connection manager. See src/cm_headless.rs.
+#[cfg(all(feature = "cli", not(any(target_os = "android", target_os = "ios"))))]
+pub mod cm_headless;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod port_forward;
 mod lang;
