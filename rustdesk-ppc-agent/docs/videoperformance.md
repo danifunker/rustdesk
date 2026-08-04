@@ -81,11 +81,26 @@ probe : 6 ms first (16 bands dirty), 6 ms second (0 dirty)
 
 ### Resulting cost model (1920x1080)
 
+Full pipeline, measured with `--probe-display`:
+
+| stage | cost |
+|---|---|
+| dirty-band probe | 6 ms |
+| capture (VRAM → RAM) | 347 ms |
+| ARGB → I420 | 180 ms |
+| VP8 encode | 83 ms (8 KB out) |
+| **full-screen change** | **610 ms** |
+| **idle** | **6 ms** |
+
 | scenario | cost | notes |
 |---|---|---|
 | idle | **6 ms** | probe only |
-| one band changed (typing, a menu) | ~40 ms | probe + band read + convert |
-| whole screen changed (video) | ~520 ms | probe + full read + convert |
+| one band changed (typing, a menu) | ~50 ms | probe + band read + convert + encode |
+| whole screen changed (video) | ~610 ms | everything |
+
+Note the shape: **encode is the cheapest stage**, at 83 ms against 347 ms for
+capture and 180 ms for conversion. Tuning the codec is the least valuable thing
+that could be done here.
 
 Normal interactive work is genuinely usable; only full-screen motion falls back
 to ~2 fps, which is the honest ceiling for this hardware.
@@ -117,9 +132,10 @@ sent "directly in binary" for the old web client, and **modern RustDesk's client
 references neither**. VP8 via libvpx is realistically the only thing a real peer
 decodes.
 
-Codec settings still matter for the *encode* step once it exists — VP8 rather
-than VP9, realtime deadline, high `cpu_used`, modest bitrate — but that is
-additive to capture, not a substitute for fixing it.
+Codec settings still matter for the *encode* step — VP8 rather than VP9,
+realtime deadline, `cpu_used = -16`, 1500 kbps — but that step measures 83 ms
+against 527 ms for capture plus conversion. It is additive to capture, not a
+substitute for fixing it, and it is already the smallest term.
 
 ## 5. Conversion cost
 

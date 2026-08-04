@@ -15,7 +15,7 @@
 //!   ...             mouse_event / key_event in, video_frame out
 //! ```
 
-use std::io::{self, Read, Write};
+use std::io;
 use std::net::TcpStream;
 
 use protobuf::Message as _;
@@ -23,6 +23,17 @@ use protobuf::Message as _;
 use crate::crypto::{expected_login_hash, verify_login_hash, Handshake, SecureChannel};
 use crate::frame::{read_frame, write_frame, DEFAULT_MAX_PACKET};
 use crate::message_proto::*;
+
+/// Socket poll interval. Short enough that input stays responsive, long enough
+/// that an idle screen costs little more than the dirty-band probe.
+const POLL_MS: u64 = 30;
+/// Modest by modern standards, but the encoder is not the constraint here.
+const DEFAULT_BITRATE_KBPS: u32 = 1500;
+
+/// A read timeout looks like WouldBlock or TimedOut depending on the platform.
+fn is_timeout(e: &io::Error) -> bool {
+    matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut)
+}
 
 pub struct Peer {
     stream: TcpStream,
@@ -172,14 +183,88 @@ pub fn serve(stream: TcpStream, ident: &Identity) -> io::Result<()> {
     message_loop(&mut peer)
 }
 
-/// Dispatch until the peer disconnects.
+/// Video pump state, kept beside the message loop.
+#[cfg(all(target_os = "macos", not(no_vpx)))]
+struct Video {
+    cap: crate::capture::Capturer,
+    enc: crate::encode::Encoder,
+    img: crate::convert::I420,
+    start: std::time::Instant,
+}
+
+#[cfg(all(target_os = "macos", not(no_vpx)))]
+impl Video {
+    fn new(bitrate_kbps: u32) -> Result<Self, &'static str> {
+        let mut cap = crate::capture::Capturer::new()?;
+        let img = crate::convert::I420::new(cap.width, cap.height);
+        let enc = crate::encode::Encoder::new(img.width, img.height, bitrate_kbps)?;
+        cap.invalidate();   // the new peer needs a full frame regardless
+        Ok(Self { cap, enc, img, start: std::time::Instant::now() })
+    }
+
+    /// Probe, and if anything moved, capture/convert/encode one frame.
+    /// Returns None when the screen is unchanged -- the cheap path, ~6 ms.
+    fn next_frame(&mut self) -> Option<(Vec<u8>, bool, i64)> {
+        let dirty = self.cap.dirty_bands();
+        if !dirty.iter().any(|d| *d) {
+            return None;
+        }
+        let all = dirty.iter().all(|d| *d);
+        let stride = self.cap.stride();
+        let frame = self.cap.read_bands(&dirty);
+        crate::convert::argb_to_i420(frame, stride, &mut self.img);
+        let pts = self.start.elapsed().as_millis() as i64;
+        match self.enc.encode(&self.img, pts, all) {
+            Ok(f) if !f.data.is_empty() => Some((f.data.to_vec(), f.key, f.pts_ms)),
+            Ok(_) => None,
+            Err(e) => {
+                log::warn!("encode failed: {}", e);
+                None
+            }
+        }
+    }
+}
+
+/// Dispatch until the peer disconnects, pumping video between messages.
 ///
-/// Video is not wired up yet — capture/encode land next — so this currently
-/// consumes input events and answers keepalives, which is enough to hold a real
-/// client's session open and prove the protocol end to end.
+/// Single-threaded on purpose: one peer, one capture, and the encode is the
+/// expensive step. The socket is polled with a short timeout so an idle screen
+/// costs only the ~6 ms dirty-band probe.
 fn message_loop(peer: &mut Peer) -> io::Result<()> {
+    #[cfg(all(target_os = "macos", not(no_vpx)))]
+    let mut video = match Video::new(DEFAULT_BITRATE_KBPS) {
+        Ok(v) => Some(v),
+        Err(e) => {
+            log::warn!("video unavailable: {} (input-only session)", e);
+            None
+        }
+    };
+
+    peer.stream.set_read_timeout(Some(std::time::Duration::from_millis(POLL_MS)))?;
+    #[cfg(target_os = "macos")]
+    let mut injector = crate::input::Injector::new();
+
     loop {
+        // Pump one video frame, if the screen moved.
+        #[cfg(all(target_os = "macos", not(no_vpx)))]
+        if let Some(v) = video.as_mut() {
+            if let Some((data, key, pts)) = v.next_frame() {
+                let mut vp = crate::message_proto::VP9::new();
+                vp.data = data;
+                vp.key = key;
+                vp.pts = pts;
+                let mut vp9s = crate::message_proto::VP9s::new();
+                vp9s.frames.push(vp);
+                let mut vf = crate::message_proto::VideoFrame::new();
+                vf.set_vp9s(vp9s);
+                let mut m = Message::new();
+                m.set_video_frame(vf);
+                peer.send(&m)?;
+            }
+        }
+
         let msg = match peer.recv() {
+            Err(ref e) if is_timeout(e) => continue,
             Ok(m) => m,
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
                 log::info!("peer {} disconnected", peer.name);
@@ -189,12 +274,14 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
         };
         match msg.union {
             Some(message::Union::mouse_event(me)) => {
-                log::debug!("mouse mask={} x={} y={}", me.mask, me.x, me.y);
-                // TODO: crate::input::mouse(&me)
+                #[cfg(target_os = "macos")]
+                injector.mouse(&me);
+                let _ = &me;
             }
             Some(message::Union::key_event(ke)) => {
-                log::debug!("key down={} {:?}", ke.down, ke.union);
-                // TODO: crate::input::key(&ke)
+                #[cfg(target_os = "macos")]
+                injector.key(&ke);
+                let _ = &ke;
             }
             Some(message::Union::test_delay(t)) => {
                 if t.from_client {

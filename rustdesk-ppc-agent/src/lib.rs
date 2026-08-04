@@ -18,6 +18,8 @@ pub mod rendezvous_proto;
 pub mod capture;
 pub mod config;
 pub mod convert;
+#[cfg(all(target_os = "macos", not(no_vpx)))]
+pub mod encode;
 #[cfg(target_os = "macos")]
 pub mod input;
 pub mod crypto;
