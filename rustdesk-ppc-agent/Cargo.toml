@@ -1,0 +1,60 @@
+# rustdesk-ppc-agent -- a minimal RustDesk *agent* (the controlled side) for
+# PowerPC Mac OS X 10.4/10.5, built with mrustc.
+#
+# WHY THIS EXISTS RATHER THAN PORTING src/server/:
+# RustDesk is tokio from top to bottom, and mrustc has two async gaps that are
+# deep and unbounded -- an `async {}` block nested inside an `async fn` (which is
+# exactly `tokio::spawn(async move { .. })`, used unavoidably in
+# rendezvous_mediator.rs) and `Pin<&mut Self>` vtable thunks. Neither is
+# optional for a real port. A single-peer agent needs no async at all: blocking
+# I/O and a couple of threads cover it, which removes both gaps and drops the
+# dependency graph from ~175 crates to a handful.
+#
+# The protocol, the framing and the handshake are reimplemented *faithfully*
+# from the 1.1.8 tree next door -- see each module's header for the file it
+# mirrors. The .proto files are used verbatim, so the wire format is shared
+# rather than re-specified.
+#
+# Its own workspace: resolves independently, never pulled into the parent build.
+[workspace]
+
+[package]
+name = "rustdesk-ppc-agent"
+version = "0.1.0"
+edition = "2018"
+build = "build.rs"
+description = "RustDesk agent for PowerPC Mac OS X (10.4/10.5)"
+
+[[bin]]
+name = "rustdesk-agent"
+path = "src/main.rs"
+
+[lib]
+name = "rustdesk_ppc_agent"
+path = "src/lib.rs"
+
+[dependencies]
+# Pinned to what libs/hbb_common uses, so generated protobuf code and wire
+# behaviour match the peer we have to talk to.
+protobuf = "3.0.0-alpha.2"
+sodiumoxide = "0.2"
+sha2 = "0.10"
+libc = "=0.2.174"   # last release before the `src/new/` tree mrustc cannot resolve
+log = "0.4"
+
+[build-dependencies]
+protobuf-codegen-pure = "3.0.0-alpha.2"
+
+# `protobuf-codegen-pure` 3.0.0-alpha.2 has a slice-indexing UB that modern
+# std's debug-only precondition checks abort on, killing the build script before
+# it emits anything. Only affects build scripts run by cargo on the host; mrustc
+# and minicargo do not enable those checks.
+[profile.dev.build-override]
+debug-assertions = false
+opt-level = 1
+
+[profile.release.build-override]
+debug-assertions = false
+
+[profile.release]
+opt-level = 2
