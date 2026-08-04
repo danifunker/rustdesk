@@ -166,6 +166,17 @@ fn probe_display() {
             let f = c.frame();
             let cap_ms = tcap.elapsed().as_millis();
             println!("first px : {:02x} {:02x} {:02x} {:02x}", f[0], f[1], f[2], f[3]);
+            // How the real loop will behave: probe, then read only what moved.
+            let t = std::time::Instant::now();
+            let d1 = c.dirty_bands();
+            let probe_ms = t.elapsed().as_millis();
+            let t = std::time::Instant::now();
+            let d2 = c.dirty_bands();
+            let probe2_ms = t.elapsed().as_millis();
+            println!("probe     : {} ms first ({} bands dirty), {} ms second ({} dirty)",
+                probe_ms, d1.iter().filter(|x| **x).count(),
+                probe2_ms, d2.iter().filter(|x| **x).count());
+
             let (w, h, stride) = (c.width, c.height, c.stride());
             let t = std::time::Instant::now();
             let mut out = I420::new(w, h);
