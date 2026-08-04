@@ -35,7 +35,23 @@
 //!
 //! So [`Capturer::frame`] bulk-copies into a RAM buffer and hands that out. The
 //! copy dominates, which makes capture cost linear in *resolution*: ~350 ms at
-//! 1920x1080, ~135 ms at 1024x768, ~85 ms at 800x600.
+//! 1920x1080, ~126 ms at 1024x768, ~77 ms at 800x600.
+//!
+//! # Reading less is the only real optimisation
+//!
+//! Read cost is purely proportional to bytes, with no penalty for striding —
+//! measured at 1920x1080:
+//!
+//! ```text
+//!   full frame     348.6 ms      every  8th row   41.5 ms
+//!   every 2nd row  166.1 ms      every 16th row   20.9 ms
+//!   every 4th row   82.9 ms      every 32nd row   10.4 ms
+//! ```
+//!
+//! A desktop is mostly static, so paying 348 ms to discover nothing changed is
+//! the real waste. [`Capturer::dirty_bands`] samples every 16th row (~21 ms) and
+//! returns which horizontal bands moved; [`Capturer::read_bands`] then reads only
+//! those. No codec choice affects any of this — the cost is a raw memory read.
 
 use std::os::raw::{c_int, c_void};
 
@@ -53,6 +69,15 @@ extern "C" {
     fn CGDisplayShowCursor(d: CGDirectDisplayID) -> c_int;
 }
 
+/// Horizontal bands the screen is divided into for change detection. 16 keeps
+/// the probe cheap while still isolating a typical window or menu to a couple of
+/// bands.
+pub const BANDS: usize = 16;
+
+/// Rows sampled per band when probing. Every 16th row over the whole screen
+/// costs ~21 ms at 1920x1080 versus ~348 ms for the full frame.
+const PROBE_ROW_STEP: usize = 16;
+
 pub struct Capturer {
     display: CGDirectDisplayID,
     pub width: usize,
@@ -61,6 +86,8 @@ pub struct Capturer {
     base: *mut c_void,
     /// RAM shadow of the framebuffer; see the module note on VRAM read cost.
     buf: Vec<u8>,
+    /// Per-band checksums from the last probe, for change detection.
+    sums: Vec<u64>,
 }
 
 impl Capturer {
@@ -85,6 +112,7 @@ impl Capturer {
                 bytes_per_row,
                 base,
                 buf: vec![0; bytes_per_row * height],
+                sums: vec![0; BANDS],
             })
         }
     }
@@ -108,6 +136,87 @@ impl Capturer {
 
     pub fn stride(&self) -> usize {
         self.bytes_per_row
+    }
+
+    pub fn band_rows(&self) -> usize {
+        (self.height + BANDS - 1) / BANDS
+    }
+
+    /// Sample every `PROBE_ROW_STEP`th row and report which bands changed since
+    /// the previous probe. ~21 ms at 1920x1080 against ~348 ms for a full read.
+    ///
+    /// This is a sampled checksum, not a proof: a change confined entirely to
+    /// unsampled rows is missed until something else in the band moves. That is
+    /// the right trade for a screen-sharing agent, where the alternative is
+    /// reading everything every time.
+    pub fn dirty_bands(&mut self) -> [bool; BANDS] {
+        let mut dirty = [false; BANDS];
+        let rows_per = self.band_rows();
+        for b in 0..BANDS {
+            let start = b * rows_per;
+            let end = ((b + 1) * rows_per).min(self.height);
+            let mut sum: u64 = 0;
+            let mut row = start;
+            while row < end {
+                let off = row * self.bytes_per_row;
+                let line = unsafe {
+                    std::slice::from_raw_parts(
+                        (self.base as *const u8).add(off),
+                        self.bytes_per_row,
+                    )
+                };
+                // Sample within the row too; the whole point is to touch few bytes.
+                let mut c = 0;
+                while c < line.len() {
+                    sum = sum.wrapping_mul(31).wrapping_add(line[c] as u64);
+                    c += 64;
+                }
+                row += PROBE_ROW_STEP;
+            }
+            if sum != self.sums[b] {
+                dirty[b] = true;
+                self.sums[b] = sum;
+            }
+        }
+        dirty
+    }
+
+    /// Copy only the given bands out of VRAM into the shadow. Cost is
+    /// proportional to the number of bands read.
+    pub fn read_bands(&mut self, dirty: &[bool; BANDS]) -> &[u8] {
+        let n = self.bytes_per_row * self.height;
+        if self.buf.len() != n {
+            self.buf.resize(n, 0);
+        }
+        let rows_per = self.band_rows();
+        for b in 0..BANDS {
+            if !dirty[b] {
+                continue;
+            }
+            let start = b * rows_per;
+            let end = ((b + 1) * rows_per).min(self.height);
+            if start >= end {
+                continue;
+            }
+            let off = start * self.bytes_per_row;
+            let len = (end - start) * self.bytes_per_row;
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    (self.base as *const u8).add(off),
+                    self.buf.as_mut_ptr().add(off),
+                    len,
+                );
+            }
+        }
+        &self.buf
+    }
+
+    /// Force the next `dirty_bands` to report everything, e.g. when a new peer
+    /// connects and needs a full frame regardless of what moved.
+    pub fn invalidate(&mut self) {
+        for s in self.sums.iter_mut() {
+            *s = u64::MAX;
+        }
     }
 
     /// Re-read geometry; the user may have changed resolution under us.
