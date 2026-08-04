@@ -185,8 +185,34 @@ fn probe_display() {
             let total = cap_ms + conv_ms;
             println!("capture   : {} ms (VRAM -> RAM)", cap_ms);
             println!("argb->i420: {} ms", conv_ms);
-            println!("total     : {} ms ({} fps)", total,
+
+            #[cfg(not(no_vpx))]
+            let enc_ms = {
+                match rustdesk_ppc_agent::encode::Encoder::new(out.width, out.height, 1500) {
+                    Ok(mut e) => {
+                        // First frame is a keyframe and not representative; time
+                        // the second, which is what a steady session pays.
+                        let _ = e.encode(&out, 0, true);
+                        let t = std::time::Instant::now();
+                        match e.encode(&out, 33, false) {
+                            Ok(f) => {
+                                let ms = t.elapsed().as_millis();
+                                println!("vp8 encode: {} ms ({} bytes, key={})", ms, f.data.len(), f.key);
+                                ms
+                            }
+                            Err(er) => { println!("vp8 encode: failed: {}", er); 0 }
+                        }
+                    }
+                    Err(er) => { println!("vp8 encode: unavailable: {}", er); 0 }
+                }
+            };
+            #[cfg(no_vpx)]
+            let enc_ms = 0;
+
+            let total = total + enc_ms;
+            println!("total     : {} ms ({} fps) for a full-screen change", total,
                 if total > 0 { (1000 / total).to_string() } else { "inf".to_owned() });
+            println!("idle cost : {} ms (probe only)", probe2_ms);
         }
         Err(e) => println!("capture unavailable: {}", e),
     }
