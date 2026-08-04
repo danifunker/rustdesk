@@ -22,7 +22,6 @@
 name = "rustdesk-ppc-agent"
 version = "0.1.0"
 edition = "2018"
-build = "build.rs"
 description = "RustDesk agent for PowerPC Mac OS X (10.4/10.5)"
 
 [[bin]]
@@ -41,20 +40,6 @@ sodiumoxide = "0.2"
 sha2 = "0.10"
 libc = "=0.2.174"   # last release before the `src/new/` tree mrustc cannot resolve
 log = "0.4"
-
-[build-dependencies]
-protobuf-codegen-pure = "3.0.0-alpha.2"
-
-# `protobuf-codegen-pure` 3.0.0-alpha.2 has a slice-indexing UB that modern
-# std's debug-only precondition checks abort on, killing the build script before
-# it emits anything. Only affects build scripts run by cargo on the host; mrustc
-# and minicargo do not enable those checks.
-[profile.dev.build-override]
-debug-assertions = false
-opt-level = 1
-
-[profile.release.build-override]
-debug-assertions = false
 
 [profile.release]
 opt-level = 2
