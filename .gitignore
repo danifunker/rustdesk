@@ -12,4 +12,4 @@ sciter.dll
 # PPC build artifacts
 rustdesk-ppc/vendor/
 rustdesk-ppc-agent/target/
-rustdesk-ppc-agent/src/protos/
+rustdesk-ppc-agent/vendor/
