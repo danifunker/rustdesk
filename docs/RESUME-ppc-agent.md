@@ -99,26 +99,39 @@ cctools + ld64 (`darwin-xtools`), gmake, MacPorts 2.12.5.
 | **libopus** | audio (phase 1) | via `magnum-opus`, which ships a checked-in `src/opus_ffi.rs` — its bindgen call can be script-overridden away |
 | ~~libyuv~~ | BGRA→I420 | **skip** — ~30 lines to hand-write; its port drags cmake + ninja + libjpeg-turbo |
 
-### Two ways to get them, and why the obvious one is a trap
+### Two ways to get them, and why MacPorts is the expensive one
 
-**MacPorts** lists **`gcc16` as a build dependency** for all three — a full GCC
-bootstrap on a 2.3 GHz G5. It also needs `git` (absent), and the G5's curl is
-**7.16.4 / OpenSSL 0.9.7l**, which cannot do HTTPS at all (plain HTTP works), so
-MacPorts cannot fetch its own sources. *(There is reportedly a newer curl at
-`/opt/bootstrap/bin/curl` — unverified.)*
+**There are no prebuilt binaries for Leopard.** macos-powerpc.org publishes a
+large, actively-maintained archive at `http://macos-powerpc.org/packages/`, but
+every single one is **`darwin_10`** (Snow Leopard). This G5 is Darwin 9.8.0 =
+`darwin_9`, and MacPorts keys archives to the OS major version, so none of them
+apply. Verified across libsodium, libvpx, libopus, gcc16, pkgconfig and zlib —
+`darwin_10` only, no `darwin_9` anywhere.
 
-Note this limitation does **not** affect our build: mrustc, vendoring and
-minicargo all run on the Linux host; the G5 only compiles the emitted C.
+So on Leopard **every port builds from source**, including the `gcc16` that all
+three of ours list as a build dependency. That is a full GCC bootstrap on a
+2.3 GHz G5 before any of our libraries even start.
 
-**Recommended:** fetch the three tarballs on the Linux host, rsync them over,
-and `configure && make` with the **existing gcc10** into a private prefix
-(`~/ppc-libs`) — hours instead of days, one toolchain instead of two, and
-`rm -rf`-reversible. Mixing gcc16-built dylibs with our gcc10-compiled objects
-is a libgcc-runtime risk worth avoiding.
+Second reason to avoid it: MacPorts would build them with gcc16, and we would
+then be linking those against mrustc output compiled by gcc10 — mixing libgcc
+runtimes. One compiler for both is worth having.
 
-gcc16 is still worth having as a *fallback* if a library won't build cleanly on
-Leopard (MacPorts carries real patches for this platform). It blocks nothing, so
-it can install in the background.
+**Recommended:** build the three from source with the **existing gcc 10.5.0**,
+into a private prefix (`~/ppc-libs`) so the MacPorts tree stays untouched and
+the whole thing is `rm -rf`-reversible.
+
+The G5 can fetch its own sources: **`/opt/bootstrap/bin/curl` is 8.13.0 with
+OpenSSL 3.5.0** and does modern TLS fine. Only `/usr/bin/curl` (7.16.4 /
+OpenSSL 0.9.7l) is stuck at ancient TLS. Either way this never affected our
+build — mrustc, vendoring and minicargo all run on the Linux host; the G5 only
+compiles the emitted C.
+
+### Port trees, if MacPorts is used for anything else
+
+`sources.conf` currently points at `PPCPorts/powerpc-ports.tar`, the tree shared
+with Snow Leopard. There is a Leopard-specific
+`PPCPorts/PPCPorts-Leopard-2.12.5_1.zip`, which is the right one for a 10.5 box.
+Switching does not change the no-binaries situation.
 
 ---
 
