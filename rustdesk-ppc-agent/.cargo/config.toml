@@ -1,0 +1,8 @@
+# Use the vendored tree for cargo as well as minicargo, so host `cargo test`
+# exercises exactly the sources the PowerPC build uses -- including the
+# protobuf UB fix in patches/protobuf-ub.py.
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "vendor"
