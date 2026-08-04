@@ -14,7 +14,12 @@ pub mod message_proto;
 #[allow(renamed_and_removed_lints, clippy::all)]
 pub mod rendezvous_proto;
 
+#[cfg(target_os = "macos")]
+pub mod capture;
 pub mod config;
+pub mod convert;
+#[cfg(target_os = "macos")]
+pub mod input;
 pub mod crypto;
 pub mod frame;
 pub mod session;
