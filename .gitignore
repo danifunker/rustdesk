@@ -8,3 +8,8 @@ __pycache__
 src/version.rs
 *dmg
 sciter.dll
+
+# PPC build artifacts
+rustdesk-ppc/vendor/
+rustdesk-ppc-agent/target/
+rustdesk-ppc-agent/src/protos/

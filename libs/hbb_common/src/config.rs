@@ -665,7 +665,7 @@ const PEERS: &str = "peers";
 
 impl PeerConfig {
     pub fn load(id: &str) -> PeerConfig {
-        let _ = CONFIG.read().unwrap(); // for lock
+        drop(CONFIG.read().unwrap()); // for lock (deny-by-default `let_underscore_lock` on modern rustc; `drop` keeps the original drop-immediately semantics)
         match confy::load_path(&Self::path(id)) {
             Ok(config) => config,
             Err(err) => {
@@ -676,7 +676,7 @@ impl PeerConfig {
     }
 
     pub fn store(&self, id: &str) {
-        let _ = CONFIG.read().unwrap(); // for lock
+        drop(CONFIG.read().unwrap()); // for lock (deny-by-default `let_underscore_lock` on modern rustc; `drop` keeps the original drop-immediately semantics)
         if let Err(err) = confy::store_path(Self::path(id), self) {
             log::error!("Failed to store config: {}", err);
         }
@@ -736,7 +736,7 @@ pub struct Fav {
 
 impl Fav {
     pub fn load() -> Fav {
-        let _ = CONFIG.read().unwrap(); // for lock
+        drop(CONFIG.read().unwrap()); // for lock (deny-by-default `let_underscore_lock` on modern rustc; `drop` keeps the original drop-immediately semantics)
         match confy::load_path(&Config::file_("_fav")) {
             Ok(fav) => fav,
             Err(err) => {
