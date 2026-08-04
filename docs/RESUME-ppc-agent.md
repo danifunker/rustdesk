@@ -99,39 +99,82 @@ cctools + ld64 (`darwin-xtools`), gmake, MacPorts 2.12.5.
 | **libopus** | audio (phase 1) | via `magnum-opus`, which ships a checked-in `src/opus_ffi.rs` — its bindgen call can be script-overridden away |
 | ~~libyuv~~ | BGRA→I420 | **skip** — ~30 lines to hand-write; its port drags cmake + ninja + libjpeg-turbo |
 
-### Two ways to get them, and why MacPorts is the expensive one
+### Prebuilt 32-bit Leopard binaries DO exist — use them
 
-**There are no prebuilt binaries for Leopard.** macos-powerpc.org publishes a
-large, actively-maintained archive at `http://macos-powerpc.org/packages/`, but
-every single one is **`darwin_10`** (Snow Leopard). This G5 is Darwin 9.8.0 =
-`darwin_9`, and MacPorts keys archives to the OS major version, so none of them
-apply. Verified across libsodium, libvpx, libopus, gcc16, pkgconfig and zlib —
-`darwin_10` only, no `darwin_9` anywhere.
+I initially concluded they didn't. That was wrong: I had only checked
+macos-powerpc.org, whose `packages/` is all `darwin_10` (Snow Leopard) and whose
+`packages_ppc64/` is `darwin_9.**ppc64**` — right OS, wrong architecture, since
+our whole toolchain is 32-bit (`powerpc-apple-darwin`).
 
-So on Leopard **every port builds from source**, including the `gcc16` that all
-three of ours list as a build dependency. That is a full GCC bootstrap on a
-2.3 GHz G5 before any of our libraries even start.
+Two *other* mirrors publish **`darwin_9.ppc`** — Leopard, 32-bit, exactly ours:
 
-Second reason to avoid it: MacPorts would build them with gcc16, and we would
-then be linking those against mrustc output compiled by gcc10 — mixing libgcc
-runtimes. One compiler for both is worth having.
+| mirror | url |
+|---|---|
+| **kemonomimi** | `https://kemonomimi.nl/ppcports/software` |
+| **leopard-ports** | `https://dist.leopard-ports.org/software` |
 
-**Recommended:** build the three from source with the **existing gcc 10.5.0**,
-into a private prefix (`~/ppc-libs`) so the MacPorts tree stays untouched and
-the whole thing is `rm -rf`-reversible.
+Between them everything we need is prebuilt:
 
-The G5 can fetch its own sources: **`/opt/bootstrap/bin/curl` is 8.13.0 with
-OpenSSL 3.5.0** and does modern TLS fine. Only `/usr/bin/curl` (7.16.4 /
-OpenSSL 0.9.7l) is stuck at ancient TLS. Either way this never affected our
-build — mrustc, vendoring and minicargo all run on the Linux host; the G5 only
-compiles the emitted C.
+| package | where | note |
+|---|---|---|
+| `libvpx-1.16.0_2+altivec` | kemonomimi | **AltiVec** — matters for G5 encode |
+| `libopus-1.6.1_0` | both | |
+| `libsodium-1.0.22_0` | kemonomimi | leopard-ports has no libsodium |
+| `libyuv-0.0.1922-20260128_0` | both | |
+| `legacy-support`, `libjpeg-turbo`, `libgcc14`, `pkgconfig` | leopard-ports | deps, resolved automatically |
 
-### Port trees, if MacPorts is used for anything else
+**This reverses the "skip libyuv" advice** in the scope doc: it was only worth
+hand-writing the BGRA→I420 conversion because its port dragged in cmake + ninja
++ libjpeg-turbo from source. As a prebuilt binary it is free, and likely faster
+than anything hand-rolled.
 
-`sources.conf` currently points at `PPCPorts/powerpc-ports.tar`, the tree shared
-with Snow Leopard. There is a Leopard-specific
-`PPCPorts/PPCPorts-Leopard-2.12.5_1.zip`, which is the right one for a 10.5 box.
-Switching does not change the no-binaries situation.
+Setup (needs sudo; Leopard's sudo has no `-n`, so it must be run interactively):
+
+```bash
+curl -fL https://leopard-ports.org/add-mirrors.sh -o /tmp/add-mirrors.sh
+less /tmp/add-mirrors.sh          # 31 lines: backs up archive_sites.conf, adds 3 mirrors
+sudo bash /tmp/add-mirrors.sh
+sudo port sync
+sudo port install libvpx libyuv           # +altivec libvpx from kemonomimi
+```
+
+The signing key is **already installed** — `pubkeys.conf` points at
+`/opt/local/share/macports/leopard-ports-pubkey.pem`.
+
+### What was already built from source (before the mirrors were found)
+
+Both live in `~/ppc-libs` and work; keeping them avoids re-testing:
+
+- **libsodium 1.0.18** — `libsodium.a`, arch `ppc7400`, ~3 min to build. Worth
+  keeping over the mirror's 1.0.22: `libsodium-sys 0.2.7` targets 1.0.18 exactly.
+- **libopus 1.3.1** — `libopus.a`. Either this or the mirror's 1.6.1 is fine.
+
+Build recipe, if either needs redoing:
+
+```bash
+CC=/opt/local/libexec/gcc10-bootstrap/bin/gcc ./configure \
+    --prefix=$HOME/ppc-libs --disable-shared --enable-static \
+    --disable-dependency-tracking
+gnumake -j2 install
+```
+
+Static-only on purpose: no dylib path juggling at runtime, and the same compiler
+that builds the mrustc-emitted C, so one libgcc throughout.
+
+### Fetching on the G5
+
+**`/opt/bootstrap/bin/curl` is 8.13.0 with OpenSSL 3.5.0** and does modern TLS
+fine; only `/usr/bin/curl` (7.16.4 / OpenSSL 0.9.7l) is stuck. Note
+`download.libsodium.org` now 404s for 1.0.18 — use the GitHub release asset.
+Opus is on `downloads.xiph.org`, not as a GitHub release asset.
+
+### Port trees
+
+`sources.conf` points at `PPCPorts/powerpc-ports.tar`. There is no separate
+Leopard *ports tree* to switch to — `PPCPorts-Leopard-2.12.5_1.zip` is the
+MacPorts **base** build for Leopard, and this box already runs base 2.12.5
+reporting `darwin 9 powerpc` with `build_arch ppc`. What differs per-OS is the
+binary archive, handled above.
 
 ---
 
