@@ -35,7 +35,7 @@ extern "C" {
     fn rd_key_char(cp: c_uint, down: c_int, flags: c_uint);
     fn rd_keycode_for_char(cp: c_uint, needs_shift: *mut c_int) -> c_int;
     fn rd_release_modifiers();
-    fn rd_scroll(dy: c_int, dx: c_int);
+    fn rd_scroll(dy: c_int, dx: c_int, pixels: c_int);
     fn rd_key(keycode: c_int, down: c_int);
     fn rd_key_unicode(cp: c_uint, down: c_int);
     fn rd_key_with_flags(keycode: c_int, down: c_int, flags: c_uint);
@@ -155,7 +155,10 @@ pub enum MouseAction {
     /// so the position must come from the system rather than from the message.
     Button { down: bool, button: i32, at_cursor: bool, x: f64, y: f64 },
     /// Wheel movement, already in the sense CoreGraphics wants.
-    Scroll { dx: i32, dy: i32 },
+    /// `pixels` distinguishes a trackpad from a wheel: a wheel notch is a
+    /// line, a two-finger swipe is a distance in pixels, and sending one as the
+    /// other is either imperceptible or a whole page per twitch.
+    Scroll { dx: i32, dy: i32, pixels: bool },
     /// A `mask` whose low bits name no event we handle.
     Ignore,
 }
@@ -192,8 +195,8 @@ impl Injector {
     /// Decide what a mouse event means, and track which buttons are held.
     ///
     /// `mask` packs two fields, matching `input_service.rs`: the low 3 bits are
-    /// the kind (0 move, 1 down, 2 up, 3 wheel) and the rest is the button
-    /// (1 left, 2 right, 4 middle).
+    /// the kind (0 move, 1 down, 2 up, 3 wheel, **4 trackpad**) and the rest is
+    /// the button (1 left, 2 right, 4 middle).
     pub fn decide_mouse(&mut self, ev: &MouseEvent) -> MouseAction {
         let (x, y) = (ev.x as f64, ev.y as f64);
         let kind = ev.mask & 0x7;
@@ -232,7 +235,14 @@ impl Injector {
             // sideways swipes entirely, and not negating scrolled the wrong
             // way, which together is most of what "gestures" means on a
             // trackpad.
-            3 => MouseAction::Scroll { dx: -ev.x, dy: -ev.y },
+            3 => MouseAction::Scroll { dx: -ev.x, dy: -ev.y, pixels: false },
+            // Trackpad. **Not in the 1.1.8 protocol this agent was built
+            // from**, so it fell through to `Ignore` and every two-finger
+            // scroll a modern client sent was discarded -- 317 of them against
+            // 6 clicks in one real session, which is what "scrolling doesn't
+            // work" turned out to mean. The deltas are pixels rather than
+            // notches, hence the flag.
+            4 => MouseAction::Scroll { dx: -ev.x, dy: -ev.y, pixels: true },
             _ => MouseAction::Ignore,
         }
     }
@@ -275,7 +285,9 @@ impl Injector {
                         rd_mouse(ty, x, y, button);
                     }
                 }
-                MouseAction::Scroll { dx, dy } => rd_scroll(dy, dx),
+                MouseAction::Scroll { dx, dy, pixels } => {
+                    rd_scroll(dy, dx, if pixels { 1 } else { 0 })
+                }
                 MouseAction::Ignore => {}
             }
         }
@@ -415,13 +427,28 @@ mod tests {
     #[test]
     fn a_wheel_event_carries_both_axes_negated() {
         let mut inj = Injector::new();
-        assert_eq!(inj.decide_mouse(&mouse(WHEEL, 0, -3)), MouseAction::Scroll { dx: 0, dy: 3 });
+        assert_eq!(
+            inj.decide_mouse(&mouse(WHEEL, 0, -3)),
+            MouseAction::Scroll { dx: 0, dy: 3, pixels: false }
+        );
         assert_eq!(
             inj.decide_mouse(&mouse(WHEEL, 5, 0)),
-            MouseAction::Scroll { dx: -5, dy: 0 },
+            MouseAction::Scroll { dx: -5, dy: 0, pixels: false },
             "a sideways swipe must not be dropped"
         );
-        assert_eq!(inj.decide_mouse(&mouse(WHEEL, -2, 4)), MouseAction::Scroll { dx: 2, dy: -4 });
+        assert_eq!(
+            inj.decide_mouse(&mouse(WHEEL, -2, 4)),
+            MouseAction::Scroll { dx: 2, dy: -4, pixels: false }
+        );
+
+        // A trackpad swipe is the same decision in pixels, and must not be
+        // dropped: it was, for every modern client, until this was added.
+        const TRACKPAD: i32 = 4;
+        assert_eq!(
+            inj.decide_mouse(&mouse(TRACKPAD, -2, 4)),
+            MouseAction::Scroll { dx: 2, dy: -4, pixels: true }
+        );
+        assert_ne!(inj.decide_mouse(&mouse(TRACKPAD, 0, 5)), MouseAction::Ignore);
     }
 
     #[test]
