@@ -19,6 +19,15 @@ fn main() {
     println!("cargo:rustc-link-lib=static=vpx");
     println!("cargo:rerun-if-changed=src/vpx_shim.c");
 
+    // ARGB -> I420. In C purely for the optimiser: mrustc emits C at -O1 with
+    // Rust's bounds checks intact, and this is the hottest arithmetic loop in
+    // the agent. src/convert.rs keeps the reference implementation.
+    cc::Build::new()
+        .file("src/convert_shim.c")
+        .opt_level(2)
+        .compile("convertshim");
+    println!("cargo:rerun-if-changed=src/convert_shim.c");
+
     // Quartz injection. In C because CGPoint crosses the API by value, and a
     // 16-byte two-double struct is where the 32-bit PowerPC calling convention
     // diverges from a naive extern "C" declaration.

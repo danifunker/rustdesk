@@ -431,6 +431,19 @@ struct Video {
     last_probe: std::time::Instant,
     /// Where the current frame's time is going. See `FrameTimes`.
     t: FrameTimes,
+    /// Send the next frame as a keyframe.
+    ///
+    /// Deliberately *not* "lots of the screen changed". That was the rule until
+    /// live instrumentation showed what it cost: dragging a window dirties all
+    /// sixteen bands, so the worst case for capture was also forced to be the
+    /// worst case for the encoder -- 170-181 ms and ~95 KB, against 27-78 ms
+    /// and a few KB for the inter frame that would have done. Nothing needed
+    /// it. A fresh encoder emits a keyframe by itself, so a new peer and a
+    /// resize are covered; `kf_mode` is `VPX_KF_AUTO`, so libvpx still places
+    /// them where they pay; and the stream is TCP, so an inter frame cannot
+    /// arrive without its predecessor. What is left is the peer *asking*, which
+    /// it can now do -- see `Misc::refresh_video`.
+    want_key: bool,
     /// Set when the encoder could not be rebuilt; the session carries on with
     /// input only rather than dropping the peer.
     broken: bool,
@@ -454,6 +467,7 @@ impl Video {
             repaired: false,
             last_probe: std::time::Instant::now(),
             t: FrameTimes::default(),
+            want_key: true,
             broken: false,
         })
     }
@@ -463,6 +477,7 @@ impl Video {
         self.img = crate::convert::I420::new(self.cap.width, self.cap.height);
         self.enc = crate::encode::Encoder::new(self.img.width, self.img.height, self.bitrate_kbps)?;
         self.cap.invalidate();
+        self.want_key = true;
         Ok(())
     }
 
@@ -538,6 +553,14 @@ impl Video {
         if !self.repaired && self.last_change.elapsed() >= SETTLE_REPAINT {
             self.repaired = true;
             log::debug!("screen settled; repainting in full to cover any missed change");
+            // A keyframe, and the only one sent on a schedule. The encoder's
+            // static-skip threshold leaves a block uncoded when its error is
+            // small, so a faint difference can sit on the peer's screen for as
+            // long as it stays under the threshold -- bounded, but not
+            // self-correcting. This is the repair path and it runs when the
+            // screen has gone quiet, so an exact frame costs latency nobody is
+            // waiting on.
+            self.want_key = true;
             self.cap.invalidate();
             let all = self.cap.dirty_bands();
             if all.iter().any(|d| *d) {
@@ -565,11 +588,21 @@ impl Video {
         self.t.bands += 1;
     }
 
+    /// Ask for the next frame to be a keyframe, and for everything to be
+    /// re-read so it has current pixels to key on. What the peer's refresh
+    /// button reaches.
+    fn request_key(&mut self) {
+        self.want_key = true;
+        self.cap.invalidate();
+    }
+
     /// Encode whatever is in the conversion buffer.
-    fn encode(&mut self, all: bool) -> Option<(Vec<u8>, bool, i64)> {
+    fn encode(&mut self) -> Option<(Vec<u8>, bool, i64)> {
         let pts = self.start.elapsed().as_millis() as i64;
+        let force = self.want_key;
+        self.want_key = false;
         let t = std::time::Instant::now();
-        let r = self.enc.encode(&self.img, pts, all);
+        let r = self.enc.encode(&self.img, pts, force);
         self.t.encode = t.elapsed();
         match r {
             Ok(f) if !f.data.is_empty() => {
@@ -728,6 +761,10 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
     // silence roughly a minute after the screen stops changing.
     let mut delay_sent = std::time::Instant::now();
     let mut delay_outstanding = false;
+    // The peer's refresh button. Handled in the loop rather than here because
+    // that is where the video state lives.
+    #[cfg_attr(not(all(target_os = "macos", not(no_vpx))), allow(unused_mut))]
+    let mut refresh_requested = false;
 
     macro_rules! pump_input {
         () => {{
@@ -735,12 +772,13 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
             let alive = drain_input(
                 peer,
                 &mut delay_outstanding,
+                &mut refresh_requested,
                 &mut injector,
                 &mut cursor_tracker,
                 &mut last_peer_input,
             )?;
             #[cfg(not(target_os = "macos"))]
-            let alive = drain_input(peer, &mut delay_outstanding)?;
+            let alive = drain_input(peer, &mut delay_outstanding, &mut refresh_requested)?;
             if !alive {
                 return Ok(());
             }
@@ -789,9 +827,15 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
                 peer.send(&m)?;
             }
 
+            // The peer asked for a fresh frame; give it a real keyframe.
+            if refresh_requested {
+                refresh_requested = false;
+                log::debug!("peer asked to refresh the video; sending a keyframe");
+                v.request_key();
+            }
+
             if let Some(dirty) = v.probe() {
                 let frame_start = std::time::Instant::now() - v.t.probe;
-                let all = dirty.iter().all(|d| *d);
                 // One band at a time, servicing input in between. A whole
                 // frame is ~520 ms of reading and converting; a band is ~33 ms,
                 // which is the difference between a mouse that tracks and one
@@ -808,7 +852,7 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
                         pump_input!();
                     }
                 }
-                if let Some((data, key, pts)) = v.encode(all) {
+                if let Some((data, key, pts)) = v.encode() {
                     let mut vp = crate::message_proto::VP9::new();
                     vp.data = data;
                     vp.key = key;
@@ -847,6 +891,7 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
 fn drain_input(
     peer: &mut Peer,
     delay_outstanding: &mut bool,
+    refresh_requested: &mut bool,
     #[cfg(target_os = "macos")] injector: &mut crate::input::Injector,
     #[cfg(target_os = "macos")] cursor_tracker: &mut crate::cursor::Tracker,
     #[cfg(target_os = "macos")] last_peer_input: &mut std::time::Instant,
@@ -900,7 +945,11 @@ fn drain_input(
             // toggle is on, and this is the only way to tell from here whether
             // it is.
             Some(message::Union::misc(mi)) => {
-                if let Some(misc::Union::option(o)) = mi.union {
+                if let Some(misc::Union::refresh_video(true)) = mi.union {
+                    // The peer's "refresh" button. Previously dropped on the
+                    // floor, which meant it did nothing at all.
+                    *refresh_requested = true;
+                } else if let Some(misc::Union::option(o)) = mi.union {
                     log::info!(
                         "peer options: show_remote_cursor={:?} image_quality={:?} \
                          disable_clipboard={:?} disable_audio={:?}",

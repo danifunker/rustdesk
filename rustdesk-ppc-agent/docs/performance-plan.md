@@ -17,14 +17,14 @@ Target: `PowerMac11,2`, **two** PowerPC 970 cores @ 2.3 GHz, 4 GB, Mac OS X
 `rustdesk-agent --probe-display`, 1920x1080, after the probe and encoder work of
 2026-08-05:
 
-| stage | cost | was | scales with |
+| stage | cost | this morning | scales with |
 |---|---|---|---|
-| dirty-band probe | **14 ms** | 29 ms | bytes sampled |
-| capture (VRAM → RAM) | 351 ms | 350 ms | **bytes read** |
-| ARGB → I420 | 185 ms | 175 ms | rows converted |
-| VP8 encode | **34 ms** | 46 ms | frame size, threads |
-| **full-screen change** | **571 ms** | 591 ms | |
-| **idle poll** | **14 ms** | 29 ms | |
+| dirty-band probe | **13 ms** | 29 ms | bytes sampled |
+| capture (VRAM → RAM) | 357 ms | 350 ms | **bytes read** |
+| ARGB → I420 | **20 ms** | 175 ms | rows converted |
+| VP8 encode | **30 ms** | 46 ms | frame size, threads |
+| **full-screen change** | **407 ms** | 591 ms | |
+| **idle poll** | **13 ms** | 29 ms | |
 
 Capture and conversion are per-band, so a typical small update — a few lines of
 text, a menu, a cursor-sized region — costs roughly:
@@ -36,10 +36,10 @@ probe 14 + read 22 + convert 11 + encode 34  ≈  81 ms       (estimate: band
                                                              per-row scaling)
 ```
 
-against ~127 ms before. **The encoder is still the floor for ordinary
-interaction**, at 34 of those 81 ms, because VP8 encodes a whole frame however
-little of it moved. Full-screen motion is still capture-bound and essentially
-untouched — nothing done so far reads fewer bytes out of VRAM.
+against ~127 ms before. §1a has what a real session measures, which is the
+number to trust. **Capture is now the whole story at both scales** — nothing so
+far reads fewer bytes out of VRAM, and everything that was competing with it has
+been dealt with.
 
 ## 1a. What a live session actually costs
 
@@ -48,10 +48,15 @@ each frame's milliseconds went under a real client, which is the only place some
 of this shows up at all (`session::FrameTimes`, at debug level):
 
 ```text
-frame: 16 band(s), probe 29, read 333, conv 206, enc 181 (KEY), send 1, other 0 = 754 ms, 94971 B
-frame:  2 band(s), probe 15, read  39, conv  24, enc  29,       send 0, other 0 = 109 ms,  1527 B
-frame:  1 band(s), probe 14, read  25, conv  13, enc  45,       send 2, other 0 = 101 ms,  1139 B
+frame: 16 band(s), probe 28, read 333, conv 14, enc  27,       send 0, other 0 = 405 ms,   527 B
+frame: 16 band(s), probe 37, read 339, conv 14, enc 148 (KEY), send 1, other 0 = 542 ms, 81232 B
+frame:  2 band(s), probe 14, read  40, conv  1, enc  23,       send 0, other 0 =  80 ms,   608 B
+frame:  1 band(s), probe 20, read  29, conv  0, enc  36,       send 2, other 0 =  90 ms,  4021 B
 ```
+
+Live-measured progress over one session of work: **a full-screen change went
+1208 → 405 ms, a small update 179 → 80-105 ms.** The keyframe is now only the
+settle repaint, which runs when nothing is waiting on it.
 
 Three things came out of it that no isolated probe would have found.
 
@@ -66,8 +71,11 @@ was not. It now peeks first (`session::input_waiting`). **Full-screen 1208 →
 749 ms, a small update 179 → 109 ms**, measured before and after against the
 same forced repaint.
 
-**Every full-screen frame is a keyframe**, and that is a deliberate choice worth
-revisiting -- see option 4a below.
+**Every full-screen frame was a keyframe**, which made the worst case for
+capture the worst case for the encoder too. Fixed -- see §4a.
+
+What is left is almost entirely the VRAM read: **333 of a 405 ms full-screen
+frame, and ~35 of an 85 ms small update.** Everything else is now small.
 
 ### A correction to the old figures
 
@@ -129,15 +137,27 @@ Two more ways to spend a second core, in increasing order of effort:
 
 | # | change | expected | effort | risk |
 |---|---|---|---|---|
-| ~~1~~ | ~~Threaded encode~~ | **done: −29% encode, measured** | trivial | none |
-| ~~2~~ | ~~Encoder tuning~~ | **done: 46 → 34 ms, measured** | trivial | a quality dial, see below |
-| ~~3~~ | ~~Cheaper probe~~ | **done: 29 → 14 ms with 4x the coverage, measured** | small | none |
-| 4 | **Serve at half resolution** | *est.* 571 → ~260 ms, 81 → ~50 ms | medium | halves sharpness |
-| 5 | Converter in C, then AltiVec | *est.* 185 → ~50 ms, then ~30 | small → medium | none, then AltiVec on `gcc10` |
-| 6 | Threaded ARGB → I420 | *est.* −85 ms full-frame | small | low |
-| 7 | Measure `CGWindowListCreateImage` | one probe run; could be −250 ms | trivial to find out | may be much worse |
-| 8 | Pipeline capture against encode | *est.* −30% wall clock | large | needs care around input latency |
-| 9 | Tiles as displays | small updates near-free | large | **speculative, read the client first** |
+| ~~1~~ | ~~Threaded encode~~ | **done: −29% encode** | trivial | none |
+| ~~2~~ | ~~Encoder tuning~~ | **done: 46 → 30 ms** | trivial | a quality dial, §5 |
+| ~~3~~ | ~~Cheaper probe~~ | **done: 29 → 13 ms, 4x the coverage** | small | none |
+| ~~4a~~ | ~~Keyframe on demand, not on volume~~ | **done: −120 ms and −80 KB per full-screen frame** | small | drift, handled by the settle keyframe |
+| ~~4b~~ | ~~Non-blocking input drain~~ | **done: −481 ms of a 1208 ms frame** | small | none |
+| ~~5a~~ | ~~Converter in C~~ | **done: 199 → 20 ms, planes verified identical** | small | none |
+| 1 | **Serve at half resolution** | *est.* 405 → ~210 ms, 85 → ~40 ms | medium | halves sharpness |
+| 2 | Threaded band reads | *est.* −0, see below | — | — |
+| 3 | Cheaper probe again | 13 → ~7 ms, a sixth of a small update | trivial | less coverage |
+| 4 | Pipeline capture against encode | *est.* −30 ms of 405 | large | needs care around input latency |
+| 5 | AltiVec conversion | 20 → ~10 ms | medium | not worth it now |
+| 6 | Tiles as displays | small updates near-free | large | **speculative, read the client first** |
+
+**The ranking has collapsed to one item.** After today, a full-screen frame is
+405 ms of which 333 is the VRAM read, and a small update is 85 ms of which ~35
+is the VRAM read. Conversion is 14 ms, the encoder 27, the probe 13. Threading
+the conversion (old option 6) would now save 7 ms; pipelining capture against
+encode (option 4) would hide 27 ms behind 333. Neither is worth the change.
+
+Reading fewer bytes is the only lever left, and at a fixed 23 MB/s that means
+**fewer pixels** — which is option 1 and nothing else.
 
 ### 4a — stop forcing a keyframe on every full-screen change
 
@@ -190,17 +210,24 @@ hot loop; hand-written C at -O2 did luma-only from RAM in 14 ms against the
 establish the pattern, and the build already passes `-maltivec`. Get the plain-C
 version first and measure before writing any vector code.
 
-### 7 — the alternative capture path
+### The alternative capture path, now closed
 
-Capture is the single largest cost and has never moved. 23 MB/s is dreadful even
-for uncached VRAM, and it is dreadful *because* it is a CPU-driven read that
-cannot burst. `CGWindowListCreateImage` is 10.5+ and is already wired into
-`probes/capture-live.c` and `probes/fb-try.c` — but only ever checksummed for
-liveness, **never timed as a capture route**. If the window server hands back a
-RAM-backed image via GPU DMA it could be several times faster; if it recomposites
-the screen per call it will be worse. One probe run settles it, and the answer
-changes what options 6 and 8 are worth. It composites the whole screen, so it
-would replace the full-frame path only, not per-band reads.
+`probes/winlist-capture.c` finally timed `CGWindowListCreateImage` as a capture
+route, full-screen and per-band, against the `memcpy` it would replace. It
+**returns NULL** in this context — the agent and the probes both run outside the
+Aqua session, and while `CGDisplayBaseAddress` works there, compositing does
+not. So there is no faster readback available and the 23 MB/s is the floor:
+
+```text
+region           memcpy       MB/s    winlist       MB/s
+full screen     338.4 ms       23.4        -             -   (returned nothing)
+one band         20.8 ms       23.9        -             -   (returned nothing)
+```
+
+It might work from a process genuinely inside the console session, via the
+LaunchAgent. That is a large change to how the agent is run, for a route that
+composites the whole screen and so cannot serve per-band reads anyway. Recorded
+as closed rather than promising.
 
 ### 9 — where "encode a sub-rectangle" really stands
 

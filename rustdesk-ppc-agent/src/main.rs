@@ -244,6 +244,17 @@ fn probe_display() {
             argb_to_i420(f, stride, &mut out);
             let conv_ms = tconv.elapsed().as_millis();
 
+            // The C shim is only worth having if it agrees with the Rust it
+            // was ported from, and the way it would disagree -- swapped red and
+            // blue -- looks fine until someone views a real desktop. Compare
+            // the planes on a real frame, here, on the machine itself.
+            let mut reference = I420::new(w, h);
+            let tref = std::time::Instant::now();
+            rustdesk_ppc_agent::convert::argb_to_i420_rows_rust(f, stride, &mut reference, 0, h);
+            let conv_rust_ms = tref.elapsed().as_millis();
+            let agrees =
+                reference.y == out.y && reference.u == out.u && reference.v == out.v;
+
             println!("first px : {}", first_px);
             // How the real loop will behave: probe, then read only what moved.
             let t = std::time::Instant::now();
@@ -289,7 +300,12 @@ fn probe_display() {
 
             let total = cap_ms + conv_ms;
             println!("capture   : {} ms (VRAM -> RAM)", cap_ms);
-            println!("argb->i420: {} ms", conv_ms);
+            println!(
+                "argb->i420: {} ms (C shim) vs {} ms (rust reference) -- planes {}",
+                conv_ms,
+                conv_rust_ms,
+                if agrees { "identical" } else { "*** DIFFER: the shim is wrong ***" }
+            );
 
             #[cfg(not(no_vpx))]
             let enc_ms = encode_sweep(&mut out);
