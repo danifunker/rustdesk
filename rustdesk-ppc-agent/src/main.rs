@@ -27,7 +27,13 @@ OPTIONS:
     --show-id        print this machine's agent ID and exit
     --show-key       print the public key a peer needs, and exit
     --probe-display  report what the framebuffer looks like, and exit
-    --config PATH    config file (default ~/.rustdesk-ppc-agent.conf)",
+    --config PATH    config file (default ~/.rustdesk-ppc-agent.conf)
+    --log LEVEL      error | warn | info | debug | trace   (default info)
+    -v               same as --log debug
+    -vv              same as --log trace
+
+Use --log trace to see every frame and message during a handshake; that is the
+fastest way to find where a client diverges.",
         env!("CARGO_PKG_VERSION"),
         DEFAULT_PORT
     );
@@ -41,6 +47,7 @@ fn main() {
     let mut cfg_path = Config::default_path();
     let mut set_password: Option<String> = None;
     let (mut show_id, mut show_key, mut probe) = (false, false, false);
+    let mut level = log::LevelFilter::Info;
 
     let mut i = 0;
     while i < argv.len() {
@@ -74,6 +81,25 @@ fn main() {
                 probe = true;
                 i += 1;
             }
+            "--log" => {
+                level = match need(i).to_ascii_lowercase().as_str() {
+                    "error" => log::LevelFilter::Error,
+                    "warn" => log::LevelFilter::Warn,
+                    "info" => log::LevelFilter::Info,
+                    "debug" => log::LevelFilter::Debug,
+                    "trace" => log::LevelFilter::Trace,
+                    _ => usage(),
+                };
+                i += 2;
+            }
+            "-v" => {
+                level = log::LevelFilter::Debug;
+                i += 1;
+            }
+            "-vv" => {
+                level = log::LevelFilter::Trace;
+                i += 1;
+            }
             "-h" | "--help" => usage(),
             _ => usage(),
         }
@@ -81,8 +107,9 @@ fn main() {
 
     // Minimal logger rather than env_logger, to keep the dependency set small.
     // Static, so it needs neither an allocation nor log's `std` feature.
+    START_MS.store(now_ms(), std::sync::atomic::Ordering::Relaxed);
     log::set_logger(&LOGGER).ok();
-    log::set_max_level(log::LevelFilter::Info);
+    log::set_max_level(level);
 
     let mut cfg = Config::load(cfg_path);
 
@@ -248,13 +275,34 @@ fn base64(b: &[u8]) -> String {
 
 static LOGGER: StderrLogger = StderrLogger;
 
+/// Milliseconds since the epoch at startup. An AtomicU64 rather than
+/// LazyLock<Instant>, which is 1.80+ and mrustc targets 1.74.
+static START_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn since_start() -> f64 {
+    let s = START_MS.load(std::sync::atomic::Ordering::Relaxed);
+    if s == 0 { 0.0 } else { (now_ms().saturating_sub(s)) as f64 / 1000.0 }
+}
+
 struct StderrLogger;
 impl log::Log for StderrLogger {
-    fn enabled(&self, _: &log::Metadata) -> bool {
-        true
+    fn enabled(&self, m: &log::Metadata) -> bool {
+        m.level() <= log::max_level()
     }
     fn log(&self, r: &log::Record) {
-        eprintln!("[{}] {}", r.level(), r.args());
+        if !self.enabled(r.metadata()) {
+            return;
+        }
+        // Seconds since start rather than wall-clock: no chrono, and elapsed
+        // time is what matters when reading a handshake trace.
+        eprintln!("[{:>7.3}] {:<5} {}", since_start(), r.level(), r.args());
     }
     fn flush(&self) {}
 }

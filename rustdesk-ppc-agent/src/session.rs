@@ -30,9 +30,49 @@ const POLL_MS: u64 = 30;
 /// Modest by modern standards, but the encoder is not the constraint here.
 const DEFAULT_BITRATE_KBPS: u32 = 1500;
 
+/// Human-readable name for a message, so a trace shows what a client actually
+/// sent rather than "unhandled". Anything not listed is a field this vintage of
+/// the proto does not know -- which is exactly what a modern client diverging
+/// would look like.
+fn msg_name(m: &Message) -> &'static str {
+    match &m.union {
+        Some(message::Union::signed_id(_)) => "signed_id",
+        Some(message::Union::public_key(_)) => "public_key",
+        Some(message::Union::test_delay(_)) => "test_delay",
+        Some(message::Union::video_frame(_)) => "video_frame",
+        Some(message::Union::login_request(_)) => "login_request",
+        Some(message::Union::login_response(_)) => "login_response",
+        Some(message::Union::hash(_)) => "hash",
+        Some(message::Union::mouse_event(_)) => "mouse_event",
+        Some(message::Union::audio_frame(_)) => "audio_frame",
+        Some(message::Union::cursor_data(_)) => "cursor_data",
+        Some(message::Union::cursor_position(_)) => "cursor_position",
+        Some(message::Union::cursor_id(_)) => "cursor_id",
+        Some(message::Union::key_event(_)) => "key_event",
+        Some(message::Union::clipboard(_)) => "clipboard",
+        Some(message::Union::file_action(_)) => "file_action",
+        Some(message::Union::file_response(_)) => "file_response",
+        Some(message::Union::misc(_)) => "misc",
+        None => "<empty or unknown field>",
+    }
+}
+
 /// A read timeout looks like WouldBlock or TimedOut depending on the platform.
 fn is_timeout(e: &io::Error) -> bool {
     matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut)
+}
+
+/// First bytes of a buffer, for diagnosing a frame we could not make sense of.
+fn hex_head(b: &[u8]) -> String {
+    let n = b.len().min(24);
+    let mut s = String::with_capacity(n * 3 + 8);
+    for x in &b[..n] {
+        s.push_str(&format!("{:02x} ", x));
+    }
+    if b.len() > n {
+        s.push_str("...");
+    }
+    s
 }
 
 pub struct Peer {
@@ -47,23 +87,44 @@ impl Peer {
         let body = msg
             .write_to_bytes()
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+        log::debug!("-> {} ({} bytes plain)", msg_name(msg), body.len());
         let body = match self.chan.as_mut() {
             Some(c) => c.seal(&body),
             None => body,
         };
+        log::trace!("-> frame {} bytes on the wire", body.len());
         write_frame(&mut self.stream, &body)
     }
 
     pub fn recv(&mut self) -> io::Result<Message> {
         let raw = read_frame(&mut self.stream, DEFAULT_MAX_PACKET)?;
+        log::trace!("<- frame {} bytes on the wire", raw.len());
         let body = match self.chan.as_mut() {
-            Some(c) => c
-                .open(&raw)
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "decryption error"))?,
+            Some(c) => c.open(&raw).map_err(|_| {
+                log::error!(
+                    "decryption failed on a {}-byte frame -- wrong key, or the peer \
+                     is not speaking this protocol",
+                    raw.len()
+                );
+                io::Error::new(io::ErrorKind::InvalidData, "decryption error")
+            })?,
             None => raw,
         };
-        Message::parse_from_bytes(&body)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
+        match Message::parse_from_bytes(&body) {
+            Ok(m) => {
+                log::debug!("<- {} ({} bytes plain)", msg_name(&m), body.len());
+                if m.union.is_none() {
+                    // A field this proto vintage does not know: the shape a
+                    // newer client's extra messages take.
+                    log::warn!("   message had no recognised field; first bytes: {}", hex_head(&body));
+                }
+                Ok(m)
+            }
+            Err(e) => {
+                log::error!("protobuf parse failed ({}); first bytes: {}", e, hex_head(&body));
+                Err(io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
+            }
+        }
     }
 
     fn send_login_error(&mut self, err: &str) -> io::Result<()> {
@@ -93,7 +154,10 @@ pub fn serve(stream: TcpStream, ident: &Identity) -> io::Result<()> {
     stream.set_nodelay(true).ok();
     let mut peer = Peer { stream, chan: None, name: String::new(), id: String::new() };
 
+    log::info!("session start: {}", peer.stream.peer_addr().map(|a| a.to_string()).unwrap_or_default());
+
     // --- 1/2. key exchange ---------------------------------------------------
+    log::debug!("step 1: sending signed_id (plaintext)");
     let hs = Handshake::new();
     let mut m = Message::new();
     let mut sid = SignedId::new();
@@ -101,6 +165,7 @@ pub fn serve(stream: TcpStream, ident: &Identity) -> io::Result<()> {
     m.set_signed_id(sid);
     peer.send(&m)?;
 
+    log::debug!("step 2: awaiting public_key");
     let reply = peer.recv()?;
     match reply.union {
         Some(message::Union::public_key(pk)) => {
@@ -116,8 +181,14 @@ pub fn serve(stream: TcpStream, ident: &Identity) -> io::Result<()> {
                 .open_symmetric_key(&pk.asymmetric_value, &pk.symmetric_value)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
             peer.chan = Some(SecureChannel::new(key));
+            log::debug!("step 2: secure channel established (all later frames sealed)");
         }
-        _ => {
+        other => {
+            log::error!(
+                "step 2: expected public_key, got {}",
+                msg_name(&Message { union: other.clone(), ..Default::default() })
+            );
+            let _ = other;
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "handshake: expected public_key",
@@ -126,6 +197,7 @@ pub fn serve(stream: TcpStream, ident: &Identity) -> io::Result<()> {
     }
 
     // --- 3. challenge --------------------------------------------------------
+    log::debug!("step 3: sending hash (salt + challenge)");
     let challenge = crate::config::Config::random_string(6);
     let mut m = Message::new();
     let mut hash = Hash::new();
@@ -135,9 +207,14 @@ pub fn serve(stream: TcpStream, ident: &Identity) -> io::Result<()> {
     peer.send(&m)?;
 
     // --- 4/5. login ----------------------------------------------------------
+    log::debug!("step 4: awaiting login_request");
     let lr = match peer.recv()?.union {
         Some(message::Union::login_request(lr)) => lr,
-        _ => {
+        other => {
+            log::error!(
+                "step 4: expected login_request, got {}",
+                msg_name(&Message { union: other, ..Default::default() })
+            );
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "expected login_request",
@@ -146,6 +223,10 @@ pub fn serve(stream: TcpStream, ident: &Identity) -> io::Result<()> {
     };
     peer.name = lr.my_name.clone();
     peer.id = lr.my_id.clone();
+    log::debug!(
+        "step 4: login_request from '{}' (id '{}'), password {} bytes",
+        peer.name, peer.id, lr.password.len()
+    );
 
     if ident.password.is_empty() {
         peer.send_login_error("This machine has no password set")?;
@@ -178,7 +259,7 @@ pub fn serve(stream: TcpStream, ident: &Identity) -> io::Result<()> {
     let mut m = Message::new();
     m.set_login_response(resp);
     peer.send(&m)?;
-    log::info!("peer {} ({}) logged in", peer.name, peer.id);
+    log::info!("peer '{}' ({}) logged in -- entering message loop", peer.name, peer.id);
 
     message_loop(&mut peer)
 }
@@ -293,7 +374,10 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
                 }
             }
             Some(message::Union::misc(_)) => {}
-            other => log::debug!("unhandled message: {:?}", other.is_some()),
+            other => log::debug!(
+                "   (no handler for {})",
+                msg_name(&Message { union: other, ..Default::default() })
+            ),
         }
     }
 }
