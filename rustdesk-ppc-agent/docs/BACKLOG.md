@@ -29,6 +29,34 @@ needed republishing — it appeared to work because changes were being forced wi
 removed: capturing the display steals focus and dismisses menus, which made the
 G5 unusable to anyone sitting at it.
 
+## ~~1b. Sessions died about a minute after the screen went still~~ (fixed)
+
+Worth recording because it was invisible to every probe: they do not hold a
+session open long enough.
+
+Liveness in this protocol is driven by the **server**. Upstream's
+`Connection::run` ticks every three seconds, sends a `TestDelay`, and drops the
+peer if nothing has arrived for thirty (`src/server/connection.rs:281`). The
+client only ever answers -- it never initiates one. This agent only echoed, so
+once the screen stopped changing there were no frames, no test delays, and not
+one byte in either direction. Measured three times running: last frame, then
+57.4 seconds of complete silence, then the client dropped the session and
+reconnected.
+
+`TEST_DELAY_INTERVAL` in `src/session.rs` now drives it the way upstream does,
+re-sending after ten seconds if an answer goes missing so a peer that ignores
+them cannot wedge the timer. It also logs the round trip, which is the client's
+latency readout as well.
+
+## 1c. An unknown message from modern clients
+
+A real client sends `d2 01 04 0a 02 0a 00` -- **field 26** of `Message`, which
+does not exist in the 1.1.8 proto (the oneof stops at 19). The payload is a
+nested empty message. It arrives in bursts during interaction rather than
+periodically, so it is a UI action rather than a keepalive, and ignoring it does
+no visible harm. Identify it against a modern `message.proto` before adding
+anything for it.
+
 ## 2. LAN discovery
 
 RustDesk clients find machines on the local network by UDP broadcast, so the G5
