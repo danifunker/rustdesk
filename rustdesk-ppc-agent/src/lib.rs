@@ -18,6 +18,7 @@ pub mod rendezvous_proto;
 // logic stays reachable from host tests.
 pub mod capture;
 pub mod config;
+pub mod cursor;
 pub mod convert;
 #[cfg(all(target_os = "macos", not(no_vpx)))]
 pub mod encode;

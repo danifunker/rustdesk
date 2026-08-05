@@ -437,6 +437,26 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
     #[cfg(target_os = "macos")]
     let mut injector = crate::input::Injector::new();
 
+    // The pointer is a hardware overlay and is not in the captured image, so
+    // the peer sees none unless we send one. Shape once, then positions as they
+    // change. See `crate::cursor`.
+    #[cfg(target_os = "macos")]
+    let mut cursor_tracker = crate::cursor::Tracker::new();
+    #[cfg(target_os = "macos")]
+    {
+        let c = crate::cursor::arrow();
+        let mut cd = CursorData::new();
+        cd.id = crate::cursor::CURSOR_ID;
+        cd.hotx = c.hotx;
+        cd.hoty = c.hoty;
+        cd.width = c.width;
+        cd.height = c.height;
+        cd.colors = c.rgba;
+        let mut m = Message::new();
+        m.set_cursor_data(cd);
+        peer.send(&m)?;
+    }
+
     loop {
         // Pump one video frame, if the screen moved.
         #[cfg(all(target_os = "macos", not(no_vpx)))]
@@ -455,6 +475,23 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
                 let mut m = Message::new();
                 m.set_video_frame(vf);
                 peer.send(&m)?;
+            }
+        }
+
+        // Tell the peer where the pointer is. Cheap enough to poll every
+        // iteration, and only sent when it has actually moved.
+        #[cfg(target_os = "macos")]
+        {
+            let (x, y) = crate::input::cursor_position();
+            if x >= 0.0 {
+                if let Some((x, y)) = cursor_tracker.update(x as i32, y as i32) {
+                    let mut cp = CursorPosition::new();
+                    cp.x = x;
+                    cp.y = y;
+                    let mut m = Message::new();
+                    m.set_cursor_position(cp);
+                    peer.send(&m)?;
+                }
             }
         }
 
