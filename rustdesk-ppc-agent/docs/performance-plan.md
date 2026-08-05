@@ -185,21 +185,28 @@ Two more ways to spend a second core, in increasing order of effort:
 | ~~4a~~ | ~~Keyframe on demand, not on volume~~ | **done: −120 ms and −80 KB per full-screen frame** | small | drift, handled by the settle keyframe |
 | ~~4b~~ | ~~Non-blocking input drain~~ | **done: −481 ms of a 1208 ms frame** | small | none |
 | ~~5a~~ | ~~Converter in C~~ | **done: 199 → 20 ms, planes verified identical** | small | none |
-| 1 | **Serve at half resolution** | *est.* 405 → ~210 ms, 85 → ~40 ms | medium | halves sharpness |
+| ~~1~~ | ~~Serve at half resolution~~ | **declined: not worth the sharpness** | medium | halves sharpness |
 | 2 | Threaded band reads | *est.* −0, see below | — | — |
 | 3 | Cheaper probe again | 13 → ~7 ms, a sixth of a small update | trivial | less coverage |
 | 4 | Pipeline capture against encode | *est.* −30 ms of 405 | large | needs care around input latency |
 | 5 | AltiVec conversion | 20 → ~10 ms | medium | not worth it now |
 | 6 | Tiles as displays | small updates near-free | large | **speculative, read the client first** |
 
-**The ranking has collapsed to one item.** After today, a full-screen frame is
-405 ms of which 333 is the VRAM read, and a small update is 85 ms of which ~35
-is the VRAM read. Conversion is 14 ms, the encoder 27, the probe 13. Threading
-the conversion (old option 6) would now save 7 ms; pipelining capture against
-encode (option 4) would hide 27 ms behind 333. Neither is worth the change.
+**There is no cheap lever left, and the obvious expensive one has been
+declined.** A full-screen frame is 405 ms of which 333 is the VRAM read; a
+keystroke is ~80 ms of which ~40 is the probe and ~20 the encoder. Threading the
+conversion would now save 7 ms; pipelining capture against encode would hide 27
+ms behind 333. Neither is worth the change.
 
-Reading fewer bytes is the only lever left, and at a fixed 23 MB/s that means
-**fewer pixels** — which is option 1 and nothing else.
+Reading fewer bytes at a fixed 23 MB/s means fewer pixels, and **half
+resolution was offered and turned down: the sharpness is worth more than the
+milliseconds.** Take that as a standing constraint rather than an open question
+— anything that trades picture quality for speed needs asking about first, and
+the encoder's static-skip threshold is the cautionary tale (§1b).
+
+What that leaves, if this needs to go faster again, is the one option that costs
+no quality: tiles as displays, below. It is large and speculative, and it is the
+only thing here that changes the cost model rather than tuning it.
 
 ### 4a — stop forcing a keyframe on every full-screen change
 
