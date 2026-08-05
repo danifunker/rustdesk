@@ -28,4 +28,5 @@ pub mod input;
 pub mod crypto;
 pub mod frame;
 pub mod session;
+pub mod sys;
 pub mod zstd_frame;

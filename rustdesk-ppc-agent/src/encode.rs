@@ -18,7 +18,13 @@ struct VpxEnc {
 }
 
 extern "C" {
-    fn vpxenc_new(width: c_int, height: c_int, bitrate_kbps: c_int, cpu_used: c_int) -> *mut VpxEnc;
+    fn vpxenc_new(
+        width: c_int,
+        height: c_int,
+        bitrate_kbps: c_int,
+        cpu_used: c_int,
+        threads: c_int,
+    ) -> *mut VpxEnc;
     fn vpxenc_encode(
         e: *mut VpxEnc,
         y: *const u8,
@@ -53,8 +59,27 @@ pub struct Frame<'a> {
 
 impl Encoder {
     pub fn new(width: usize, height: usize, bitrate_kbps: u32) -> Result<Self, &'static str> {
+        // Asked for at runtime, never assumed: this has to run on
+        // single-processor G4s and G5s as well as the dual G5 it is developed
+        // on. Two is the useful ceiling for VP8 at this resolution -- more
+        // partitions cost bitstream overhead for work there are no cores to do.
+        let threads = crate::sys::threads_for(2);
+        log::info!(
+            "encoder: {}x{}, {} kbps, {} thread(s) of {} processor(s)",
+            width,
+            height,
+            bitrate_kbps,
+            threads,
+            crate::sys::cpu_count()
+        );
         let inner = unsafe {
-            vpxenc_new(width as c_int, height as c_int, bitrate_kbps as c_int, CPU_USED)
+            vpxenc_new(
+                width as c_int,
+                height as c_int,
+                bitrate_kbps as c_int,
+                CPU_USED,
+                threads as c_int,
+            )
         };
         if inner.is_null() {
             return Err("vpx encoder init failed");
