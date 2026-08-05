@@ -408,6 +408,24 @@ impl Video {
     }
 }
 
+/// Send where the pointer is, if it has moved since last time.
+#[cfg(target_os = "macos")]
+fn send_cursor_position(peer: &mut Peer, tracker: &mut crate::cursor::Tracker) -> io::Result<()> {
+    let (x, y) = crate::input::cursor_position();
+    if x < 0.0 {
+        return Ok(()); // the position was unreadable; nothing useful to send
+    }
+    if let Some((x, y)) = tracker.update(x as i32, y as i32) {
+        let mut cp = CursorPosition::new();
+        cp.x = x;
+        cp.y = y;
+        let mut m = Message::new();
+        m.set_cursor_position(cp);
+        peer.send(&m)?;
+    }
+    Ok(())
+}
+
 /// Dispatch until the peer disconnects, pumping video between messages.
 ///
 /// Single-threaded on purpose: one peer, one capture, and the encode is the
@@ -451,7 +469,8 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
         cd.hoty = c.hoty;
         cd.width = c.width;
         cd.height = c.height;
-        cd.colors = c.rgba;
+        // Not raw pixels: the client runs this through zstd. See `zstd_frame`.
+        cd.colors = crate::zstd_frame::raw_frame(&c.rgba);
         let mut m = Message::new();
         m.set_cursor_data(cd);
         peer.send(&m)?;
@@ -478,22 +497,10 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
             }
         }
 
-        // Tell the peer where the pointer is. Cheap enough to poll every
-        // iteration, and only sent when it has actually moved.
+        // Also poll once an iteration: the person at the G5 can move the
+        // pointer themselves, and no input event announces that.
         #[cfg(target_os = "macos")]
-        {
-            let (x, y) = crate::input::cursor_position();
-            if x >= 0.0 {
-                if let Some((x, y)) = cursor_tracker.update(x as i32, y as i32) {
-                    let mut cp = CursorPosition::new();
-                    cp.x = x;
-                    cp.y = y;
-                    let mut m = Message::new();
-                    m.set_cursor_position(cp);
-                    peer.send(&m)?;
-                }
-            }
-        }
+        send_cursor_position(peer, &mut cursor_tracker)?;
 
         // Drain everything already queued before spending another ~250 ms on a
         // frame. Handling one message per iteration was survivable when an idle
@@ -514,7 +521,14 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
             match msg.union {
                 Some(message::Union::mouse_event(me)) => {
                     #[cfg(target_os = "macos")]
-                    injector.mouse(&me);
+                    {
+                        injector.mouse(&me);
+                        // Report the pointer here rather than once per video
+                        // frame. A frame can take half a second, so polling
+                        // alongside it made the peer's cursor jump between
+                        // widely spaced positions instead of tracking.
+                        send_cursor_position(peer, &mut cursor_tracker)?;
+                    }
                     let _ = &me;
                 }
                 Some(message::Union::key_event(ke)) => {
@@ -529,7 +543,23 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
                         peer.send(&m)?;
                     }
                 }
-                Some(message::Union::misc(_)) => {}
+                // The peer's options. Worth logging rather than dropping: the
+                // client only draws a remote pointer when its "show remote
+                // cursor" toggle is on, and this is the only way to tell from
+                // here whether it is -- upstream's server uses the same signal
+                // to decide whether to send cursor data at all.
+                Some(message::Union::misc(mi)) => {
+                    if let Some(misc::Union::option(o)) = mi.union {
+                        log::info!(
+                            "peer options: show_remote_cursor={:?} image_quality={:?} \
+                             disable_clipboard={:?} disable_audio={:?}",
+                            o.show_remote_cursor.enum_value_or_default(),
+                            o.image_quality.enum_value_or_default(),
+                            o.disable_clipboard.enum_value_or_default(),
+                            o.disable_audio.enum_value_or_default()
+                        );
+                    }
+                }
                 other => log::debug!(
                     "   (no handler for {})",
                     msg_name(&Message { union: other, ..Default::default() })
