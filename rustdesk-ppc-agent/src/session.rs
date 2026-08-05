@@ -702,15 +702,20 @@ impl FrameTimes {
     }
 }
 
-/// Send the pointer's shape.
+/// Send the pointer's shape as it looks right now.
 ///
 /// The client cannot draw a pointer, or act on any position, until it has an
 /// image: its `setCursorPosition` returns immediately while no image is bound.
+///
+/// `id` identifies the shape so the client can cache it; the window server's
+/// cursor seed serves, since it is exactly "which shape is this". A shape that
+/// cannot be read falls back to the built-in arrow rather than to nothing --
+/// the pointer being in the right place matters more than its picture.
 #[cfg(target_os = "macos")]
-fn send_cursor_data(peer: &mut Peer) -> io::Result<()> {
-    let c = crate::cursor::arrow();
+fn send_cursor_data(peer: &mut Peer, id: u64) -> io::Result<()> {
+    let c = crate::cursor::current().unwrap_or_else(crate::cursor::arrow);
     let mut cd = CursorData::new();
-    cd.id = crate::cursor::CURSOR_ID;
+    cd.id = id;
     cd.hotx = c.hotx;
     cd.hoty = c.hoty;
     cd.width = c.width;
@@ -789,8 +794,13 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
     #[cfg(target_os = "macos")]
     crate::input::release_modifiers();
 
+    // The pointer changes shape over a text field, a resize edge, a link. The
+    // seed is one call and changes only when the shape does, so it is polled
+    // every pass and the image is fetched only when it has actually moved on.
     #[cfg(target_os = "macos")]
-    send_cursor_data(peer)?;
+    let mut cursor_seed = crate::cursor::seed();
+    #[cfg(target_os = "macos")]
+    send_cursor_data(peer, cursor_seed as u32 as u64)?;
 
     // Liveness. See TEST_DELAY_INTERVAL -- without this the session dies of
     // silence roughly a minute after the screen stops changing.
@@ -922,6 +932,16 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
             }
         }
 
+        #[cfg(target_os = "macos")]
+        {
+            let s = crate::cursor::seed();
+            if s != cursor_seed {
+                cursor_seed = s;
+                log::debug!("pointer changed shape (seed {})", s);
+                send_cursor_data(peer, s as u32 as u64)?;
+            }
+        }
+
         // Also poll once an iteration: the person at the G5 can move the
         // pointer themselves, and no input event announces that.
         #[cfg(target_os = "macos")]
@@ -1024,7 +1044,7 @@ fn drain_input(
                     if o.show_remote_cursor.enum_value_or_default() == BoolOption::Yes {
                         // Usually flipped mid-session, long after the shape was
                         // sent at login; without this the peer never gets one.
-                        send_cursor_data(peer)?;
+                        send_cursor_data(peer, crate::cursor::seed() as u32 as u64)?;
                         cursor_tracker.reset();
                         *last_peer_input = std::time::Instant::now()
                             - std::time::Duration::from_millis(

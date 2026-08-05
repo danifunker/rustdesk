@@ -3842,6 +3842,55 @@ impl RendezvousMessage {
         }
     }
 
+    // .hbb.PeerDiscovery peer_discovery = 22;
+
+    pub fn get_peer_discovery(&self) -> &PeerDiscovery {
+        match self.union {
+            ::std::option::Option::Some(rendezvous_message::Union::peer_discovery(ref v)) => v,
+            _ => <PeerDiscovery as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_peer_discovery(&mut self) {
+        self.union = ::std::option::Option::None;
+    }
+
+    pub fn has_peer_discovery(&self) -> bool {
+        match self.union {
+            ::std::option::Option::Some(rendezvous_message::Union::peer_discovery(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_peer_discovery(&mut self, v: PeerDiscovery) {
+        self.union = ::std::option::Option::Some(rendezvous_message::Union::peer_discovery(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_peer_discovery(&mut self) -> &mut PeerDiscovery {
+        if let ::std::option::Option::Some(rendezvous_message::Union::peer_discovery(_)) = self.union {
+        } else {
+            self.union = ::std::option::Option::Some(rendezvous_message::Union::peer_discovery(PeerDiscovery::new()));
+        }
+        match self.union {
+            ::std::option::Option::Some(rendezvous_message::Union::peer_discovery(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_peer_discovery(&mut self) -> PeerDiscovery {
+        if self.has_peer_discovery() {
+            match self.union.take() {
+                ::std::option::Option::Some(rendezvous_message::Union::peer_discovery(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            PeerDiscovery::new()
+        }
+    }
+
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
         let mut fields = ::std::vec::Vec::new();
         fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, RegisterPeer>(
@@ -3956,6 +4005,13 @@ impl RendezvousMessage {
             RendezvousMessage::mut_test_nat_response,
             RendezvousMessage::set_test_nat_response,
         ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, PeerDiscovery>(
+            "peer_discovery",
+            RendezvousMessage::has_peer_discovery,
+            RendezvousMessage::get_peer_discovery,
+            RendezvousMessage::mut_peer_discovery,
+            RendezvousMessage::set_peer_discovery,
+        ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<RendezvousMessage>(
             "RendezvousMessage",
             16,
@@ -4042,6 +4098,11 @@ impl ::protobuf::Message for RendezvousMessage {
             }
         }
         if let Some(rendezvous_message::Union::test_nat_response(ref v)) = self.union {
+            if !v.is_initialized() {
+                return false;
+            }
+        }
+        if let Some(rendezvous_message::Union::peer_discovery(ref v)) = self.union {
             if !v.is_initialized() {
                 return false;
             }
@@ -4149,6 +4210,12 @@ impl ::protobuf::Message for RendezvousMessage {
                     }
                     self.union = ::std::option::Option::Some(rendezvous_message::Union::test_nat_response(is.read_message()?));
                 },
+                22 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeLengthDelimited {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    self.union = ::std::option::Option::Some(rendezvous_message::Union::peer_discovery(is.read_message()?));
+                },
                 _ => {
                     ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
                 },
@@ -4227,6 +4294,10 @@ impl ::protobuf::Message for RendezvousMessage {
                     let len = v.compute_size();
                     my_size += 2 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
                 },
+                &rendezvous_message::Union::peer_discovery(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 2 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
+                },
             };
         }
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
@@ -4285,6 +4356,9 @@ impl ::protobuf::Message for RendezvousMessage {
                 &rendezvous_message::Union::test_nat_response(ref v) => {
                     ::protobuf::rt::write_message_field_with_cached_size(21, v, os)?;
                 },
+                &rendezvous_message::Union::peer_discovery(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(22, v, os)?;
+                },
             };
         }
         os.write_unknown_fields(self.get_unknown_fields())?;
@@ -4339,6 +4413,7 @@ impl ::protobuf::Clear for RendezvousMessage {
         self.union = ::std::option::Option::None;
         self.union = ::std::option::Option::None;
         self.union = ::std::option::Option::None;
+        self.union = ::std::option::Option::None;
         self.unknown_fields.clear();
     }
 }
@@ -4374,10 +4449,256 @@ pub mod rendezvous_message {
         relay_response(super::RelayResponse),
         test_nat_request(super::TestNatRequest),
         test_nat_response(super::TestNatResponse),
+        peer_discovery(super::PeerDiscovery),
     }
 
     impl ::protobuf::Oneof for Union {
     }
+}
+
+#[derive(PartialEq,Clone,Default)]
+pub struct PeerDiscovery {
+    // message fields
+    pub cmd: ::std::string::String,
+    pub mac: ::std::string::String,
+    pub id: ::std::string::String,
+    pub username: ::std::string::String,
+    pub hostname: ::std::string::String,
+    pub platform: ::std::string::String,
+    pub misc: ::std::string::String,
+    // special fields
+    pub unknown_fields: ::protobuf::UnknownFields,
+    pub cached_size: ::protobuf::rt::CachedSize,
+}
+
+impl<'a> ::std::default::Default for &'a PeerDiscovery {
+    fn default() -> &'a PeerDiscovery {
+        <PeerDiscovery as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl PeerDiscovery {
+    pub fn new() -> PeerDiscovery {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::new();
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "cmd",
+            |m: &PeerDiscovery| { &m.cmd },
+            |m: &mut PeerDiscovery| { &mut m.cmd },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "mac",
+            |m: &PeerDiscovery| { &m.mac },
+            |m: &mut PeerDiscovery| { &mut m.mac },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "id",
+            |m: &PeerDiscovery| { &m.id },
+            |m: &mut PeerDiscovery| { &mut m.id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "username",
+            |m: &PeerDiscovery| { &m.username },
+            |m: &mut PeerDiscovery| { &mut m.username },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "hostname",
+            |m: &PeerDiscovery| { &m.hostname },
+            |m: &mut PeerDiscovery| { &mut m.hostname },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "platform",
+            |m: &PeerDiscovery| { &m.platform },
+            |m: &mut PeerDiscovery| { &mut m.platform },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "misc",
+            |m: &PeerDiscovery| { &m.misc },
+            |m: &mut PeerDiscovery| { &mut m.misc },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<PeerDiscovery>(
+            "PeerDiscovery",
+            17,
+            fields,
+        )
+    }
+}
+
+impl ::protobuf::Message for PeerDiscovery {
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::ProtobufResult<()> {
+        while !is.eof()? {
+            let (field_number, wire_type) = is.read_tag_unpack()?;
+            match field_number {
+                1 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeLengthDelimited {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    self.cmd = is.read_string()?;
+                },
+                2 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeLengthDelimited {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    self.mac = is.read_string()?;
+                },
+                3 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeLengthDelimited {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    self.id = is.read_string()?;
+                },
+                4 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeLengthDelimited {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    self.username = is.read_string()?;
+                },
+                5 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeLengthDelimited {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    self.hostname = is.read_string()?;
+                },
+                6 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeLengthDelimited {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    self.platform = is.read_string()?;
+                },
+                7 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeLengthDelimited {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    self.misc = is.read_string()?;
+                },
+                _ => {
+                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u32 {
+        let mut my_size = 0;
+        if !self.cmd.is_empty() {
+            my_size += ::protobuf::rt::string_size(1, &self.cmd);
+        }
+        if !self.mac.is_empty() {
+            my_size += ::protobuf::rt::string_size(2, &self.mac);
+        }
+        if !self.id.is_empty() {
+            my_size += ::protobuf::rt::string_size(3, &self.id);
+        }
+        if !self.username.is_empty() {
+            my_size += ::protobuf::rt::string_size(4, &self.username);
+        }
+        if !self.hostname.is_empty() {
+            my_size += ::protobuf::rt::string_size(5, &self.hostname);
+        }
+        if !self.platform.is_empty() {
+            my_size += ::protobuf::rt::string_size(6, &self.platform);
+        }
+        if !self.misc.is_empty() {
+            my_size += ::protobuf::rt::string_size(7, &self.misc);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
+        self.cached_size.set(my_size);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::ProtobufResult<()> {
+        if !self.cmd.is_empty() {
+            os.write_string(1, &self.cmd)?;
+        }
+        if !self.mac.is_empty() {
+            os.write_string(2, &self.mac)?;
+        }
+        if !self.id.is_empty() {
+            os.write_string(3, &self.id)?;
+        }
+        if !self.username.is_empty() {
+            os.write_string(4, &self.username)?;
+        }
+        if !self.hostname.is_empty() {
+            os.write_string(5, &self.hostname)?;
+        }
+        if !self.platform.is_empty() {
+            os.write_string(6, &self.platform)?;
+        }
+        if !self.misc.is_empty() {
+            os.write_string(7, &self.misc)?;
+        }
+        os.write_unknown_fields(self.get_unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn get_cached_size(&self) -> u32 {
+        self.cached_size.get()
+    }
+
+    fn get_unknown_fields(&self) -> &::protobuf::UnknownFields {
+        &self.unknown_fields
+    }
+
+    fn mut_unknown_fields(&mut self) -> &mut ::protobuf::UnknownFields {
+        &mut self.unknown_fields
+    }
+
+    fn new() -> PeerDiscovery {
+        PeerDiscovery::new()
+    }
+
+    fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 17)
+    }
+
+    fn default_instance() -> &'static PeerDiscovery {
+        static instance: PeerDiscovery = PeerDiscovery {
+            cmd: ::std::string::String::new(),
+            mac: ::std::string::String::new(),
+            id: ::std::string::String::new(),
+            username: ::std::string::String::new(),
+            hostname: ::std::string::String::new(),
+            platform: ::std::string::String::new(),
+            misc: ::std::string::String::new(),
+            unknown_fields: ::protobuf::UnknownFields::new(),
+            cached_size: ::protobuf::rt::CachedSize::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::Clear for PeerDiscovery {
+    fn clear(&mut self) {
+        self.cmd.clear();
+        self.mac.clear();
+        self.id.clear();
+        self.username.clear();
+        self.hostname.clear();
+        self.platform.clear();
+        self.misc.clear();
+        self.unknown_fields.clear();
+    }
+}
+
+impl ::std::fmt::Debug for PeerDiscovery {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for PeerDiscovery {
+    type RuntimeType = ::protobuf::reflect::runtime_types::RuntimeTypeMessage<Self>;
 }
 
 #[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
@@ -4542,7 +4863,7 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \x12\x1f\n\nlocal_addr\x18\x02\x20\x01(\x0cR\tlocalAddrB\0\x12#\n\x0crel\
     ay_server\x18\x03\x20\x01(\tR\x0brelayServerB\0\x12\x10\n\x02id\x18\x04\
     \x20\x01(\tR\x02idB\0\x12\x1a\n\x07version\x18\x05\x20\x01(\tR\x07versio\
-    nB\0:\0\"\xbc\x08\n\x11RendezvousMessage\x12:\n\rregister_peer\x18\x06\
+    nB\0:\0\"\xfb\x08\n\x11RendezvousMessage\x12:\n\rregister_peer\x18\x06\
     \x20\x01(\x0b2\x11.hbb.RegisterPeerH\0R\x0cregisterPeerB\0\x12S\n\x16reg\
     ister_peer_response\x18\x07\x20\x01(\x0b2\x19.hbb.RegisterPeerResponseH\
     \0R\x14registerPeerResponseB\0\x12G\n\x12punch_hole_request\x18\x08\x20\
@@ -4563,12 +4884,19 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     se\x18\x13\x20\x01(\x0b2\x12.hbb.RelayResponseH\0R\rrelayResponseB\0\x12\
     A\n\x10test_nat_request\x18\x14\x20\x01(\x0b2\x13.hbb.TestNatRequestH\0R\
     \x0etestNatRequestB\0\x12D\n\x11test_nat_response\x18\x15\x20\x01(\x0b2\
-    \x14.hbb.TestNatResponseH\0R\x0ftestNatResponseB\0B\t\n\x05union\x12\0:\
-    \0*T\n\x08ConnType\x12\x12\n\x0cDEFAULT_CONN\x10\0\x1a\0\x12\x13\n\rFILE\
-    _TRANSFER\x10\x01\x1a\0\x12\x12\n\x0cPORT_FORWARD\x10\x02\x1a\0\x12\t\n\
-    \x03RDP\x10\x03\x1a\0\x1a\0*A\n\x07NatType\x12\x11\n\x0bUNKNOWN_NAT\x10\
-    \0\x1a\0\x12\x10\n\nASYMMETRIC\x10\x01\x1a\0\x12\x0f\n\tSYMMETRIC\x10\
-    \x02\x1a\0\x1a\0B\0b\x06proto3\
+    \x14.hbb.TestNatResponseH\0R\x0ftestNatResponseB\0\x12=\n\x0epeer_discov\
+    ery\x18\x16\x20\x01(\x0b2\x12.hbb.PeerDiscoveryH\0R\rpeerDiscoveryB\0B\t\
+    \n\x05union\x12\0:\0\"\xbb\x01\n\rPeerDiscovery\x12\x12\n\x03cmd\x18\x01\
+    \x20\x01(\tR\x03cmdB\0\x12\x12\n\x03mac\x18\x02\x20\x01(\tR\x03macB\0\
+    \x12\x10\n\x02id\x18\x03\x20\x01(\tR\x02idB\0\x12\x1c\n\x08username\x18\
+    \x04\x20\x01(\tR\x08usernameB\0\x12\x1c\n\x08hostname\x18\x05\x20\x01(\t\
+    R\x08hostnameB\0\x12\x1c\n\x08platform\x18\x06\x20\x01(\tR\x08platformB\
+    \0\x12\x14\n\x04misc\x18\x07\x20\x01(\tR\x04miscB\0:\0*T\n\x08ConnType\
+    \x12\x12\n\x0cDEFAULT_CONN\x10\0\x1a\0\x12\x13\n\rFILE_TRANSFER\x10\x01\
+    \x1a\0\x12\x12\n\x0cPORT_FORWARD\x10\x02\x1a\0\x12\t\n\x03RDP\x10\x03\
+    \x1a\0\x1a\0*A\n\x07NatType\x12\x11\n\x0bUNKNOWN_NAT\x10\0\x1a\0\x12\x10\
+    \n\nASYMMETRIC\x10\x01\x1a\0\x12\x0f\n\tSYMMETRIC\x10\x02\x1a\0\x1a\0B\0\
+    b\x06proto3\
 ";
 
 /// `FileDescriptorProto` object which was a source for this generated file
@@ -4602,6 +4930,7 @@ pub fn file_descriptor() -> ::protobuf::reflect::FileDescriptor {
         messages.push(FetchLocalAddr::generated_message_descriptor_data());
         messages.push(LocalAddr::generated_message_descriptor_data());
         messages.push(RendezvousMessage::generated_message_descriptor_data());
+        messages.push(PeerDiscovery::generated_message_descriptor_data());
         let mut enums = ::std::vec::Vec::new();
         enums.push(ConnType::generated_enum_descriptor_data());
         enums.push(NatType::generated_enum_descriptor_data());

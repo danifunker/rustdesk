@@ -151,5 +151,20 @@ message RendezvousMessage {
     RelayResponse relay_response = 19;
     TestNatRequest test_nat_request = 20;
     TestNatResponse test_nat_response = 21;
+    // Field 22 in modern RustDesk, absent from 1.1.8. Backported so the G5
+    // answers the UDP broadcast clients use to populate their local-network
+    // list; without it the only way in is typing the IP. Copied verbatim from
+    // github.com/rustdesk/hbb_common.
+    PeerDiscovery peer_discovery = 22;
   }
+}
+
+message PeerDiscovery {
+  string cmd = 1;
+  string mac = 2;
+  string id = 3;
+  string username = 4;
+  string hostname = 5;
+  string platform = 6;
+  string misc = 7;
 }
