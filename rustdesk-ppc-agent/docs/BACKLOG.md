@@ -59,19 +59,33 @@ A phase-1 goal that is not started. `libopus.a` is already built and on the G5;
 be script-overridden away. Capture side is CoreAudio AudioUnit (10.4+). Frames go
 in `AudioFrame { bytes data = 1 }`.
 
-## 4. Keyboard beyond raw keycodes
+## ~~4. Keyboard beyond raw keycodes~~ (done)
 
-`input.rs` handles `KeyEvent::chr` only. `ControlKey` and `unicode` need a
-keymap table mapping RustDesk's key enum to Mac virtual keycodes — a
-table-building exercise rather than a platform one. Modifiers are not applied
-either.
+`ControlKey`, `unicode` and `seq` are all handled, and modifiers become
+`CGEventFlags`. The premise was also wrong in a way worth recording: `chr` is
+not a raw keycode, it is a *character* — "test" arrives as 116,101,115,116, and
+posting those as Mac virtual keycodes types PageUp, F9, Home, PageUp. The shim
+maps characters back to keycodes with `UCKeyTranslate`, which follows the
+machine's actual layout and covers all 95 printable ASCII characters.
 
-## 5. Cursor shape
+Still open: verifying delivery end-to-end into an application. Keystrokes go
+wherever the focus is, and a listen-only `CGEventTap` — the way to check this
+without guessing — needs "Enable access for assistive devices" in Universal
+Access, which is off. `--probe-keys` prints the character→keycode table as the
+part that *can* be checked unattended.
 
-Clients expect `CursorData`/`CursorPosition` to draw a remote cursor. Nothing is
-sent, so the viewer shows no pointer. Note the hardware cursor is likely a GPU
-overlay and *not* in the framebuffer, so it will not appear in captured frames
-either — this is the only way the viewer gets one.
+## ~~5. Cursor shape~~ (position done, shape approximated)
+
+Confirmed: the pointer is a hardware overlay and is **not** in the framebuffer —
+a 100x100 patch of a captured frame centred on it holds exactly one colour. So
+the messages really are the only way a viewer gets a pointer.
+
+`CursorData` is now sent once at login and `CursorPosition` whenever it moves
+(`src/cursor.rs`). The shape is a built-in arrow rather than the real one: on
+10.5 the system-wide cursor image is only reachable through private CGS calls,
+and `NSCursor` knows only the calling application's own cursor. So the pointer
+is in the right place but keeps its arrow over text fields and resize edges.
+Reading the true shape is the remaining work.
 
 ## 6. Clipboard
 
@@ -89,11 +103,19 @@ shim. Note capture (347 ms) dominates, so this is worth less than it looks.
 
 `PeerInfo` reports a single display and capture only reads the main one.
 
-## 9. Running as a service
+## ~~9. Running as a service~~ (done, with the session question answered)
 
-Deferred by decision. Needs a `launchd` plist and a decision about which session
-the agent runs in — capture requires a window-server session, so it cannot be a
-plain system daemon.
+`deploy/com.rustdesk.ppc-agent.plist` runs it in the console ("Aqua") session,
+loaded with `launchctl load -w` from Terminal.app on the G5 — an ssh session
+reaches a different launchd and cannot do it.
+
+The session question has a sharper answer than "capture requires a window-server
+session". A *fully* detached agent — backgrounded with `&`, or nohup — cannot
+reach the window server at all ("On-demand launch of the Window Server is
+allowed for root user only"), reports a 0x0 display, and silently serves input
+with no video. A detached `screen` session keeps enough of the login session
+that capture keeps working after ssh closes, which is what `build-ppc.sh deploy`
+now uses.
 
 ## 10. Upstream the mrustc fixes
 
