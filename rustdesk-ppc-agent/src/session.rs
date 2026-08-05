@@ -145,7 +145,7 @@ const MAX_LOGIN_ATTEMPTS: u32 = 10;
 /// would silently have moved the client onto paths this agent does not
 /// implement, with no error anywhere. Pinned here, and guarded by a test that
 /// encodes exactly which gates have been earned.
-const REPORTED_VERSION: &str = "1.2.4";
+const REPORTED_VERSION: &str = "1.4.5";
 
 /// Is there anything to read without waiting?
 ///
@@ -1286,12 +1286,32 @@ mod version_tests {
             REPORTED_VERSION
         );
 
-        // Not earned: `decide_mouse` takes absolute coordinates and would be
-        // handed deltas.
+        // Earned: `decide_mouse` handles `mask` kind 5 and `land_delta` bounds
+        // where the pointer ends up.
         assert!(
-            ours < version_number("1.4.5"),
-            "{} claims the relative-mouse gate; handle deltas first",
+            ours >= version_number("1.4.5"),
+            "{} is below the relative-mouse gate, and deltas are handled",
             REPORTED_VERSION
+        );
+
+        // Earned on the way: ScreenshotRequest is backported and served. This
+        // gate reads the version and nothing else, so there is no capability
+        // flag to leave unset -- claiming 1.4.5 without it puts a button in the
+        // peer's menu that nothing answers.
+        assert!(
+            ours >= version_number("1.4.0"),
+            "{} is below the screenshot gate, which is implemented",
+            REPORTED_VERSION
+        );
+
+        // 1.4.5 is the top of the ladder: every gate above it needs something
+        // this agent does not send, so there is nothing left to earn. If a newer
+        // client adds one, this is the assertion that should start failing --
+        // change it deliberately, with the survey in docs/BACKLOG.md §11c
+        // brought up to date.
+        assert_eq!(
+            REPORTED_VERSION, "1.4.5",
+            "raising this past the last surveyed gate needs the survey redone"
         );
     }
 
