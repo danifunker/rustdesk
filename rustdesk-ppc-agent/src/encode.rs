@@ -24,6 +24,9 @@ extern "C" {
         bitrate_kbps: c_int,
         cpu_used: c_int,
         threads: c_int,
+        static_thresh: c_int,
+        last_ref_only: c_int,
+        error_resilient: c_int,
     ) -> *mut VpxEnc;
     fn vpxenc_encode(
         e: *mut VpxEnc,
@@ -45,6 +48,60 @@ extern "C" {
 /// Fastest setting VP8 accepts. Quality is not the constraint here; wall-clock is.
 const CPU_USED: c_int = -16;
 
+/// The knobs that trade picture for wall-clock, gathered so they can be swept.
+///
+/// A whole-frame VP8 encode is the floor for an ordinary interactive update --
+/// it costs the same whether one line of text moved or the entire screen did --
+/// so these are aimed squarely at the per-macroblock work that a mostly-static
+/// desktop should not have to pay for. `--probe-display` times each of them
+/// against both a still frame and a small change. Nothing here changes the
+/// bitstream's decodability, so a client cannot tell which settings were used.
+///
+/// Measured on the dual G5 at 1920x1080, median of three steady-state frames:
+///
+/// ```text
+///   threshold  1000 (was)   46 ms    threshold 15000   35 ms
+///   threshold  6000         39 ms    threshold 30000   32 ms
+/// ```
+///
+/// Only the threshold pays. The other two are kept as knobs, and as recorded
+/// negative results: predicting from the last frame alone measured 47 ms, i.e.
+/// nothing, because at `cpu_used = -16` VP8's fast mode picker was never
+/// searching golden and altref anyway; and dropping error resilience measured
+/// nothing either *and* made frames bigger (1706 against 1566 bytes), so the
+/// entropy update it enables is apparently not what carries the cost here. Both
+/// stay switchable because this agent targets a family of machines and the
+/// sweep is how the next one gets checked rather than assumed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Tune {
+    /// `VP8E_SET_STATIC_THRESHOLD`: below this the macroblock is coded as skip.
+    pub static_threshold: u32,
+    /// Predict only from the previous frame, never golden or altref.
+    pub last_ref_only: bool,
+    /// Code each frame independently of the entropy state. Pointless over TCP.
+    pub error_resilient: bool,
+}
+
+impl Default for Tune {
+    fn default() -> Self {
+        Self {
+            // 15000 rather than 30000, which was only 3 ms better and started
+            // emitting visibly more data (2084 bytes against 1263) -- the sign
+            // of skipping enough that the drift has to be paid for later. At
+            // 15000 the output stays the size 6000 produces, for 4 ms less.
+            //
+            // This is still a quality dial: a macroblock whose error falls
+            // under the threshold is not coded at all, so a subtle change can
+            // sit stale until the settle repaint in `session` forces a
+            // keyframe. High-contrast changes -- text, windows, menus -- are
+            // nowhere near it.
+            static_threshold: 15000,
+            last_ref_only: false,
+            error_resilient: true,
+        }
+    }
+}
+
 pub struct Encoder {
     inner: *mut VpxEnc,
     pub width: usize,
@@ -59,18 +116,28 @@ pub struct Frame<'a> {
 
 impl Encoder {
     pub fn new(width: usize, height: usize, bitrate_kbps: u32) -> Result<Self, &'static str> {
+        Self::tuned(width, height, bitrate_kbps, Tune::default())
+    }
+
+    pub fn tuned(
+        width: usize,
+        height: usize,
+        bitrate_kbps: u32,
+        tune: Tune,
+    ) -> Result<Self, &'static str> {
         // Asked for at runtime, never assumed: this has to run on
         // single-processor G4s and G5s as well as the dual G5 it is developed
         // on. Two is the useful ceiling for VP8 at this resolution -- more
         // partitions cost bitstream overhead for work there are no cores to do.
         let threads = crate::sys::threads_for(2);
         log::info!(
-            "encoder: {}x{}, {} kbps, {} thread(s) of {} processor(s)",
+            "encoder: {}x{}, {} kbps, {} thread(s) of {} processor(s), {:?}",
             width,
             height,
             bitrate_kbps,
             threads,
-            crate::sys::cpu_count()
+            crate::sys::cpu_count(),
+            tune
         );
         let inner = unsafe {
             vpxenc_new(
@@ -79,6 +146,9 @@ impl Encoder {
                 bitrate_kbps as c_int,
                 CPU_USED,
                 threads as c_int,
+                tune.static_threshold as c_int,
+                tune.last_ref_only as c_int,
+                tune.error_resilient as c_int,
             )
         };
         if inner.is_null() {

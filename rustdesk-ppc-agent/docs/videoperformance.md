@@ -6,15 +6,18 @@ and the C probes in `probes/`.
 
 **The short version:** capture is a raw VRAM read, and no codec setting touches
 it. The only real optimisation is reading fewer bytes. That took a capture cycle
-from 6364 ms to 15 ms on an idle desktop.
+from 6364 ms to 14 ms on an idle desktop.
 
-Two corrections worth reading before trusting older numbers here. The idle
+Three corrections worth reading before trusting older numbers here. The idle
 figure was once quoted as 6 ms, measured while the dirty-band probe was reading
 one byte per sampled pixel -- which landed on the constant alpha byte, so it was
-timing a probe that could not detect anything. It now reads R, G and B and costs
-15 ms. And for a while the agent ran a display capture/release cycle before each
-probe, which added ~256 ms to *every* poll; that turned out to be unnecessary as
-well as hostile to the machine's own user, and is gone. See `src/capture.rs`.
+timing a probe that could not detect anything. For a while the agent ran a
+display capture/release cycle before each probe, which added ~256 ms to *every*
+poll; that turned out to be unnecessary as well as hostile to the machine's own
+user, and is gone. And the probe then spent a while hashing the framebuffer
+directly, at 1.9 MB/s, before anyone checked it against the 22.8 MB/s a bulk
+copy gets. It now samples a quarter of every eighth row, `memcpy`s those runs
+into RAM, hashes them there, and costs **14 ms**. See `src/capture.rs`.
 
 ---
 
@@ -75,17 +78,23 @@ A desktop is mostly static, so the real waste was paying 348 ms to discover that
 nothing had changed.
 
 `Capturer::dirty_bands()` splits the screen into 16 horizontal bands and
-checksums a sample of each — every 16th row, every 64th byte within it — then
-compares against the previous probe. `read_bands()` copies only the bands that
-moved.
+checksums a sample of each — 128 bytes out of every 512 along every 8th row —
+then compares against the previous probe. `read_bands()` copies only the bands
+that moved.
 
-Measured on the G5:
+The sampled runs are `memcpy`'d into RAM and hashed there, which is not a
+detail. Hashing them in place reads uncached VRAM a byte at a time, and that
+measures 1.9 MB/s against the 22.8 MB/s of a bulk copy — the same 12x mistake as
+§1, one level down. Once the copy is bulk, the probe is purely proportional to
+bytes sampled: measured on the G5, window sizes from 3 to 7680 bytes all land at
+~19 MB/s, so the window is a coverage dial and nothing else.
 
 ```text
-probe : 6 ms first (16 bands dirty), 6 ms second (0 dirty)
+probe : 14 ms first (16 bands dirty), 14 ms second (0 dirty)
 ```
 
-**6 ms**, and it correctly reports nothing dirty on a still screen.
+**14 ms** for a quarter of every sampled row, and it correctly reports nothing
+dirty on a still screen.
 
 ### Resulting cost model (1920x1080)
 
@@ -93,27 +102,27 @@ Full pipeline, measured with `--probe-display`:
 
 | stage | cost |
 |---|---|
-| dirty-band probe | 15 ms |
-| capture (VRAM → RAM) | 347 ms |
-| ARGB → I420 | 172 ms |
-| VP8 encode | 89 ms (8 KB out) |
-| **full-screen change** | **608 ms** |
-| **idle** | **15 ms** |
+| dirty-band probe | 14 ms |
+| capture (VRAM → RAM) | 351 ms |
+| ARGB → I420 | 185 ms |
+| VP8 encode | 34 ms |
+| **full-screen change** | **571 ms** |
+| **idle** | **14 ms** |
 
 | scenario | cost | notes |
 |---|---|---|
-| idle | **15 ms** | probe only |
-| one band changed (typing, a menu) | ~60 ms | probe + band read + convert + encode |
-| whole screen changed (video) | ~608 ms | everything |
+| idle | **14 ms** | probe only, and not on every pass once the screen settles |
+| one band changed (typing, a menu) | ~81 ms | probe + band read + convert + encode |
+| whole screen changed (video) | ~571 ms | everything |
 
-Note the shape: **encode is the cheapest stage**, at 89 ms against 347 ms for
-capture and 172 ms for conversion.
+Note the shape: **capture dominates everything**, at 351 ms against 185 ms for
+conversion and 34 ms for the encoder.
 
-That ranking has since changed for *small* updates. Capture and conversion are
-now per-band, so a few changed lines cost tens of milliseconds each, while VP8
-still encodes a whole frame every time -- which makes the encoder the floor for
-ordinary interaction. See [`performance-plan.md`](performance-plan.md). Tuning the codec is the least valuable thing
-that could be done here.
+For *small* updates the ranking inverts. Capture and conversion are per-band, so
+a few changed lines cost tens of milliseconds each, while VP8 still encodes a
+whole frame every time -- which makes the encoder the floor for ordinary
+interaction even at 34 ms. See [`performance-plan.md`](performance-plan.md) for
+what to do about it.
 
 Normal interactive work is genuinely usable; only full-screen motion falls back
 to ~2 fps, which is the honest ceiling for this hardware.
@@ -124,17 +133,19 @@ The checksum is **sampled, not exhaustive**. A change confined entirely to
 unsampled pixels is missed until something else in that band moves. This is the
 right trade when the alternative is reading everything every time, but it is a
 real gap, not a free lunch. `invalidate()` forces a full frame when a peer
-connects.
+connects, and `session`'s settle repaint bounds how long a missed change can
+survive to about a second.
 
-If it proves too lossy in practice, the knobs are `PROBE_ROW_STEP` (currently 16)
-and the in-row stride (currently 64 bytes) in `src/capture.rs` — both trade probe
-cost for sensitivity, linearly.
+If it proves too lossy in practice, the knobs are `PROBE_ROW_STEP` (currently 8)
+and `PROBE_WINDOW` / `PROBE_WINDOW_STEP` (currently 128 in 512) in
+`src/capture.rs` — all three trade probe cost for coverage, linearly.
+`--probe-display` prints the whole trade as a table.
 
 ## 4. Why compression is not the lever
 
 Two independent reasons:
 
-**The bottleneck is upstream of the codec.** 348 of the 541 ms is a raw memory
+**The bottleneck is upstream of the codec.** 351 of the 571 ms is a raw memory
 read that happens before a single pixel is encoded. No encoder setting affects
 it.
 
@@ -146,24 +157,33 @@ references neither**. VP8 via libvpx is realistically the only thing a real peer
 decodes.
 
 Codec settings still matter for the *encode* step — VP8 rather than VP9,
-realtime deadline, `cpu_used = -16`, 1500 kbps — but that step measures 83 ms
-against 527 ms for capture plus conversion. It is additive to capture, not a
-substitute for fixing it, and it is already the smallest term.
+realtime deadline, `cpu_used = -16`, two threads, a static-skip threshold of
+15000, 1500 kbps — and together they have taken it from 92 ms to 34 ms. But that
+step measures 34 ms against 536 ms for capture plus conversion. It is additive
+to capture, not a substitute for fixing it, and it is the smallest term by a
+long way. Where it *does* decide things is small updates, where capture and
+conversion are per-band and the encoder is not: see
+[`performance-plan.md`](performance-plan.md).
 
 ## 5. Conversion cost
 
-`argb_to_i420` takes ~168 ms at 1920x1080. For comparison, hand-written C at
+`argb_to_i420` takes ~185 ms at 1920x1080. For comparison, hand-written C at
 `-O2` did luma-only from RAM in **14 ms**. Chroma explains part of the gap; most
 of the rest is that mrustc emits C compiled at **`-O1`**, plus Rust bounds checks
 in the hot loop.
 
 Untried, in rough order of expected value:
 
-1. `get_unchecked` in the inner loop — bounds checks dominate a loop this tight.
-2. Raise the C optimisation level. `ppc-cc-remote.py` passes mrustc's `-O1`
+1. Move the converter into a C shim, as `vpx_shim.c` and `input_shim.c` already
+   are. That gets -O2 and no bounds checks in one step, without writing a line
+   of vector code, and the build already passes `-maltivec`.
+2. `get_unchecked` in the inner loop — the cheaper half of the same idea, if the
+   converter is to stay in Rust.
+3. Raise the C optimisation level. `ppc-cc-remote.py` passes mrustc's `-O1`
    through and has no override; it strips `OPT_FLAGS` only for oversized units.
-3. An AltiVec converter as a small C shim. The G5 has AltiVec and this is exactly
-   the shape of problem it suits, but mrustc-generated C will not auto-vectorise.
+4. An AltiVec converter. The G5 has AltiVec and this is exactly the shape of
+   problem it suits, but mrustc-generated C will not auto-vectorise — which is
+   another reason to do 1 first and measure what is left.
 
 One thing already tried and **not** worth it: fusing the luma and chroma passes
 into a single pass over 2x2 blocks, so each pixel is read once instead of twice.
