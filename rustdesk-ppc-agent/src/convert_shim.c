@@ -89,3 +89,49 @@ void rd_argb_to_i420_rows(const unsigned char *src, size_t src_len, int stride,
         }
     }
 }
+
+/* ARGB -> PNG scanlines: a filter byte then R,G,B per pixel, for src/png.rs.
+ *
+ * Here for the same reason as the converter above and with the same measured
+ * shape. There is no arithmetic in this one at all -- it is a channel shuffle --
+ * but a per-pixel Rust loop over this framebuffer costs ~1.8 s at mrustc's -O1
+ * with bounds checks, which is what the reference in `argb_to_i420_rows_rust`
+ * measures on the same 8 MB. A screenshot blocks the session loop while it runs,
+ * so that is 1.8 s of no video and no input.
+ *
+ * `pack_rgb_rows_rust` in src/png.rs is the definition of what this must
+ * produce, and `--probe-display` compares the two byte for byte on a real frame.
+ *
+ * The filter byte is written here rather than by the caller so the whole
+ * scanline is one contract: PNG puts it at the head of every row, and a caller
+ * that forgot one would shift the entire image by a pixel.
+ */
+void rd_argb_to_png_rows(const unsigned char *src, size_t src_len, int stride,
+                         unsigned char *dst, size_t dst_len,
+                         int width, int height)
+{
+    int y, x;
+    size_t row_len;
+
+    if (!src || !dst || width < 1 || height < 1 || stride < width * 4)
+        return;
+    row_len = (size_t)1 + (size_t)width * 3;
+    if (src_len < (size_t)stride * (size_t)height)
+        return;
+    if (dst_len < row_len * (size_t)height)
+        return;
+
+    for (y = 0; y < height; y++) {
+        const unsigned char *p = src + (size_t)y * stride;
+        unsigned char *o = dst + (size_t)y * row_len;
+
+        *o++ = 0; /* filter type None */
+        for (x = 0; x < width; x++) {
+            o[0] = p[1];
+            o[1] = p[2];
+            o[2] = p[3];
+            o += 3;
+            p += 4;
+        }
+    }
+}

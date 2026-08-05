@@ -201,6 +201,8 @@ fn msg_name(m: &Message) -> &'static str {
         Some(message::Union::file_response(_)) => "file_response",
         Some(message::Union::misc(_)) => "misc",
         Some(message::Union::pointer_device_event(_)) => "pointer_device_event",
+        Some(message::Union::screenshot_request(_)) => "screenshot_request",
+        Some(message::Union::screenshot_response(_)) => "screenshot_response",
         None => "<empty or unknown field>",
     }
 }

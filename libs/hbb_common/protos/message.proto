@@ -433,6 +433,13 @@ message Message {
     // "message had no recognised field" and are dropped. Definitions copied
     // verbatim from github.com/rustdesk/hbb_common.
     PointerDeviceEvent pointer_device_event = 26;
+    // Fields 29 and 30, also backported. The client offers a screenshot button
+    // to any peer claiming 1.4.0 or newer -- `is_support_screenshot_num` reads
+    // the version and nothing else, so unlike most features added since 1.2.4
+    // there is no capability flag to leave unset. Without these two the button
+    // appears and the request lands as an unrecognised field.
+    ScreenshotRequest screenshot_request = 29;
+    ScreenshotResponse screenshot_response = 30;
   }
 }
 
@@ -474,4 +481,18 @@ message TouchPanUpdate {
 message TouchPanEnd {
   int32 x = 1;
   int32 y = 2;
+}
+
+message ScreenshotRequest {
+  int32 display = 1;
+  // sid is the session id on the controlling side
+  // It is used to forward the message to the correct remote (session) window.
+  string sid = 2;
+}
+
+message ScreenshotResponse {
+  string sid = 1;
+  // empty if success
+  string msg = 2;
+  bytes data = 3;
 }
