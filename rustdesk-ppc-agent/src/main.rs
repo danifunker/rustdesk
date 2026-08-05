@@ -28,6 +28,9 @@ OPTIONS:
     --show-key       print the public key a peer needs, and exit
     --probe-display  report what the framebuffer looks like, and exit
     --config PATH    config file (default ~/.rustdesk-ppc-agent.conf)
+    --secure         require the signed_id/public_key exchange. OFF by default:
+                     a client connecting by IP does not take part, and enabling
+                     it there deadlocks the handshake.
     --log LEVEL      error | warn | info | debug | trace   (default info)
     -v               same as --log debug
     -vv              same as --log trace
@@ -48,6 +51,7 @@ fn main() {
     let mut set_password: Option<String> = None;
     let (mut show_id, mut show_key, mut probe) = (false, false, false);
     let mut level = log::LevelFilter::Info;
+    let mut secure = false;
 
     let mut i = 0;
     while i < argv.len() {
@@ -98,6 +102,10 @@ fn main() {
             }
             "-vv" => {
                 level = log::LevelFilter::Trace;
+                i += 1;
+            }
+            "--secure" => {
+                secure = true;
                 i += 1;
             }
             "-h" | "--help" => usage(),
@@ -157,10 +165,12 @@ fn main() {
         hostname: hostname(),
         width,
         height,
+        secure,
     };
     println!("agent id  : {}", ident.id);
     println!("public key: {}", base64(&pk.0));
     println!("display   : {}x{}", width, height);
+    println!("mode      : {}", if secure { "secure (peer must know our key)" } else { "direct-IP, UNENCRYPTED" });
 
     if let Err(e) = session::listen(&format!("{}:{}", listen, port), &ident) {
         eprintln!("error: {}", e);

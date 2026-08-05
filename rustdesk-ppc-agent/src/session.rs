@@ -3,16 +3,32 @@
 //! Mirrors the agent side of `src/server.rs:90-135` (key exchange) and
 //! `src/server/connection.rs` (login + dispatch), on blocking I/O.
 //!
-//! Sequence, all frames length-prefixed by [`crate::frame`]:
+//! Two modes, matching upstream. Which one applies is decided by the *peer's*
+//! connection route, not by us:
+//!
+//! **Direct IP (the default).** Upstream's `direct_server` calls
+//! `create_tcp_connection(.., secure = false)`, and the whole signed_id/public_key
+//! exchange in `server.rs` is gated on `if secure && ..`. A client connecting by
+//! IP never calls `secure_connection` at all — the direct branch of `_start`
+//! returns the socket immediately. So it sends nothing and waits for `hash`:
+//!
+//! ```text
+//!   agent -> peer   Message{ hash }             salt + per-connection challenge
+//!   peer  -> agent  Message{ login_request }    sha256(sha256(pw|salt)|challenge)
+//!   agent -> peer   Message{ login_response }   peer_info, or an error string
+//!   ...             mouse_event / key_event in, video_frame out
+//! ```
+//!
+//! Sending `signed_id` here and waiting for `public_key` deadlocks: we wait for a
+//! key exchange the peer will never start, it waits for a `hash` we never send.
+//!
+//! **Secure (`--secure`).** For a peer that knows our public key out of band:
 //!
 //! ```text
 //!   agent -> peer   Message{ signed_id }        plaintext
 //!   peer  -> agent  Message{ public_key }       plaintext; seals the secretbox key
 //!   -- everything past here is secretbox-sealed --
-//!   agent -> peer   Message{ hash }             salt + per-connection challenge
-//!   peer  -> agent  Message{ login_request }    password = sha256(sha256(pw|salt)|challenge)
-//!   agent -> peer   Message{ login_response }   peer_info, or an error string
-//!   ...             mouse_event / key_event in, video_frame out
+//!   ... as above
 //! ```
 
 use std::io;
@@ -146,6 +162,10 @@ pub struct Identity {
     pub hostname: String,
     pub width: i32,
     pub height: i32,
+    /// Do the signed_id/public_key exchange and seal the session. Off by
+    /// default: a direct-IP client does not participate, and enabling it there
+    /// deadlocks the handshake.
+    pub secure: bool,
 }
 
 /// Run one connection to completion. Errors are per-connection: the caller logs
@@ -156,44 +176,50 @@ pub fn serve(stream: TcpStream, ident: &Identity) -> io::Result<()> {
 
     log::info!("session start: {}", peer.stream.peer_addr().map(|a| a.to_string()).unwrap_or_default());
 
-    // --- 1/2. key exchange ---------------------------------------------------
-    log::debug!("step 1: sending signed_id (plaintext)");
-    let hs = Handshake::new();
-    let mut m = Message::new();
-    let mut sid = SignedId::new();
-    sid.id = hs.signed_id(&ident.id, &ident.secret_key);
-    m.set_signed_id(sid);
-    peer.send(&m)?;
+    // --- 1/2. key exchange (only when the peer will take part) ---------------
+    if ident.secure {
+        log::debug!("step 1: sending signed_id (plaintext)");
+        let hs = Handshake::new();
+        let mut m = Message::new();
+        let mut sid = SignedId::new();
+        sid.id = hs.signed_id(&ident.id, &ident.secret_key);
+        m.set_signed_id(sid);
+        peer.send(&m)?;
 
-    log::debug!("step 2: awaiting public_key");
-    let reply = peer.recv()?;
-    match reply.union {
-        Some(message::Union::public_key(pk)) => {
-            if pk.asymmetric_value.is_empty() {
-                // Upstream reads this as "peer has no key for us, resend"; for a
-                // direct-IP agent an unencrypted session is not worth supporting.
+        log::debug!("step 2: awaiting public_key");
+        let reply = peer.recv()?;
+        match reply.union {
+            Some(message::Union::public_key(pk)) => {
+                if pk.asymmetric_value.is_empty() {
+                    // Upstream reads this as "no key for you, carry on in the
+                    // clear". Honour it rather than dropping the peer.
+                    log::warn!("step 2: peer declined encryption -- continuing UNENCRYPTED");
+                } else {
+                    let key = hs
+                        .open_symmetric_key(&pk.asymmetric_value, &pk.symmetric_value)
+                        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                    peer.chan = Some(SecureChannel::new(key));
+                    log::debug!("step 2: secure channel established (later frames sealed)");
+                }
+            }
+            None => {
+                // An empty Message is what `secure_connection` sends when it has
+                // no public key for us.
+                log::warn!("step 2: peer sent an empty message -- continuing UNENCRYPTED");
+            }
+            other => {
+                log::error!(
+                    "step 2: expected public_key, got {}",
+                    msg_name(&Message { union: other, ..Default::default() })
+                );
                 return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "peer offered no public key (unencrypted session refused)",
+                    io::ErrorKind::InvalidData,
+                    "handshake: expected public_key",
                 ));
             }
-            let key = hs
-                .open_symmetric_key(&pk.asymmetric_value, &pk.symmetric_value)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-            peer.chan = Some(SecureChannel::new(key));
-            log::debug!("step 2: secure channel established (all later frames sealed)");
         }
-        other => {
-            log::error!(
-                "step 2: expected public_key, got {}",
-                msg_name(&Message { union: other.clone(), ..Default::default() })
-            );
-            let _ = other;
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "handshake: expected public_key",
-            ))
-        }
+    } else {
+        log::info!("direct-IP mode: no key exchange, session is UNENCRYPTED (as upstream's direct_server)");
     }
 
     // --- 3. challenge --------------------------------------------------------
@@ -423,6 +449,7 @@ mod tests {
             hostname: "g5".into(),
             width: 1024,
             height: 768,
+            secure: true,
         };
         let t = std::thread::spawn(move || {
             let (s, _) = listener.accept().unwrap();
@@ -516,6 +543,60 @@ mod tests {
             }
         }
         Some(out)
+    }
+
+    /// Direct-IP mode: the peer sends nothing until it gets a `hash`. This is
+    /// the path a real RustDesk client takes when you type an IP, and getting it
+    /// wrong deadlocks both sides.
+    #[test]
+    fn direct_ip_mode_sends_hash_first_without_key_exchange() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (_pk, sk) = sign::gen_keypair();
+        let ident = Identity {
+            id: "123456789".into(),
+            salt: "abcdef".into(),
+            password: "hunter2".into(),
+            secret_key: sk,
+            hostname: "g5".into(),
+            width: 800,
+            height: 600,
+            secure: false,
+        };
+        let t = std::thread::spawn(move || {
+            let (s, _) = listener.accept().unwrap();
+            let _ = serve(s, &ident);
+        });
+        let mut c = Peer {
+            stream: TcpStream::connect(addr).unwrap(),
+            chan: None,
+            name: String::new(),
+            id: String::new(),
+        };
+        // Send nothing, exactly as a direct-IP client does; the first thing we
+        // must see is an unencrypted `hash`.
+        let hash = match c.recv().unwrap().union {
+            Some(message::Union::hash(h)) => h,
+            other => panic!("expected hash first, got {:?}", other.is_some()),
+        };
+        assert_eq!(hash.salt, "abcdef");
+        let mut req = LoginRequest::new();
+        req.my_id = "peer".into();
+        req.my_name = "tester".into();
+        req.password =
+            expected_login_hash("hunter2", hash.salt.as_bytes(), hash.challenge.as_bytes());
+        let mut m = Message::new();
+        m.set_login_request(req);
+        c.send(&m).unwrap();
+        match c.recv().unwrap().union {
+            Some(message::Union::login_response(r)) => match r.union {
+                Some(login_response::Union::peer_info(pi)) => assert_eq!(pi.hostname, "g5"),
+                other => panic!("login failed: {:?}", other),
+            },
+            other => panic!("expected login_response, got {:?}", other.is_some()),
+        }
+        drop(c);
+        let _ = t.join();
     }
 
     #[test]
