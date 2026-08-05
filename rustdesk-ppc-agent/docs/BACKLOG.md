@@ -5,25 +5,29 @@ Ordered roughly by what unblocks the most. Anything already measured links to
 
 ---
 
-## 1. Change detection doesn't fire — capture may be stale
+## ~~1. Change detection doesn't fire — capture may be stale~~ (fixed)
 
-**The blocking unknown.** A session receives the initial keyframe and then
-nothing. The screen was changed mid-session (AppleScript opened TextEdit,
-confirmed by its reply) and no further frames followed.
+Neither of the causes guessed here was right, and the more expensive guess was
+the more wrong one.
 
-Two candidate causes, needing very different fixes:
+`CGDisplayBaseAddress` is perfectly live: measured over 140 s with nothing
+forced, six distinct screens, every in-process read agreeing with a freshly
+exec'd process. No OpenGL readback was needed.
 
-- **`CGDisplayBaseAddress` is not live.** Under Quartz Extreme the WindowServer
-  composites on the GPU, and the pointer may hand back a main-memory buffer that
-  no longer reflects the screen. If so the capture strategy needs replacing —
-  the usual pre-10.6 alternative is an OpenGL readback (`CGLCreateContext` with
-  a full-screen pixel format, then `glReadPixels`). Significant rework.
-- **The dirty-band sampling is too sparse** and missed it. Then it is just
-  tuning `PROBE_ROW_STEP` and the in-row stride in `src/capture.rs`.
+The sampling was not too sparse either. It was reading one byte per sampled
+pixel at a stride that is a multiple of the 4-byte pixel, so every byte it read
+was the alpha channel — 0xff across the whole desktop. The checksum was a
+constant, so no screen ever differed from any other. The single keyframe each
+peer received came from the `invalidate()` at connect.
 
-**Cheapest discriminator:** run `--probe-display` twice with a visible change in
-between and see whether `first px` or the dirty-band count moves. If they are
-identical across a real change, it is the first cause.
+Sampling R, G and B fixed it. `hash_row` in `src/capture.rs` carries the
+warning, and two host tests fail if anyone reintroduces the stride.
+
+A capture/release cycle was added in between, on the theory that the mapping
+needed republishing — it appeared to work because changes were being forced with
+`killall Dock` and launchd throttles respawns to ten seconds. It has been
+removed: capturing the display steals focus and dismisses menus, which made the
+G5 unusable to anyone sitting at it.
 
 ## 2. LAN discovery
 
