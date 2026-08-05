@@ -58,6 +58,9 @@ mod login_msg {
 const POLL_MS: u64 = 30;
 /// Modest by modern standards, but the encoder is not the constraint here.
 const DEFAULT_BITRATE_KBPS: u32 = 1500;
+/// Login attempts allowed on a single connection before dropping it. The peer
+/// legitimately needs at least two (an empty probe, then the real password).
+const MAX_LOGIN_ATTEMPTS: u32 = 10;
 
 /// Human-readable name for a message, so a trace shows what a client actually
 /// sent rather than "unhandled". Anything not listed is a field this vintage of
@@ -246,53 +249,68 @@ pub fn serve(stream: TcpStream, ident: &Identity) -> io::Result<()> {
     peer.send(&m)?;
 
     // --- 4/5. login ----------------------------------------------------------
-    log::debug!("step 4: awaiting login_request");
-    let lr = match peer.recv()?.union {
-        Some(message::Union::login_request(lr)) => lr,
-        other => {
-            log::error!(
-                "step 4: expected login_request, got {}",
-                msg_name(&Message { union: other, ..Default::default() })
-            );
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "expected login_request",
-            ))
-        }
-    };
-    peer.name = lr.my_name.clone();
-    peer.id = lr.my_id.clone();
-    log::debug!(
-        "step 4: login_request from '{}' (id '{}'), password {} bytes",
-        peer.name, peer.id, lr.password.len()
-    );
+    // The peer may attempt several times on ONE connection: it probes with an
+    // empty password, we ask it to prompt, and the user's answer arrives as a
+    // second login_request on the same socket. Closing after the error is what
+    // makes the client's password dialog flash up and vanish.
+    let mut attempts = 0u32;
+    loop {
+        log::debug!("step 4: awaiting login_request");
+        let lr = match peer.recv()?.union {
+            Some(message::Union::login_request(lr)) => lr,
+            other => {
+                log::error!(
+                    "step 4: expected login_request, got {}",
+                    msg_name(&Message { union: other, ..Default::default() })
+                );
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "expected login_request",
+                ));
+            }
+        };
+        peer.name = lr.my_name.clone();
+        peer.id = lr.my_id.clone();
+        log::debug!(
+            "step 4: login_request from '{}' (id '{}'), password {} bytes",
+            peer.name, peer.id, lr.password.len()
+        );
 
-    if ident.password.is_empty() {
-        // Nothing to authenticate against. Upstream would fall through to the
-        // connection manager for interactive approval; we have no UI, so refuse
-        // with the string that tells the client password login is unavailable.
-        peer.send_login_error(login_msg::NO_PASSWORD_ACCESS)?;
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "no password configured on this machine",
-        ));
-    }
-    if lr.password.is_empty() {
-        // A client always probes with an empty password first to discover
-        // whether one is needed. Answering PASSWORD_WRONG here makes it clear
-        // its stored password and retry in a loop; PASSWORD_EMPTY is what makes
-        // it show the password dialog.
-        log::info!("peer sent an empty password -- asking it to prompt");
-        peer.send_login_error(login_msg::PASSWORD_EMPTY)?;
-        return Ok(());
-    }
-    let expected = expected_login_hash(&ident.password, ident.salt.as_bytes(), challenge.as_bytes());
-    if !verify_login_hash(&expected, &lr.password) {
+        if ident.password.is_empty() {
+            // Nothing to authenticate against. Upstream would fall through to
+            // the connection manager for interactive approval; we have no UI.
+            peer.send_login_error(login_msg::NO_PASSWORD_ACCESS)?;
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "no password configured on this machine",
+            ));
+        }
+
+        attempts += 1;
+        if attempts > MAX_LOGIN_ATTEMPTS {
+            log::warn!("too many login attempts from {} -- dropping", peer.id);
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "too many login attempts",
+            ));
+        }
+
+        if lr.password.is_empty() {
+            // A client always probes with an empty password first to discover
+            // whether one is needed. PASSWORD_EMPTY is what makes it show the
+            // dialog; the answer comes back on this same connection.
+            log::info!("empty password -- asking the peer to prompt (attempt {})", attempts);
+            peer.send_login_error(login_msg::PASSWORD_EMPTY)?;
+            continue;
+        }
+
+        let expected =
+            expected_login_hash(&ident.password, ident.salt.as_bytes(), challenge.as_bytes());
+        if verify_login_hash(&expected, &lr.password) {
+            break;
+        }
+        log::warn!("wrong password from {} ({}) -- attempt {}", peer.name, peer.id, attempts);
         peer.send_login_error(login_msg::PASSWORD_WRONG)?;
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            format!("wrong password from {} ({})", peer.name, peer.id),
-        ));
     }
 
     let mut pi = PeerInfo::new();
@@ -640,6 +658,72 @@ mod tests {
         assert_eq!(pi.displays.len(), 1);
         assert_eq!(pi.displays[0].width, 1024);
         assert_eq!(pi.displays[0].height, 768);
+    }
+
+    /// The real sequence: probe empty, get told to prompt, then send the
+    /// password **on the same connection**. Closing after the error is what made
+    /// the client's dialog flash up and vanish.
+    #[test]
+    fn retry_after_empty_password_succeeds_on_the_same_connection() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (_pk, sk) = sign::gen_keypair();
+        let ident = Identity {
+            id: "1".into(),
+            salt: "abcdef".into(),
+            password: "hunter2".into(),
+            secret_key: sk,
+            hostname: "g5".into(),
+            width: 800,
+            height: 600,
+            secure: false,
+        };
+        let t = std::thread::spawn(move || {
+            let (s, _) = listener.accept().unwrap();
+            let _ = serve(s, &ident);
+        });
+        let mut c = Peer {
+            stream: TcpStream::connect(addr).unwrap(),
+            chan: None,
+            name: String::new(),
+            id: String::new(),
+        };
+        let hash = match c.recv().unwrap().union {
+            Some(message::Union::hash(h)) => h,
+            other => panic!("expected hash, got {:?}", other.is_some()),
+        };
+
+        // 1. probe with an empty password
+        let mut req = LoginRequest::new();
+        req.my_name = "tester".into();
+        let mut m = Message::new();
+        m.set_login_request(req);
+        c.send(&m).unwrap();
+        match c.recv().unwrap().union {
+            Some(message::Union::login_response(r)) => match r.union {
+                Some(login_response::Union::error(e)) => assert_eq!(e, "Empty Password"),
+                other => panic!("expected Empty Password, got {:?}", other),
+            },
+            other => panic!("expected login_response, got {:?}", other.is_some()),
+        }
+
+        // 2. the socket must still be open -- send the real password on it
+        let mut req = LoginRequest::new();
+        req.my_name = "tester".into();
+        req.password =
+            expected_login_hash("hunter2", hash.salt.as_bytes(), hash.challenge.as_bytes());
+        let mut m = Message::new();
+        m.set_login_request(req);
+        c.send(&m).expect("connection must stay open after Empty Password");
+        match c.recv().unwrap().union {
+            Some(message::Union::login_response(r)) => match r.union {
+                Some(login_response::Union::peer_info(pi)) => assert_eq!(pi.hostname, "g5"),
+                other => panic!("retry should have succeeded, got {:?}", other),
+            },
+            other => panic!("expected login_response, got {:?}", other.is_some()),
+        }
+        drop(c);
+        let _ = t.join();
     }
 
     /// A client probes with an empty password first. Answering "Wrong Password"
