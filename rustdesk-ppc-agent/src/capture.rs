@@ -105,10 +105,18 @@ fn current_base(d: CGDirectDisplayID, fallback: *mut c_void) -> *const u8 {
     if b.is_null() { fallback as *const u8 } else { b as *const u8 }
 }
 
-/// Horizontal bands the screen is divided into for change detection. 16 keeps
-/// the probe cheap while still isolating a typical window or menu to a couple of
-/// bands.
-pub const BANDS: usize = 16;
+/// Horizontal bands the screen is divided into for change detection.
+///
+/// The band is the unit of *reading*, and reading is the expensive thing here,
+/// so the band size is the granularity of waste. At 16 bands a 1920x1080 screen
+/// has 68-row bands: typing one character into a terminal made the agent read
+/// 68 rows of VRAM -- 20 ms -- to send a 518-byte frame. At 64 the band is 18
+/// rows and the same keystroke costs ~6 ms.
+///
+/// The probe does not get more expensive: it samples the same rows either way,
+/// just attributing them to more buckets. What does grow is the per-band
+/// bookkeeping in the session loop, which is a peek and a branch.
+pub const BANDS: usize = 64;
 
 /// Rows sampled per band when probing.
 ///
@@ -133,12 +141,39 @@ const PROBE_ROW_STEP: usize = 8;
 /// `memcpy` first and hashing those costs a twelfth as much for the same bytes,
 /// which is the whole reason this reads runs rather than single pixels.
 ///
-/// Given that, the window and the step are simply a coverage dial: a quarter of
-/// every sampled row, against a sixteenth for the probe this replaced, for less
-/// than half its cost. Coverage is what decides whether a single character
-/// being typed is noticed now or at the next settle repaint.
-const PROBE_WINDOW: usize = 128;
-const PROBE_WINDOW_STEP: usize = 512;
+/// **The window is a sensitivity dial, and it is the gap that matters, not the
+/// coverage.** This was got wrong once already: 128-in-512 samples a quarter of
+/// every row, four times what the probe before it did, and was still much worse
+/// at noticing a line of text being typed -- because clustering the same bytes
+/// into wide windows leaves a 96-pixel hole between them, and thirteen
+/// characters can be typed into one without a single sampled byte changing.
+/// Reported from a real session as "writing left to right, sometimes a bunch of
+/// delay where we don't detect the screen updates".
+///
+/// At a fixed 25% coverage the cost barely moves with the window -- measured on
+/// the G5, 128 bytes takes 16 ms, 16 bytes 27 ms and 8 bytes 34 ms -- so the
+/// window should be as small as the arithmetic allows. **8 in 32** is two
+/// pixels sampled out of every eight, which makes any object seven pixels wide
+/// or more certain to be seen: a character cannot fall in the gap, because the
+/// gap is six pixels and the character is seven.
+///
+/// What is left is *narrower* than a character -- a vi insert cursor is about
+/// two pixels, and at two-in-eight it would be caught only 37% of the time.
+/// Hence the phase rotation below, which costs nothing.
+const PROBE_WINDOW: usize = 8;
+const PROBE_WINDOW_STEP: usize = 32;
+
+/// Sampled rows take it in turns to sample different columns.
+///
+/// The windows above are at the same offset on every row, so a two-pixel
+/// cursor sitting in a gap is invisible on *all* of them. Rotating the offset
+/// by row spreads the same bytes over the whole width instead: a line of text
+/// is ~12 pixels tall and `PROBE_ROW_STEP` is 8, so a glyph covers at least two
+/// sampled rows, and those two rows look at different columns. Effective
+/// coverage of anything that tall doubles to half the width, for no extra
+/// reading at all -- the rotation is deterministic, so the checksums still
+/// compare like for like between probes.
+const PROBE_PHASES: usize = 4;
 
 /// FNV-1a, 32 bits. A 32-bit multiply rather than the 64-bit one a `u64`
 /// checksum needs, which is not free on a 32-bit PowerPC when the loop runs
@@ -160,12 +195,12 @@ const FNV_PRIME: u32 = 16777619;
 /// came out constant, and made every screen compare equal to every other. It
 /// presents exactly like a frozen framebuffer and cost a full debugging
 /// session. A contiguous run cannot land only on alpha.
-fn sample_row(line: &[u8], dst: &mut [u8], window: usize, step: usize) -> usize {
+fn sample_row(line: &[u8], dst: &mut [u8], window: usize, step: usize, phase: usize) -> usize {
     if window == 0 || step == 0 {
         return 0; // a caller-supplied pattern; do not spin on a nonsense one
     }
     let mut p = 0;
-    let mut w = 0;
+    let mut w = phase.min(step.saturating_sub(1));
     while w < line.len() {
         let n = window.min(line.len() - w).min(dst.len() - p);
         if n == 0 {
@@ -191,12 +226,12 @@ fn hash_bytes(buf: &[u8], seed: u32) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{hash_bytes, sample_row, PROBE_WINDOW, PROBE_WINDOW_STEP};
+    use super::{hash_bytes, sample_row, PROBE_PHASES, PROBE_WINDOW, PROBE_WINDOW_STEP};
 
     /// Sample and checksum a row exactly as `dirty_bands` does.
     fn hash_row(line: &[u8], seed: u32) -> u32 {
         let mut scratch = vec![0u8; line.len()];
-        let n = sample_row(line, &mut scratch, PROBE_WINDOW, PROBE_WINDOW_STEP);
+        let n = sample_row(line, &mut scratch, PROBE_WINDOW, PROBE_WINDOW_STEP, 0);
         hash_bytes(&scratch[..n], seed)
     }
 
@@ -259,18 +294,43 @@ mod tests {
         assert_eq!(PROBE_WINDOW * 4, PROBE_WINDOW_STEP);
     }
 
+    /// The gap must stay narrower than a character, or typing one can land
+    /// entirely inside it -- which is exactly what a real session reported.
+    /// 7 pixels is a typical terminal glyph; the gap here is 6.
+    #[test]
+    fn no_character_can_fit_in_the_gap() {
+        let gap_px = (PROBE_WINDOW_STEP - PROBE_WINDOW) / 4;
+        assert!(gap_px < 7, "a 7px character could hide in a {}px gap", gap_px);
+    }
+
+    /// Rotating the phase must actually move which columns are read, or it is
+    /// costing a modulo for nothing.
+    #[test]
+    fn phases_look_at_different_columns() {
+        let mut line = vec![0u8; 256];
+        line[PROBE_WINDOW_STEP / PROBE_PHASES] = 0xff; // inside phase 1, not phase 0
+        let mut a = vec![0u8; 256];
+        let mut b = vec![0u8; 256];
+        let na = sample_row(&line, &mut a, PROBE_WINDOW, PROBE_WINDOW_STEP, 0);
+        let nb = sample_row(
+            &line, &mut b, PROBE_WINDOW, PROBE_WINDOW_STEP,
+            PROBE_WINDOW_STEP / PROBE_PHASES,
+        );
+        assert_ne!(hash_bytes(&a[..na], 0), hash_bytes(&b[..nb], 0));
+    }
+
     /// The staged copy has to be the sampled bytes and nothing else: a short
     /// destination must truncate rather than wrap round or read past the row.
     #[test]
     fn sampling_packs_only_the_windows_it_read() {
         let line: Vec<u8> = (0..32u8).collect();
         let mut dst = [0u8; 32];
-        let n = sample_row(&line, &mut dst, 4, 8);
+        let n = sample_row(&line, &mut dst, 4, 8, 0);
         assert_eq!(n, 16, "four rows of four bytes, every eight");
         assert_eq!(&dst[..n], &[0, 1, 2, 3, 8, 9, 10, 11, 16, 17, 18, 19, 24, 25, 26, 27]);
 
         let mut small = [0u8; 6];
-        let n = sample_row(&line, &mut small, 4, 8);
+        let n = sample_row(&line, &mut small, 4, 8, 0);
         assert_eq!(n, 6, "a short destination truncates");
         assert_eq!(&small[..], &[0, 1, 2, 3, 8, 9]);
     }
@@ -281,8 +341,8 @@ mod tests {
     fn a_zero_window_or_step_samples_nothing() {
         let line = vec![0xffu8; 64];
         let mut dst = [0u8; 64];
-        assert_eq!(sample_row(&line, &mut dst, 0, 8), 0);
-        assert_eq!(sample_row(&line, &mut dst, 8, 0), 0);
+        assert_eq!(sample_row(&line, &mut dst, 0, 8, 0), 0);
+        assert_eq!(sample_row(&line, &mut dst, 8, 0, 0), 0);
     }
 }
 
@@ -370,8 +430,16 @@ impl Capturer {
         self.bytes_per_row
     }
 
+    /// Rows per band, always even.
+    ///
+    /// Even because 4:2:0 chroma is shared across each 2x2 block, so a band
+    /// boundary on an odd row makes `argb_to_i420_rows` snap outwards and
+    /// convert a row that this band never read. Rounding up here means the last
+    /// bands may fall off the bottom of the screen; `band_range` clamps them to
+    /// empty, which the callers already handle.
     pub fn band_rows(&self) -> usize {
-        (self.height + BANDS - 1) / BANDS
+        let r = (self.height + BANDS - 1) / BANDS;
+        r + (r & 1)
     }
 
     /// Sample every `PROBE_ROW_STEP`th row and report which bands changed since
@@ -411,7 +479,9 @@ impl Capturer {
                 let line = unsafe {
                     std::slice::from_raw_parts(base.add(off), self.bytes_per_row)
                 };
-                let n = sample_row(line, &mut self.scratch, window, step);
+                // Which columns this row looks at. See PROBE_PHASES.
+                let phase = ((row / PROBE_ROW_STEP) % PROBE_PHASES) * (step / PROBE_PHASES);
+                let n = sample_row(line, &mut self.scratch, window, step, phase);
                 sum = hash_bytes(&self.scratch[..n], sum);
                 row += PROBE_ROW_STEP;
             }
@@ -432,6 +502,8 @@ impl Capturer {
         if step == 0 {
             return 0;
         }
+        // Averaged over the phases, which shift where the last partial window
+        // lands but not how much is read.
         let mut per_row = 0;
         let mut off = 0;
         while off < self.bytes_per_row {
@@ -521,6 +593,18 @@ impl Capturer {
     /// connects and needs a full frame regardless of what moved.
     pub fn invalidate(&mut self) {
         for s in self.sums.iter_mut() {
+            *s = u32::MAX;
+        }
+    }
+
+    /// Force just one band to report dirty on the next probe.
+    ///
+    /// What the rotating repair in `session` uses. Repairing the whole screen
+    /// at once means a ~370 ms stall every time the screen goes quiet, which
+    /// during ordinary typing is several times a minute; a couple of bands at a
+    /// time costs ~45 ms and covers everything within a few seconds.
+    pub fn invalidate_band(&mut self, b: usize) {
+        if let Some(s) = self.sums.get_mut(b) {
             *s = u32::MAX;
         }
     }

@@ -276,14 +276,24 @@ fn probe_display() {
             // probe had before any of this.
             println!("probe shape: ms per probe, median of 3");
             println!("            {:>6} {:>6} {:>8} {:>6} {:>8}", "window", "step", "KB", "ms", "MB/s");
+            // The first group is a coverage dial at a fixed window. The second
+            // holds coverage at 25% and varies the window, which is the
+            // question that matters for typing: total bytes say nothing about
+            // whether a 7-pixel character is seen, because what hides one is
+            // the *gap* between windows. 128-in-512 leaves a 96-pixel gap --
+            // thirteen characters can be typed into it unnoticed.
             for &(window, step) in &[
                 (3usize, 64usize),
                 (128, 2048),
                 (128, 1024),
                 (128, 512),
                 (128, 256),
-                (256, 512),
                 (stride, stride),
+                // same 25% coverage, finer and finer:
+                (64, 256),
+                (32, 128),
+                (16, 64),
+                (8, 32),
             ] {
                 let mut ms = [0u128; 3];
                 for m in ms.iter_mut() {
