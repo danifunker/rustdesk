@@ -553,6 +553,49 @@ impl Video {
         Some((self.cap.width as i32, self.cap.height as i32))
     }
 
+    /// A full-screen PNG, for `ScreenshotResponse`.
+    ///
+    /// A fresh full read rather than the band shadow. The shadow only holds the
+    /// rows some recent frame happened to touch, so a screenshot taken from it
+    /// would be a collage of several moments -- which is fine for video, where
+    /// the next frame corrects it, and wrong for a still someone is going to keep.
+    ///
+    /// **Deliberately does not call `cap.refresh()`**, though every read is
+    /// supposed to. `poll_geometry` runs at the top of every pass of the message
+    /// loop, before this, and `refresh` reports a geometry change exactly once --
+    /// so calling it here would swallow the change and leave the encoder built
+    /// around the old size.
+    ///
+    /// Measured on the G5 at 1920x1080: **read 331 ms, encode 209 ms**, and 679
+    /// ms from the request arriving to the response going out -- 1.65 MB of which
+    /// took 4 ms to send. Nothing else in the session runs for that half second.
+    /// That is the price of an explicit button press, and it is a reason not to
+    /// put this on a timer.
+    fn screenshot(&mut self) -> Result<Vec<u8>, &'static str> {
+        if self.broken {
+            return Err("the agent has no working capture on this session");
+        }
+        // The converter tolerates a 16-bit mode by pausing until it goes back;
+        // a screenshot has no later to wait for, so it says so instead.
+        if self.cap.bits_per_pixel() != 32 {
+            return Err("the display is not in a 32-bit colour mode");
+        }
+        let (w, h, stride) = (self.cap.width, self.cap.height, self.cap.stride());
+        let t = std::time::Instant::now();
+        let fb = self.cap.frame();
+        let read = t.elapsed();
+        let png = crate::png::encode_argb(fb, stride, w, h);
+        log::debug!(
+            "screenshot: {}x{}, read {} ms, encode {} ms, {} bytes",
+            w,
+            h,
+            read.as_millis(),
+            (t.elapsed() - read).as_millis(),
+            png.as_ref().map(|p| p.len()).unwrap_or(0)
+        );
+        png
+    }
+
     /// Probe for change. Returns the dirty bands, or None if nothing moved --
     /// the cheap path, ~15 ms.
     fn probe(&mut self) -> Option<[bool; crate::capture::BANDS]> {
@@ -841,6 +884,10 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
     // that is where the video state lives.
     #[cfg_attr(not(all(target_os = "macos", not(no_vpx))), allow(unused_mut))]
     let mut refresh_requested = false;
+    // The peer's screenshot button, carrying the `sid` that has to come back on
+    // the response. Same reason as above for living out here.
+    #[cfg_attr(not(all(target_os = "macos", not(no_vpx))), allow(unused_mut))]
+    let mut screenshot_requested: Option<(String, i32)> = None;
 
     macro_rules! pump_input {
         () => { pump_input!(true) };
@@ -851,12 +898,19 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
                 $wait,
                 &mut delay_outstanding,
                 &mut refresh_requested,
+                &mut screenshot_requested,
                 &mut injector,
                 &mut cursor_tracker,
                 &mut last_peer_input,
             )?;
             #[cfg(not(target_os = "macos"))]
-            let alive = drain_input(peer, $wait, &mut delay_outstanding, &mut refresh_requested)?;
+            let alive = drain_input(
+                peer,
+                $wait,
+                &mut delay_outstanding,
+                &mut refresh_requested,
+                &mut screenshot_requested,
+            )?;
             if !alive {
                 return Ok(());
             }
@@ -963,6 +1017,37 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
             }
         }
 
+        // The screenshot the peer asked for. Outside the video block on purpose:
+        // a session with no capture at all still has to answer, because
+        // `ScreenshotResponse.msg` is documented as "empty if success", so a
+        // refusal is a first-class reply that the client displays -- where
+        // silence leaves it waiting on a picture that is never coming.
+        #[cfg(all(target_os = "macos", not(no_vpx)))]
+        if let Some((sid, display)) = screenshot_requested.take() {
+            let shot = if display != 0 {
+                // The client only offers displays it was told about, so this
+                // means we and it disagree about how many there are.
+                Err("this agent serves a single display")
+            } else {
+                match video.as_mut() {
+                    Some(v) => v.screenshot(),
+                    None => Err("this session is serving input only"),
+                }
+            };
+            let mut sr = ScreenshotResponse::new();
+            sr.sid = sid;
+            match shot {
+                Ok(png) => sr.data = png,
+                Err(e) => {
+                    log::warn!("screenshot refused: {}", e);
+                    sr.msg = e.to_owned();
+                }
+            }
+            let mut m = Message::new();
+            m.set_screenshot_response(sr);
+            peer.send(&m)?;
+        }
+
         #[cfg(target_os = "macos")]
         {
             let s = crate::cursor::seed();
@@ -990,6 +1075,7 @@ fn drain_input(
     wait: bool,
     delay_outstanding: &mut bool,
     refresh_requested: &mut bool,
+    screenshot_requested: &mut Option<(String, i32)>,
     #[cfg(target_os = "macos")] injector: &mut crate::input::Injector,
     #[cfg(target_os = "macos")] cursor_tracker: &mut crate::cursor::Tracker,
     #[cfg(target_os = "macos")] last_peer_input: &mut std::time::Instant,
@@ -1096,6 +1182,18 @@ fn drain_input(
                             );
                     }
                 }
+            }
+            // The peer's screenshot button, offered to anything claiming 1.4.0 or
+            // newer. Recorded rather than served here: the capturer lives with
+            // the video state in `message_loop`, and `sid` has to come back on
+            // the response so the client can match it to the window that asked.
+            //
+            // Last request wins if two arrive in one drain, which is the right
+            // way round: a second press means the first picture is not the one
+            // wanted, and each costs half a second of stalled session.
+            Some(message::Union::screenshot_request(r)) => {
+                log::info!("peer asked for a screenshot of display {} (sid {})", r.display, r.sid);
+                *screenshot_requested = Some((r.sid, r.display));
             }
             other => log::debug!(
                 "   (no handler for {})",
