@@ -230,19 +230,31 @@ impl Injector {
                 self.buttons_down &= !(button as u8);
                 MouseAction::Button { down: false, button: btn_idx, at_cursor, x, y }
             }
-            // Both axes, both negated -- `input_service.rs` does exactly this
-            // for every platform except Windows. Using only `y` dropped
-            // sideways swipes entirely, and not negating scrolled the wrong
-            // way, which together is most of what "gestures" means on a
-            // trackpad.
-            3 => MouseAction::Scroll { dx: -ev.x, dy: -ev.y, pixels: false },
+            // Both axes, and **not negated**, which is a deliberate departure
+            // from the 1.1.8 `input_service.rs` this agent otherwise mirrors.
+            //
+            // That code negates both axes on every platform except Windows,
+            // and copying it put scrolling the wrong way round against a
+            // modern client -- reported directly, and against VNC on the same
+            // machine as the control, which scrolls correctly and does no such
+            // negation. The negation dates from when the wire carried a
+            // Windows-oriented sign; a client new enough to send trackpad
+            // events (kind 4, absent from this proto entirely) evidently sends
+            // deltas already in the sense the platform wants.
+            //
+            // Measured on the G5 to remove the guesswork: a positive `dy`
+            // posted through `rd_scroll` scrolls a window *up*, and the client
+            // sends a negative `dy` for the gesture that should scroll *down*.
+            // Passing it through unchanged is therefore what agrees with both
+            // the gesture and VNC.
+            3 => MouseAction::Scroll { dx: ev.x, dy: ev.y, pixels: false },
             // Trackpad. **Not in the 1.1.8 protocol this agent was built
             // from**, so it fell through to `Ignore` and every two-finger
             // scroll a modern client sent was discarded -- 317 of them against
             // 6 clicks in one real session, which is what "scrolling doesn't
             // work" turned out to mean. The deltas are pixels rather than
             // notches, hence the flag.
-            4 => MouseAction::Scroll { dx: -ev.x, dy: -ev.y, pixels: true },
+            4 => MouseAction::Scroll { dx: ev.x, dy: ev.y, pixels: true },
             _ => MouseAction::Ignore,
         }
     }
@@ -425,20 +437,20 @@ mod tests {
     /// Wheel events carry both axes and are inverted relative to the wire,
     /// matching upstream's non-Windows path.
     #[test]
-    fn a_wheel_event_carries_both_axes_negated() {
+    fn a_wheel_event_carries_both_axes_unchanged() {
         let mut inj = Injector::new();
         assert_eq!(
             inj.decide_mouse(&mouse(WHEEL, 0, -3)),
-            MouseAction::Scroll { dx: 0, dy: 3, pixels: false }
+            MouseAction::Scroll { dx: 0, dy: -3, pixels: false }
         );
         assert_eq!(
             inj.decide_mouse(&mouse(WHEEL, 5, 0)),
-            MouseAction::Scroll { dx: -5, dy: 0, pixels: false },
+            MouseAction::Scroll { dx: 5, dy: 0, pixels: false },
             "a sideways swipe must not be dropped"
         );
         assert_eq!(
             inj.decide_mouse(&mouse(WHEEL, -2, 4)),
-            MouseAction::Scroll { dx: 2, dy: -4, pixels: false }
+            MouseAction::Scroll { dx: -2, dy: 4, pixels: false }
         );
 
         // A trackpad swipe is the same decision in pixels, and must not be
@@ -446,7 +458,7 @@ mod tests {
         const TRACKPAD: i32 = 4;
         assert_eq!(
             inj.decide_mouse(&mouse(TRACKPAD, -2, 4)),
-            MouseAction::Scroll { dx: 2, dy: -4, pixels: true }
+            MouseAction::Scroll { dx: -2, dy: 4, pixels: true }
         );
         assert_ne!(inj.decide_mouse(&mouse(TRACKPAD, 0, 5)), MouseAction::Ignore);
     }
