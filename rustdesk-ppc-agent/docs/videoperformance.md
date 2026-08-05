@@ -107,7 +107,12 @@ Full pipeline, measured with `--probe-display`:
 | whole screen changed (video) | ~608 ms | everything |
 
 Note the shape: **encode is the cheapest stage**, at 89 ms against 347 ms for
-capture and 172 ms for conversion. Tuning the codec is the least valuable thing
+capture and 172 ms for conversion.
+
+That ranking has since changed for *small* updates. Capture and conversion are
+now per-band, so a few changed lines cost tens of milliseconds each, while VP8
+still encodes a whole frame every time -- which makes the encoder the floor for
+ordinary interaction. See [`performance-plan.md`](performance-plan.md). Tuning the codec is the least valuable thing
 that could be done here.
 
 Normal interactive work is genuinely usable; only full-screen motion falls back
