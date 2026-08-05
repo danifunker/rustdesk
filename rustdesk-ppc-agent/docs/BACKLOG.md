@@ -247,6 +247,54 @@ Still unproven: **no `Misc` message from a real client has ever been logged**, s
 the peer-options branch -- the one that starts sending cursor shapes when "show
 remote cursor" is switched on -- has never actually fired.
 
+## 11b. The next rung, 1.4.5, now that it has been scoped
+
+The remaining gate. Reading the client turned "medium, unscoped" into three
+pieces, of which the middle one is the surprise.
+
+**What relative mouse mode actually is.** `MouseEvent` has not changed: no new
+field, no option message. The mode is signalled entirely in `mask`, whose low
+three bits gain kind **5**, `MOUSE_TYPE_MOVE_RELATIVE` (`src/common.rs`), and `x`
+/ `y` then carry dx / dy instead of a position. Upstream's
+`input_service.rs` clamps each to ±10000 -- the client's own
+`kMaxRelativeMouseDelta` -- and adds them to wherever the cursor is now. Three
+further details that matter here:
+
+* **Nothing else changes.** Kinds 1 and 2 (button down and up) never used the
+  coordinates anyway, so buttons keep working untouched.
+* **Absolute movement turns it off.** A kind 0 event implicitly ends relative
+  mode, upstream and here; there is no state to unwind.
+* **The client asks for nothing.** No handshake, no option, no acknowledgement:
+  the mode is enabled purely because we claim 1.4.5, and the client is
+  documented as the sole authority over it. It is also user-initiated (pointer
+  lock, for games and 3D apps) and Flutter-only, so it is off unless someone
+  turns it on.
+
+So the injection side is small: a `MouseAction` carrying a delta, the same
+buttons-held check kind 0 already does to make it a drag rather than a move, and
+a shim call that reads the current position and adds. All host-testable.
+
+**The surprise: claiming 1.4.5 also unlocks a screenshot button we cannot
+serve.** `is_support_screenshot_num` is `ver >= 1.4.0` and reads nothing else --
+no capability flag, no platform key -- so the menu item appears, and pressing it
+sends `ScreenshotRequest` (`Message` field 29), which this proto does not have.
+Answering is cheap even without implementing it: `ScreenshotResponse` carries an
+error string (`msg`, "empty if success"), so refusing honestly is a backport and
+about twenty lines, against a PNG encoder for doing it properly.
+
+**Everything else between 1.2.4 and 1.4.5 is inert**, and for a consistent
+reason: upstream learned to gate on capability rather than on version, so nearly
+every feature added since needs a `PeerInfo` flag or a `platformAdditions` key
+that we do not set. Checked one at a time:
+
+| gate | what it unlocks | why nothing happens |
+|---|---|---|
+| 1.2.7 | mobile action menus (Back, Home, recents) | all three sites require `platform == Android`; we say "Mac OS" |
+| 1.3.0 | multi-clipboard (`MultiClipboards`) | no clipboard is implemented at all -- see item 6 |
+| 1.3.0, 1.3.3, 1.3.8, 1.4.2 | file rename, drag-and-drop, copy-paste, transfer resume | all inside a file-transfer session, which this agent does not serve; copy-paste additionally needs `platformAdditions[has_file_clipboard]` |
+| 1.3.9 | remote print; view-camera wording | camera needs `PeerInfo.support_view_camera`; the version only chooses which error text appears |
+| 1.4.1 | terminal wording | needs `PeerInfo.support_terminal`; same, only the error text |
+
 ## 12. Rendezvous registration
 
 Planned: a private, self-hosted rendezvous server. Two things in the current
