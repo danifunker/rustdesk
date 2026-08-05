@@ -79,9 +79,11 @@ void rd_mouse_here(int type, int button)
     post_mouse(type, pt, button);
 }
 
-void rd_scroll(int dy)
+/* Both axes. wheel1 is vertical, wheel2 horizontal; a client's two-finger
+ * sideways swipe arrives as x and was previously dropped on the floor. */
+void rd_scroll(int dy, int dx)
 {
-    CGEventRef e = CGEventCreateScrollWheelEvent(src(), kCGScrollEventUnitLine, 1, dy);
+    CGEventRef e = CGEventCreateScrollWheelEvent(src(), kCGScrollEventUnitLine, 2, dy, dx);
     if (e) {
         CGEventPost(kCGHIDEventTap, e);
         CFRelease(e);

@@ -58,6 +58,10 @@ mod login_msg {
 const POLL_MS: u64 = 30;
 /// Modest by modern standards, but the encoder is not the constraint here.
 const DEFAULT_BITRATE_KBPS: u32 = 1500;
+/// How long the screen must be still before a full repaint is sent to cover
+/// anything the sampled change detection missed.
+const SETTLE_REPAINT: std::time::Duration = std::time::Duration::from_millis(900);
+
 /// Login attempts allowed on a single connection before dropping it. The peer
 /// legitimately needs at least two (an empty probe, then the real password).
 const MAX_LOGIN_ATTEMPTS: u32 = 10;
@@ -350,6 +354,10 @@ struct Video {
     bitrate_kbps: u32,
     /// Set when the colour depth left 32, so the warning is logged once.
     bpp_warned: bool,
+    /// When the screen last changed, and whether the settling repaint has been
+    /// done since. See `probe`.
+    last_change: std::time::Instant,
+    repaired: bool,
     /// Set when the encoder could not be rebuilt; the session carries on with
     /// input only rather than dropping the peer.
     broken: bool,
@@ -369,6 +377,8 @@ impl Video {
             start: std::time::Instant::now(),
             bitrate_kbps,
             bpp_warned: false,
+            last_change: std::time::Instant::now(),
+            repaired: false,
             broken: false,
         })
     }
@@ -423,10 +433,27 @@ impl Video {
         }
         let dirty = self.cap.dirty_bands();
         if dirty.iter().any(|d| *d) {
-            Some(dirty)
-        } else {
-            None
+            self.last_change = std::time::Instant::now();
+            self.repaired = false;
+            return Some(dirty);
         }
+
+        // Change detection is a sampled checksum, so it can miss: a small
+        // change that falls between sampled rows and columns leaves the peer
+        // showing stale pixels indefinitely, with nothing to correct it. Once
+        // the screen has been still for a moment, send everything once. It
+        // costs a full frame per burst of activity and bounds how long a
+        // missed change can persist to about a second.
+        if !self.repaired && self.last_change.elapsed() >= SETTLE_REPAINT {
+            self.repaired = true;
+            log::debug!("screen settled; repainting in full to cover any missed change");
+            self.cap.invalidate();
+            let all = self.cap.dirty_bands();
+            if all.iter().any(|d| *d) {
+                return Some(all);
+            }
+        }
+        None
     }
 
     /// Read one band out of VRAM and convert just those rows.
