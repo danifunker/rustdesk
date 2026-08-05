@@ -274,10 +274,20 @@ impl Injector {
         let (x, y) = (ev.x as f64, ev.y as f64);
         let kind = ev.mask & 0x7;
         let button = ev.mask >> 3;
+        // The three buttons `CGPostMouseEvent` carries, and nothing else.
+        //
+        // This used to fall through to left, which is a stray click on whatever
+        // the pointer is over: the client's mask also has back (8) and forward
+        // (16), and a mobile peer's back gesture sends back rather than right
+        // from 1.3.8 onwards. Unreachable here for now -- every route to it
+        // requires the *peer* to be Android -- but the fall-through was a trap
+        // rather than a decision. Upstream's `input_service.rs` matches the three
+        // it knows and ignores the rest, which is this.
         let btn_idx = match button {
-            2 => 1, // right
-            4 => 2, // middle
-            _ => 0, // left
+            1 => Some(0), // left
+            2 => Some(1), // right
+            4 => Some(2), // middle
+            _ => None,
         };
         // A press or release arrives with no coordinates at all — proto3 drops
         // zero-valued fields, so the whole message is `mask`. Clicking at the
@@ -286,14 +296,20 @@ impl Injector {
         let at_cursor = ev.x == 0 && ev.y == 0;
         match kind {
             0 => MouseAction::MoveOrDrag { ty: self.drag_type(), x, y },
-            1 => {
-                self.buttons_down |= button as u8;
-                MouseAction::Button { down: true, button: btn_idx, at_cursor, x, y }
-            }
-            2 => {
-                self.buttons_down &= !(button as u8);
-                MouseAction::Button { down: false, button: btn_idx, at_cursor, x, y }
-            }
+            1 => match btn_idx {
+                Some(b) => {
+                    self.buttons_down |= button as u8;
+                    MouseAction::Button { down: true, button: b, at_cursor, x, y }
+                }
+                None => MouseAction::Ignore,
+            },
+            2 => match btn_idx {
+                Some(b) => {
+                    self.buttons_down &= !(button as u8);
+                    MouseAction::Button { down: false, button: b, at_cursor, x, y }
+                }
+                None => MouseAction::Ignore,
+            },
             // Both axes, and **not negated**, which is a deliberate departure
             // from the 1.1.8 `input_service.rs` this agent otherwise mirrors.
             //
@@ -629,6 +645,35 @@ mod tests {
         assert_eq!(idx(&mut inj, LEFT | DOWN), 0);
         assert_eq!(idx(&mut inj, RIGHT | DOWN), 1);
         assert_eq!(idx(&mut inj, MIDDLE | DOWN), 2);
+    }
+
+    /// Back and forward exist in the client's mask and have no equivalent here:
+    /// `CGPostMouseEvent` carries three buttons. They used to fall through to
+    /// left, which is a stray click on whatever the pointer is over -- and from
+    /// 1.3.8 a mobile peer's back gesture sends back rather than right.
+    #[test]
+    fn a_button_this_platform_does_not_have_is_ignored_not_treated_as_left() {
+        let mut inj = Injector::new();
+        for (name, bits) in [("back", 8i32), ("forward", 16)] {
+            assert_eq!(
+                inj.decide_mouse(&mouse((bits << 3) | DOWN, 5, 5)),
+                MouseAction::Ignore,
+                "a {} press must not become a left click",
+                name
+            );
+            assert_eq!(
+                inj.decide_mouse(&mouse((bits << 3) | UP, 5, 5)),
+                MouseAction::Ignore,
+                "a {} release must not become a left click",
+                name
+            );
+        }
+        // And it must not have been recorded as held, or every later move would
+        // be reported as a drag.
+        assert_eq!(
+            inj.decide_mouse(&mouse(0, 10, 10)),
+            MouseAction::MoveOrDrag { ty: 0, x: 10.0, y: 10.0 }
+        );
     }
 
     /// Wheel events carry both axes and are inverted relative to the wire,
