@@ -89,6 +89,13 @@ impl Tracker {
         Self { last: None }
     }
 
+    /// Forget the last position, so the next update reports even if the
+    /// pointer has not moved. Used when a peer newly asks for the cursor: it
+    /// needs a position now, not whenever the pointer next happens to move.
+    pub fn reset(&mut self) {
+        self.last = None;
+    }
+
     /// Returns the position to send, or None if it has not moved.
     pub fn update(&mut self, x: i32, y: i32) -> Option<(i32, i32)> {
         if self.last == Some((x, y)) {
@@ -137,6 +144,15 @@ mod tests {
         assert!(alphas.iter().any(|a| *a == 0), "nothing is transparent");
         assert!(alphas.iter().any(|a| *a == 255), "nothing is opaque");
         assert!(alphas.iter().all(|a| *a == 0 || *a == 255), "no partial alpha is intended");
+    }
+
+    #[test]
+    fn a_reset_makes_the_next_position_report_again() {
+        let mut t = Tracker::new();
+        assert_eq!(t.update(5, 5), Some((5, 5)));
+        assert_eq!(t.update(5, 5), None);
+        t.reset();
+        assert_eq!(t.update(5, 5), Some((5, 5)), "after a reset the position is news again");
     }
 
     #[test]

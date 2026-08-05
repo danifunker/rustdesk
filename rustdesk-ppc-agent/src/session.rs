@@ -408,6 +408,26 @@ impl Video {
     }
 }
 
+/// Send the pointer's shape.
+///
+/// The client cannot draw a pointer, or act on any position, until it has an
+/// image: its `setCursorPosition` returns immediately while no image is bound.
+#[cfg(target_os = "macos")]
+fn send_cursor_data(peer: &mut Peer) -> io::Result<()> {
+    let c = crate::cursor::arrow();
+    let mut cd = CursorData::new();
+    cd.id = crate::cursor::CURSOR_ID;
+    cd.hotx = c.hotx;
+    cd.hoty = c.hoty;
+    cd.width = c.width;
+    cd.height = c.height;
+    // Not raw pixels: the client runs this through zstd. See `zstd_frame`.
+    cd.colors = crate::zstd_frame::raw_frame(&c.rgba);
+    let mut m = Message::new();
+    m.set_cursor_data(cd);
+    peer.send(&m)
+}
+
 /// Send where the pointer is, if it has moved since last time.
 #[cfg(target_os = "macos")]
 fn send_cursor_position(peer: &mut Peer, tracker: &mut crate::cursor::Tracker) -> io::Result<()> {
@@ -461,20 +481,7 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
     #[cfg(target_os = "macos")]
     let mut cursor_tracker = crate::cursor::Tracker::new();
     #[cfg(target_os = "macos")]
-    {
-        let c = crate::cursor::arrow();
-        let mut cd = CursorData::new();
-        cd.id = crate::cursor::CURSOR_ID;
-        cd.hotx = c.hotx;
-        cd.hoty = c.hoty;
-        cd.width = c.width;
-        cd.height = c.height;
-        // Not raw pixels: the client runs this through zstd. See `zstd_frame`.
-        cd.colors = crate::zstd_frame::raw_frame(&c.rgba);
-        let mut m = Message::new();
-        m.set_cursor_data(cd);
-        peer.send(&m)?;
-    }
+    send_cursor_data(peer)?;
 
     loop {
         // Pump one video frame, if the screen moved.
@@ -558,6 +565,16 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
                             o.disable_clipboard.enum_value_or_default(),
                             o.disable_audio.enum_value_or_default()
                         );
+                        // The toggle is usually flipped mid-session, long after
+                        // the shape was sent at login. Send it again, and make
+                        // the next poll report a position unconditionally --
+                        // otherwise the peer waits for the pointer to move
+                        // before it can draw anything at all.
+                        #[cfg(target_os = "macos")]
+                        if o.show_remote_cursor.enum_value_or_default() == BoolOption::Yes {
+                            send_cursor_data(peer)?;
+                            cursor_tracker.reset();
+                        }
                     }
                 }
                 other => log::debug!(
