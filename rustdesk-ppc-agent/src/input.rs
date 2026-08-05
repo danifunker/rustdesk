@@ -21,7 +21,7 @@ use std::os::raw::c_double;
 use std::os::raw::{c_int, c_uint};
 
 use crate::message_proto::{
-    key_event, pointer_device_event, touch_event, ControlKey, KeyEvent, MouseEvent,
+    key_event, pointer_device_event, touch_event, ControlKey, KeyEvent, KeyboardMode, MouseEvent,
     PointerDeviceEvent,
 };
 
@@ -319,11 +319,32 @@ impl Injector {
     }
 
     /// Decide what a key event means. `press` asks for a full down-and-up.
+    ///
+    /// **`chr` means two different things**, and `mode` is how the client says
+    /// which. In Legacy it is a *character* -- "test" arrives as 116,101,115,116
+    /// -- and has to go through `UCKeyTranslate` to reach a keycode. In Map the
+    /// client has already translated to the peer's platform and sends a Mac
+    /// virtual keycode, which needs posting and nothing else.
+    ///
+    /// Reading the field rather than assuming a mode matters even at the
+    /// version this agent reports: the mode is a setting in the client's UI, so
+    /// a peer can choose Map against any server. Treating that as a character
+    /// would type gibberish -- the same class of bug as the original, which
+    /// posted characters as though they were keycodes and produced PageUp, F9,
+    /// Home, PageUp for "test".
     pub fn decide_key(&self, ev: &KeyEvent) -> KeyAction {
         let flags = modifier_flags(&ev.modifiers);
         let down = ev.down;
         let then_up = ev.press;
+        let mapped = matches!(
+            ev.mode.enum_value_or_default(),
+            KeyboardMode::Map | KeyboardMode::Translate
+        );
         match &ev.union {
+            // Already a keycode for this platform; post it as one.
+            Some(key_event::Union::chr(c)) if mapped => {
+                KeyAction::Keycode { code: *c as i32, down, flags, then_up }
+            }
             Some(key_event::Union::control_key(ck)) => {
                 match control_key_to_keycode(ck.enum_value_or_default()) {
                     Some(code) => KeyAction::Keycode { code, down, flags, then_up },
@@ -714,7 +735,68 @@ mod tests {
         assert_eq!(code(ControlKey::LeftArrow), 123);
     }
 
+        /// `chr` is a character in Legacy and a keycode in Map, and the mode field
+    /// is the only thing that says which. Getting this backwards types
+    /// gibberish -- the original bug posted characters as keycodes and turned
+    /// "test" into PageUp, F9, Home, PageUp.
     #[test]
+    fn chr_is_a_character_in_legacy_and_a_keycode_in_map() {
+        let inj = Injector::new();
+        let mut ev = KeyEvent::new();
+        ev.down = true;
+        ev.union = Some(key_event::Union::chr(116)); // 't', or keycode 116 = PageUp
+
+        // Unset mode is Legacy, which is what an older client sends.
+        assert_eq!(
+            inj.decide_key(&ev),
+            KeyAction::Char { cp: 116, down: true, flags: 0, then_up: false },
+            "an absent mode must read exactly as before"
+        );
+
+        ev.mode = protobuf::ProtobufEnumOrUnknown::new(KeyboardMode::Legacy);
+        assert_eq!(
+            inj.decide_key(&ev),
+            KeyAction::Char { cp: 116, down: true, flags: 0, then_up: false }
+        );
+
+        ev.mode = protobuf::ProtobufEnumOrUnknown::new(KeyboardMode::Map);
+        assert_eq!(
+            inj.decide_key(&ev),
+            KeyAction::Keycode { code: 116, down: true, flags: 0, then_up: false },
+            "in Map the client has already translated to a Mac keycode"
+        );
+    }
+
+    /// Translate mode also sends a translated keycode; it differs from Map in
+    /// what the *client* does before sending, not in what arrives.
+    #[test]
+    fn translate_mode_is_read_as_a_keycode_too() {
+        let inj = Injector::new();
+        let mut ev = KeyEvent::new();
+        ev.down = true;
+        ev.union = Some(key_event::Union::chr(49));
+        ev.mode = protobuf::ProtobufEnumOrUnknown::new(KeyboardMode::Translate);
+        assert_eq!(
+            inj.decide_key(&ev),
+            KeyAction::Keycode { code: 49, down: true, flags: 0, then_up: false }
+        );
+    }
+
+    /// A control key is platform-independent and means the same in every mode.
+    #[test]
+    fn control_keys_are_unaffected_by_the_mode() {
+        let inj = Injector::new();
+        let mut ev = KeyEvent::new();
+        ev.down = true;
+        ev.union = Some(key_event::Union::control_key(
+            protobuf::ProtobufEnumOrUnknown::new(ControlKey::Return),
+        ));
+        let legacy = inj.decide_key(&ev);
+        ev.mode = protobuf::ProtobufEnumOrUnknown::new(KeyboardMode::Map);
+        assert_eq!(legacy, inj.decide_key(&ev));
+    }
+
+#[test]
     fn a_control_key_with_no_mac_equivalent_is_reported_unmapped() {
         let inj = Injector::new();
         let ev = key(

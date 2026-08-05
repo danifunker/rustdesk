@@ -2747,6 +2747,7 @@ pub struct KeyEvent {
     pub down: bool,
     pub press: bool,
     pub modifiers: ::std::vec::Vec<::protobuf::ProtobufEnumOrUnknown<ControlKey>>,
+    pub mode: ::protobuf::ProtobufEnumOrUnknown<KeyboardMode>,
     // message oneof groups
     pub union: ::std::option::Option<key_event::Union>,
     // special fields
@@ -2930,6 +2931,11 @@ impl KeyEvent {
             |m: &KeyEvent| { &m.modifiers },
             |m: &mut KeyEvent| { &mut m.modifiers },
         ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "mode",
+            |m: &KeyEvent| { &m.mode },
+            |m: &mut KeyEvent| { &mut m.mode },
+        ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<KeyEvent>(
             "KeyEvent",
             13,
@@ -2986,6 +2992,12 @@ impl ::protobuf::Message for KeyEvent {
                 8 => {
                     ::protobuf::rt::read_repeated_enum_or_unknown_into(wire_type, is, &mut self.modifiers)?
                 },
+                9 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    self.mode = is.read_enum_or_unknown()?;
+                },
                 _ => {
                     ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
                 },
@@ -3007,6 +3019,9 @@ impl ::protobuf::Message for KeyEvent {
         for value in &self.modifiers {
             my_size += ::protobuf::rt::enum_or_unknown_size(8, *value);
         };
+        if self.mode != ::protobuf::ProtobufEnumOrUnknown::new(KeyboardMode::Legacy) {
+            my_size += ::protobuf::rt::enum_or_unknown_size(9, self.mode);
+        }
         if let ::std::option::Option::Some(ref v) = self.union {
             match v {
                 &key_event::Union::control_key(v) => {
@@ -3038,6 +3053,9 @@ impl ::protobuf::Message for KeyEvent {
         for v in &self.modifiers {
             os.write_enum(8, ::protobuf::ProtobufEnumOrUnknown::value(v))?;
         };
+        if self.mode != ::protobuf::ProtobufEnumOrUnknown::new(KeyboardMode::Legacy) {
+            os.write_enum(9, ::protobuf::ProtobufEnumOrUnknown::value(&self.mode))?;
+        }
         if let ::std::option::Option::Some(ref v) = self.union {
             match v {
                 &key_event::Union::control_key(v) => {
@@ -3083,6 +3101,7 @@ impl ::protobuf::Message for KeyEvent {
             down: false,
             press: false,
             modifiers: ::std::vec::Vec::new(),
+            mode: ::protobuf::ProtobufEnumOrUnknown::from_i32(0),
             union: ::std::option::Option::None,
             unknown_fields: ::protobuf::UnknownFields::new(),
             cached_size: ::protobuf::rt::CachedSize::new(),
@@ -3100,6 +3119,7 @@ impl ::protobuf::Clear for KeyEvent {
         self.union = ::std::option::Option::None;
         self.union = ::std::option::Option::None;
         self.modifiers.clear();
+        self.mode = ::protobuf::ProtobufEnumOrUnknown::new(KeyboardMode::Legacy);
         self.unknown_fields.clear();
     }
 }
@@ -11932,6 +11952,60 @@ impl ControlKey {
 }
 
 #[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+pub enum KeyboardMode {
+    Legacy = 0,
+    Map = 1,
+    Translate = 2,
+    Auto = 3,
+}
+
+impl ::protobuf::ProtobufEnum for KeyboardMode {
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<KeyboardMode> {
+        match value {
+            0 => ::std::option::Option::Some(KeyboardMode::Legacy),
+            1 => ::std::option::Option::Some(KeyboardMode::Map),
+            2 => ::std::option::Option::Some(KeyboardMode::Translate),
+            3 => ::std::option::Option::Some(KeyboardMode::Auto),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn values() -> &'static [Self] {
+        static values: &'static [KeyboardMode] = &[
+            KeyboardMode::Legacy,
+            KeyboardMode::Map,
+            KeyboardMode::Translate,
+            KeyboardMode::Auto,
+        ];
+        values
+    }
+
+    fn enum_descriptor_static() -> ::protobuf::reflect::EnumDescriptor {
+        ::protobuf::reflect::EnumDescriptor::new_generated_2(file_descriptor(), 1)
+    }
+}
+
+impl ::std::default::Default for KeyboardMode {
+    fn default() -> Self {
+        KeyboardMode::Legacy
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for KeyboardMode {
+    type RuntimeType = ::protobuf::reflect::runtime_types::RuntimeTypeEnum<Self>;
+}
+
+impl KeyboardMode {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new_2::<KeyboardMode>("KeyboardMode", 1)
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
 pub enum FileType {
     Dir = 1,
     DirLink = 2,
@@ -11968,7 +12042,7 @@ impl ::protobuf::ProtobufEnum for FileType {
     }
 
     fn enum_descriptor_static() -> ::protobuf::reflect::EnumDescriptor {
-        ::protobuf::reflect::EnumDescriptor::new_generated_2(file_descriptor(), 1)
+        ::protobuf::reflect::EnumDescriptor::new_generated_2(file_descriptor(), 2)
     }
 }
 
@@ -11985,7 +12059,7 @@ impl ::protobuf::reflect::ProtobufValue for FileType {
 
 impl FileType {
     fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
-        ::protobuf::reflect::GeneratedEnumDescriptorData::new_2::<FileType>("FileType", 1)
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new_2::<FileType>("FileType", 2)
     }
 }
 
@@ -12020,7 +12094,7 @@ impl ::protobuf::ProtobufEnum for Permission {
     }
 
     fn enum_descriptor_static() -> ::protobuf::reflect::EnumDescriptor {
-        ::protobuf::reflect::EnumDescriptor::new_generated_2(file_descriptor(), 2)
+        ::protobuf::reflect::EnumDescriptor::new_generated_2(file_descriptor(), 3)
     }
 }
 
@@ -12037,7 +12111,7 @@ impl ::protobuf::reflect::ProtobufValue for Permission {
 
 impl Permission {
     fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
-        ::protobuf::reflect::GeneratedEnumDescriptorData::new_2::<Permission>("Permission", 2)
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new_2::<Permission>("Permission", 3)
     }
 }
 
@@ -12075,7 +12149,7 @@ impl ::protobuf::ProtobufEnum for ImageQuality {
     }
 
     fn enum_descriptor_static() -> ::protobuf::reflect::EnumDescriptor {
-        ::protobuf::reflect::EnumDescriptor::new_generated_2(file_descriptor(), 3)
+        ::protobuf::reflect::EnumDescriptor::new_generated_2(file_descriptor(), 4)
     }
 }
 
@@ -12091,7 +12165,7 @@ impl ::protobuf::reflect::ProtobufValue for ImageQuality {
 
 impl ImageQuality {
     fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
-        ::protobuf::reflect::GeneratedEnumDescriptorData::new_2::<ImageQuality>("ImageQuality", 3)
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new_2::<ImageQuality>("ImageQuality", 4)
     }
 }
 
@@ -12126,7 +12200,7 @@ impl ::protobuf::ProtobufEnum for BoolOption {
     }
 
     fn enum_descriptor_static() -> ::protobuf::reflect::EnumDescriptor {
-        ::protobuf::reflect::EnumDescriptor::new_generated_2(file_descriptor(), 4)
+        ::protobuf::reflect::EnumDescriptor::new_generated_2(file_descriptor(), 5)
     }
 }
 
@@ -12142,7 +12216,7 @@ impl ::protobuf::reflect::ProtobufValue for BoolOption {
 
 impl BoolOption {
     fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
-        ::protobuf::reflect::GeneratedEnumDescriptorData::new_2::<BoolOption>("BoolOption", 4)
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new_2::<BoolOption>("BoolOption", 5)
     }
 }
 
@@ -12186,158 +12260,159 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     oB\0B\t\n\x05union\x12\0:\0\"u\n\nMouseEvent\x12\x14\n\x04mask\x18\x01\
     \x20\x01(\x05R\x04maskB\0\x12\x0e\n\x01x\x18\x02\x20\x01(\x11R\x01xB\0\
     \x12\x0e\n\x01y\x18\x03\x20\x01(\x11R\x01yB\0\x12/\n\tmodifiers\x18\x04\
-    \x20\x03(\x0e2\x0f.hbb.ControlKeyR\tmodifiersB\0:\0\"\xf6\x01\n\x08KeyEv\
+    \x20\x03(\x0e2\x0f.hbb.ControlKeyR\tmodifiersB\0:\0\"\x9f\x02\n\x08KeyEv\
     ent\x12\x14\n\x04down\x18\x01\x20\x01(\x08R\x04downB\0\x12\x16\n\x05pres\
     s\x18\x02\x20\x01(\x08R\x05pressB\0\x124\n\x0bcontrol_key\x18\x03\x20\
     \x01(\x0e2\x0f.hbb.ControlKeyH\0R\ncontrolKeyB\0\x12\x14\n\x03chr\x18\
     \x04\x20\x01(\rH\0R\x03chrB\0\x12\x1c\n\x07unicode\x18\x05\x20\x01(\rH\0\
     R\x07unicodeB\0\x12\x14\n\x03seq\x18\x06\x20\x01(\tH\0R\x03seqB\0\x12/\n\
-    \tmodifiers\x18\x08\x20\x03(\x0e2\x0f.hbb.ControlKeyR\tmodifiersB\0B\t\n\
-    \x05union\x12\0:\0\"\x98\x01\n\nCursorData\x12\x10\n\x02id\x18\x01\x20\
-    \x01(\x04R\x02idB\0\x12\x14\n\x04hotx\x18\x02\x20\x01(\x11R\x04hotxB\0\
-    \x12\x14\n\x04hoty\x18\x03\x20\x01(\x11R\x04hotyB\0\x12\x16\n\x05width\
-    \x18\x04\x20\x01(\x05R\x05widthB\0\x12\x18\n\x06height\x18\x05\x20\x01(\
-    \x05R\x06heightB\0\x12\x18\n\x06colors\x18\x06\x20\x01(\x0cR\x06colorsB\
-    \0:\0\"2\n\x0eCursorPosition\x12\x0e\n\x01x\x18\x01\x20\x01(\x11R\x01xB\
-    \0\x12\x0e\n\x01y\x18\x02\x20\x01(\x11R\x01yB\0:\0\">\n\x04Hash\x12\x14\
-    \n\x04salt\x18\x01\x20\x01(\tR\x04saltB\0\x12\x1e\n\tchallenge\x18\x02\
-    \x20\x01(\tR\tchallengeB\0:\0\"G\n\tClipboard\x12\x1c\n\x08compress\x18\
-    \x01\x20\x01(\x08R\x08compressB\0\x12\x1a\n\x07content\x18\x02\x20\x01(\
-    \x0cR\x07contentB\0:\0\"\xaf\x01\n\tFileEntry\x12.\n\nentry_type\x18\x01\
-    \x20\x01(\x0e2\r.hbb.FileTypeR\tentryTypeB\0\x12\x14\n\x04name\x18\x02\
-    \x20\x01(\tR\x04nameB\0\x12\x1d\n\tis_hidden\x18\x03\x20\x01(\x08R\x08is\
-    HiddenB\0\x12\x14\n\x04size\x18\x04\x20\x01(\x04R\x04sizeB\0\x12%\n\rmod\
-    ified_time\x18\x05\x20\x01(\x04R\x0cmodifiedTimeB\0:\0\"e\n\rFileDirecto\
-    ry\x12\x10\n\x02id\x18\x01\x20\x01(\x05R\x02idB\0\x12\x14\n\x04path\x18\
-    \x02\x20\x01(\tR\x04pathB\0\x12*\n\x07entries\x18\x03\x20\x03(\x0b2\x0e.\
-    hbb.FileEntryR\x07entriesB\0:\0\"J\n\x07ReadDir\x12\x14\n\x04path\x18\
-    \x01\x20\x01(\tR\x04pathB\0\x12'\n\x0einclude_hidden\x18\x02\x20\x01(\
-    \x08R\rincludeHiddenB\0:\0\"a\n\x0cReadAllFiles\x12\x10\n\x02id\x18\x01\
-    \x20\x01(\x05R\x02idB\0\x12\x14\n\x04path\x18\x02\x20\x01(\tR\x04pathB\0\
-    \x12'\n\x0einclude_hidden\x18\x03\x20\x01(\x08R\rincludeHiddenB\0:\0\"\
-    \xc5\x03\n\nFileAction\x12+\n\x08read_dir\x18\x01\x20\x01(\x0b2\x0c.hbb.\
-    ReadDirH\0R\x07readDirB\0\x124\n\x04send\x18\x02\x20\x01(\x0b2\x1c.hbb.F\
-    ileTransferSendRequestH\0R\x04sendB\0\x12=\n\x07receive\x18\x03\x20\x01(\
-    \x0b2\x1f.hbb.FileTransferReceiveRequestH\0R\x07receiveB\0\x12.\n\x06cre\
-    ate\x18\x04\x20\x01(\x0b2\x12.hbb.FileDirCreateH\0R\x06createB\0\x125\n\
-    \nremove_dir\x18\x05\x20\x01(\x0b2\x12.hbb.FileRemoveDirH\0R\tremoveDirB\
-    \0\x128\n\x0bremove_file\x18\x06\x20\x01(\x0b2\x13.hbb.FileRemoveFileH\0\
-    R\nremoveFileB\0\x122\n\tall_files\x18\x07\x20\x01(\x0b2\x11.hbb.ReadAll\
-    FilesH\0R\x08allFilesB\0\x123\n\x06cancel\x18\x08\x20\x01(\x0b2\x17.hbb.\
-    FileTransferCancelH\0R\x06cancelB\0B\t\n\x05union\x12\0:\0\"(\n\x12FileT\
-    ransferCancel\x12\x10\n\x02id\x18\x01\x20\x01(\x05R\x02idB\0:\0\"\xd8\
-    \x01\n\x0cFileResponse\x12(\n\x03dir\x18\x01\x20\x01(\x0b2\x12.hbb.FileD\
-    irectoryH\0R\x03dirB\0\x120\n\x05block\x18\x02\x20\x01(\x0b2\x16.hbb.Fil\
-    eTransferBlockH\0R\x05blockB\0\x120\n\x05error\x18\x03\x20\x01(\x0b2\x16\
-    .hbb.FileTransferErrorH\0R\x05errorB\0\x12-\n\x04done\x18\x04\x20\x01(\
-    \x0b2\x15.hbb.FileTransferDoneH\0R\x04doneB\0B\t\n\x05union\x12\0:\0\"|\
-    \n\x11FileTransferBlock\x12\x10\n\x02id\x18\x01\x20\x01(\x05R\x02idB\0\
-    \x12\x1b\n\x08file_num\x18\x02\x20\x01(\x11R\x07fileNumB\0\x12\x14\n\x04\
-    data\x18\x03\x20\x01(\x0cR\x04dataB\0\x12\x20\n\ncompressed\x18\x04\x20\
-    \x01(\x08R\ncompressedB\0:\0\"\\\n\x11FileTransferError\x12\x10\n\x02id\
-    \x18\x01\x20\x01(\x05R\x02idB\0\x12\x16\n\x05error\x18\x02\x20\x01(\tR\
-    \x05errorB\0\x12\x1b\n\x08file_num\x18\x03\x20\x01(\x11R\x07fileNumB\0:\
-    \0\"l\n\x17FileTransferSendRequest\x12\x10\n\x02id\x18\x01\x20\x01(\x05R\
-    \x02idB\0\x12\x14\n\x04path\x18\x02\x20\x01(\tR\x04pathB\0\x12'\n\x0einc\
-    lude_hidden\x18\x03\x20\x01(\x08R\rincludeHiddenB\0:\0\"C\n\x10FileTrans\
-    ferDone\x12\x10\n\x02id\x18\x01\x20\x01(\x05R\x02idB\0\x12\x1b\n\x08file\
-    _num\x18\x02\x20\x01(\x11R\x07fileNumB\0:\0\"n\n\x1aFileTransferReceiveR\
-    equest\x12\x10\n\x02id\x18\x01\x20\x01(\x05R\x02idB\0\x12\x14\n\x04path\
-    \x18\x02\x20\x01(\tR\x04pathB\0\x12&\n\x05files\x18\x03\x20\x03(\x0b2\
-    \x0e.hbb.FileEntryR\x05filesB\0:\0\"Y\n\rFileRemoveDir\x12\x10\n\x02id\
-    \x18\x01\x20\x01(\x05R\x02idB\0\x12\x14\n\x04path\x18\x02\x20\x01(\tR\
-    \x04pathB\0\x12\x1e\n\trecursive\x18\x03\x20\x01(\x08R\trecursiveB\0:\0\
-    \"W\n\x0eFileRemoveFile\x12\x10\n\x02id\x18\x01\x20\x01(\x05R\x02idB\0\
-    \x12\x14\n\x04path\x18\x02\x20\x01(\tR\x04pathB\0\x12\x1b\n\x08file_num\
-    \x18\x03\x20\x01(\x11R\x07fileNumB\0:\0\"9\n\rFileDirCreate\x12\x10\n\
-    \x02id\x18\x01\x20\x01(\x05R\x02idB\0\x12\x14\n\x04path\x18\x02\x20\x01(\
-    \tR\x04pathB\0:\0\"\x7f\n\rSwitchDisplay\x12\x1a\n\x07display\x18\x01\
-    \x20\x01(\x05R\x07displayB\0\x12\x0e\n\x01x\x18\x02\x20\x01(\x11R\x01xB\
-    \0\x12\x0e\n\x01y\x18\x03\x20\x01(\x11R\x01yB\0\x12\x16\n\x05width\x18\
+    \tmodifiers\x18\x08\x20\x03(\x0e2\x0f.hbb.ControlKeyR\tmodifiersB\0\x12'\
+    \n\x04mode\x18\t\x20\x01(\x0e2\x11.hbb.KeyboardModeR\x04modeB\0B\t\n\x05\
+    union\x12\0:\0\"\x98\x01\n\nCursorData\x12\x10\n\x02id\x18\x01\x20\x01(\
+    \x04R\x02idB\0\x12\x14\n\x04hotx\x18\x02\x20\x01(\x11R\x04hotxB\0\x12\
+    \x14\n\x04hoty\x18\x03\x20\x01(\x11R\x04hotyB\0\x12\x16\n\x05width\x18\
     \x04\x20\x01(\x05R\x05widthB\0\x12\x18\n\x06height\x18\x05\x20\x01(\x05R\
-    \x06heightB\0:\0\"a\n\x0ePermissionInfo\x121\n\npermission\x18\x01\x20\
-    \x01(\x0e2\x0f.hbb.PermissionR\npermissionB\0\x12\x1a\n\x07enabled\x18\
-    \x02\x20\x01(\x08R\x07enabledB\0:\0\"\xea\x03\n\rOptionMessage\x128\n\ri\
-    mage_quality\x18\x01\x20\x01(\x0e2\x11.hbb.ImageQualityR\x0cimageQuality\
-    B\0\x12F\n\x16lock_after_session_end\x18\x02\x20\x01(\x0e2\x0f.hbb.BoolO\
-    ptionR\x13lockAfterSessionEndB\0\x12?\n\x12show_remote_cursor\x18\x03\
-    \x20\x01(\x0e2\x0f.hbb.BoolOptionR\x10showRemoteCursorB\0\x124\n\x0cpriv\
-    acy_mode\x18\x04\x20\x01(\x0e2\x0f.hbb.BoolOptionR\x0bprivacyModeB\0\x12\
-    2\n\x0bblock_input\x18\x05\x20\x01(\x0e2\x0f.hbb.BoolOptionR\nblockInput\
-    B\0\x122\n\x14custom_image_quality\x18\x06\x20\x01(\x05R\x12customImageQ\
-    ualityB\0\x126\n\rdisable_audio\x18\x07\x20\x01(\x0e2\x0f.hbb.BoolOption\
-    R\x0cdisableAudioB\0\x12>\n\x11disable_clipboard\x18\x08\x20\x01(\x0e2\
-    \x0f.hbb.BoolOptionR\x10disableClipboardB\0:\0\"F\n\tTestDelay\x12\x14\n\
-    \x04time\x18\x01\x20\x01(\x03R\x04timeB\0\x12!\n\x0bfrom_client\x18\x02\
-    \x20\x01(\x08R\nfromClientB\0:\0\"e\n\tPublicKey\x12+\n\x10asymmetric_va\
-    lue\x18\x01\x20\x01(\x0cR\x0fasymmetricValueB\0\x12)\n\x0fsymmetric_valu\
-    e\x18\x02\x20\x01(\x0cR\x0esymmetricValueB\0:\0\"\x1e\n\x08SignedId\x12\
-    \x10\n\x02id\x18\x01\x20\x01(\x0cR\x02idB\0:\0\"P\n\x0bAudioFormat\x12!\
-    \n\x0bsample_rate\x18\x01\x20\x01(\rR\nsampleRateB\0\x12\x1c\n\x08channe\
-    ls\x18\x02\x20\x01(\rR\x08channelsB\0:\0\"$\n\nAudioFrame\x12\x14\n\x04d\
-    ata\x18\x01\x20\x01(\x0cR\x04dataB\0:\0\"\x86\x03\n\x04Misc\x127\n\x0cch\
-    at_message\x18\x04\x20\x01(\x0b2\x10.hbb.ChatMessageH\0R\x0bchatMessageB\
-    \0\x12=\n\x0eswitch_display\x18\x05\x20\x01(\x0b2\x12.hbb.SwitchDisplayH\
-    \0R\rswitchDisplayB\0\x12@\n\x0fpermission_info\x18\x06\x20\x01(\x0b2\
-    \x13.hbb.PermissionInfoH\0R\x0epermissionInfoB\0\x12.\n\x06option\x18\
-    \x07\x20\x01(\x0b2\x12.hbb.OptionMessageH\0R\x06optionB\0\x127\n\x0caudi\
-    o_format\x18\x08\x20\x01(\x0b2\x10.hbb.AudioFormatH\0R\x0baudioFormatB\0\
-    \x12%\n\x0cclose_reason\x18\t\x20\x01(\tH\0R\x0bcloseReasonB\0\x12'\n\rr\
-    efresh_video\x18\n\x20\x01(\x08H\0R\x0crefreshVideoB\0B\t\n\x05union\x12\
-    \0:\0\"\xcb\x07\n\x07Message\x12.\n\tsigned_id\x18\x03\x20\x01(\x0b2\r.h\
-    bb.SignedIdH\0R\x08signedIdB\0\x121\n\npublic_key\x18\x04\x20\x01(\x0b2\
-    \x0e.hbb.PublicKeyH\0R\tpublicKeyB\0\x121\n\ntest_delay\x18\x05\x20\x01(\
-    \x0b2\x0e.hbb.TestDelayH\0R\ttestDelayB\0\x124\n\x0bvideo_frame\x18\x06\
-    \x20\x01(\x0b2\x0f.hbb.VideoFrameH\0R\nvideoFrameB\0\x12:\n\rlogin_reque\
-    st\x18\x07\x20\x01(\x0b2\x11.hbb.LoginRequestH\0R\x0cloginRequestB\0\x12\
-    =\n\x0elogin_response\x18\x08\x20\x01(\x0b2\x12.hbb.LoginResponseH\0R\rl\
-    oginResponseB\0\x12!\n\x04hash\x18\t\x20\x01(\x0b2\t.hbb.HashH\0R\x04has\
-    hB\0\x124\n\x0bmouse_event\x18\n\x20\x01(\x0b2\x0f.hbb.MouseEventH\0R\nm\
-    ouseEventB\0\x124\n\x0baudio_frame\x18\x0b\x20\x01(\x0b2\x0f.hbb.AudioFr\
-    ameH\0R\naudioFrameB\0\x124\n\x0bcursor_data\x18\x0c\x20\x01(\x0b2\x0f.h\
-    bb.CursorDataH\0R\ncursorDataB\0\x12@\n\x0fcursor_position\x18\r\x20\x01\
-    (\x0b2\x13.hbb.CursorPositionH\0R\x0ecursorPositionB\0\x12\x1f\n\tcursor\
-    _id\x18\x0e\x20\x01(\x04H\0R\x08cursorIdB\0\x12.\n\tkey_event\x18\x0f\
-    \x20\x01(\x0b2\r.hbb.KeyEventH\0R\x08keyEventB\0\x120\n\tclipboard\x18\
-    \x10\x20\x01(\x0b2\x0e.hbb.ClipboardH\0R\tclipboardB\0\x124\n\x0bfile_ac\
-    tion\x18\x11\x20\x01(\x0b2\x0f.hbb.FileActionH\0R\nfileActionB\0\x12:\n\
-    \rfile_response\x18\x12\x20\x01(\x0b2\x11.hbb.FileResponseH\0R\x0cfileRe\
-    sponseB\0\x12!\n\x04misc\x18\x13\x20\x01(\x0b2\t.hbb.MiscH\0R\x04miscB\0\
-    \x12M\n\x14pointer_device_event\x18\x1a\x20\x01(\x0b2\x17.hbb.PointerDev\
-    iceEventH\0R\x12pointerDeviceEventB\0B\t\n\x05union\x12\0:\0\"\x88\x01\n\
-    \x12PointerDeviceEvent\x124\n\x0btouch_event\x18\x01\x20\x01(\x0b2\x0f.h\
-    bb.TouchEventH\0R\ntouchEventB\0\x12/\n\tmodifiers\x18\x02\x20\x03(\x0e2\
-    \x0f.hbb.ControlKeyR\tmodifiersB\0B\t\n\x05union\x12\0:\0\"\xf3\x01\n\nT\
-    ouchEvent\x12<\n\x0cscale_update\x18\x01\x20\x01(\x0b2\x15.hbb.TouchScal\
-    eUpdateH\0R\x0bscaleUpdateB\0\x123\n\tpan_start\x18\x02\x20\x01(\x0b2\
-    \x12.hbb.TouchPanStartH\0R\x08panStartB\0\x126\n\npan_update\x18\x03\x20\
-    \x01(\x0b2\x13.hbb.TouchPanUpdateH\0R\tpanUpdateB\0\x12-\n\x07pan_end\
-    \x18\x04\x20\x01(\x0b2\x10.hbb.TouchPanEndH\0R\x06panEndB\0B\t\n\x05unio\
-    n\x12\0:\0\",\n\x10TouchScaleUpdate\x12\x16\n\x05scale\x18\x01\x20\x01(\
-    \x05R\x05scaleB\0:\0\"1\n\rTouchPanStart\x12\x0e\n\x01x\x18\x01\x20\x01(\
-    \x05R\x01xB\0\x12\x0e\n\x01y\x18\x02\x20\x01(\x05R\x01yB\0:\0\"2\n\x0eTo\
-    uchPanUpdate\x12\x0e\n\x01x\x18\x01\x20\x01(\x05R\x01xB\0\x12\x0e\n\x01y\
-    \x18\x02\x20\x01(\x05R\x01yB\0:\0\"/\n\x0bTouchPanEnd\x12\x0e\n\x01x\x18\
-    \x01\x20\x01(\x05R\x01xB\0\x12\x0e\n\x01y\x18\x02\x20\x01(\x05R\x01yB\0:\
-    \0*\xaa\x08\n\nControlKey\x12\t\n\x03Alt\x10\x01\x1a\0\x12\x0f\n\tBacksp\
-    ace\x10\x02\x1a\0\x12\x0e\n\x08CapsLock\x10\x03\x1a\0\x12\r\n\x07Control\
-    \x10\x04\x1a\0\x12\x0c\n\x06Delete\x10\x05\x1a\0\x12\x0f\n\tDownArrow\
-    \x10\x06\x1a\0\x12\t\n\x03End\x10\x07\x1a\0\x12\x0c\n\x06Escape\x10\x08\
-    \x1a\0\x12\x08\n\x02F1\x10\t\x1a\0\x12\t\n\x03F10\x10\n\x1a\0\x12\t\n\
-    \x03F11\x10\x0b\x1a\0\x12\t\n\x03F12\x10\x0c\x1a\0\x12\x08\n\x02F2\x10\r\
-    \x1a\0\x12\x08\n\x02F3\x10\x0e\x1a\0\x12\x08\n\x02F4\x10\x0f\x1a\0\x12\
-    \x08\n\x02F5\x10\x10\x1a\0\x12\x08\n\x02F6\x10\x11\x1a\0\x12\x08\n\x02F7\
-    \x10\x12\x1a\0\x12\x08\n\x02F8\x10\x13\x1a\0\x12\x08\n\x02F9\x10\x14\x1a\
-    \0\x12\n\n\x04Home\x10\x15\x1a\0\x12\x0f\n\tLeftArrow\x10\x16\x1a\0\x12\
-    \n\n\x04Meta\x10\x17\x1a\0\x12\x0c\n\x06Option\x10\x18\x1a\0\x12\x0e\n\
-    \x08PageDown\x10\x19\x1a\0\x12\x0c\n\x06PageUp\x10\x1a\x1a\0\x12\x0c\n\
-    \x06Return\x10\x1b\x1a\0\x12\x10\n\nRightArrow\x10\x1c\x1a\0\x12\x0b\n\
-    \x05Shift\x10\x1d\x1a\0\x12\x0b\n\x05Space\x10\x1e\x1a\0\x12\t\n\x03Tab\
-    \x10\x1f\x1a\0\x12\r\n\x07UpArrow\x10\x20\x1a\0\x12\r\n\x07Numpad0\x10!\
-    \x1a\0\x12\r\n\x07Numpad1\x10\"\x1a\0\x12\r\n\x07Numpad2\x10#\x1a\0\x12\
-    \r\n\x07Numpad3\x10$\x1a\0\x12\r\n\x07Numpad4\x10%\x1a\0\x12\r\n\x07Nump\
-    ad5\x10&\x1a\0\x12\r\n\x07Numpad6\x10'\x1a\0\x12\r\n\x07Numpad7\x10(\x1a\
-    \0\x12\r\n\x07Numpad8\x10)\x1a\0\x12\r\n\x07Numpad9\x10*\x1a\0\x12\x0c\n\
+    \x06heightB\0\x12\x18\n\x06colors\x18\x06\x20\x01(\x0cR\x06colorsB\0:\0\
+    \"2\n\x0eCursorPosition\x12\x0e\n\x01x\x18\x01\x20\x01(\x11R\x01xB\0\x12\
+    \x0e\n\x01y\x18\x02\x20\x01(\x11R\x01yB\0:\0\">\n\x04Hash\x12\x14\n\x04s\
+    alt\x18\x01\x20\x01(\tR\x04saltB\0\x12\x1e\n\tchallenge\x18\x02\x20\x01(\
+    \tR\tchallengeB\0:\0\"G\n\tClipboard\x12\x1c\n\x08compress\x18\x01\x20\
+    \x01(\x08R\x08compressB\0\x12\x1a\n\x07content\x18\x02\x20\x01(\x0cR\x07\
+    contentB\0:\0\"\xaf\x01\n\tFileEntry\x12.\n\nentry_type\x18\x01\x20\x01(\
+    \x0e2\r.hbb.FileTypeR\tentryTypeB\0\x12\x14\n\x04name\x18\x02\x20\x01(\t\
+    R\x04nameB\0\x12\x1d\n\tis_hidden\x18\x03\x20\x01(\x08R\x08isHiddenB\0\
+    \x12\x14\n\x04size\x18\x04\x20\x01(\x04R\x04sizeB\0\x12%\n\rmodified_tim\
+    e\x18\x05\x20\x01(\x04R\x0cmodifiedTimeB\0:\0\"e\n\rFileDirectory\x12\
+    \x10\n\x02id\x18\x01\x20\x01(\x05R\x02idB\0\x12\x14\n\x04path\x18\x02\
+    \x20\x01(\tR\x04pathB\0\x12*\n\x07entries\x18\x03\x20\x03(\x0b2\x0e.hbb.\
+    FileEntryR\x07entriesB\0:\0\"J\n\x07ReadDir\x12\x14\n\x04path\x18\x01\
+    \x20\x01(\tR\x04pathB\0\x12'\n\x0einclude_hidden\x18\x02\x20\x01(\x08R\r\
+    includeHiddenB\0:\0\"a\n\x0cReadAllFiles\x12\x10\n\x02id\x18\x01\x20\x01\
+    (\x05R\x02idB\0\x12\x14\n\x04path\x18\x02\x20\x01(\tR\x04pathB\0\x12'\n\
+    \x0einclude_hidden\x18\x03\x20\x01(\x08R\rincludeHiddenB\0:\0\"\xc5\x03\
+    \n\nFileAction\x12+\n\x08read_dir\x18\x01\x20\x01(\x0b2\x0c.hbb.ReadDirH\
+    \0R\x07readDirB\0\x124\n\x04send\x18\x02\x20\x01(\x0b2\x1c.hbb.FileTrans\
+    ferSendRequestH\0R\x04sendB\0\x12=\n\x07receive\x18\x03\x20\x01(\x0b2\
+    \x1f.hbb.FileTransferReceiveRequestH\0R\x07receiveB\0\x12.\n\x06create\
+    \x18\x04\x20\x01(\x0b2\x12.hbb.FileDirCreateH\0R\x06createB\0\x125\n\nre\
+    move_dir\x18\x05\x20\x01(\x0b2\x12.hbb.FileRemoveDirH\0R\tremoveDirB\0\
+    \x128\n\x0bremove_file\x18\x06\x20\x01(\x0b2\x13.hbb.FileRemoveFileH\0R\
+    \nremoveFileB\0\x122\n\tall_files\x18\x07\x20\x01(\x0b2\x11.hbb.ReadAllF\
+    ilesH\0R\x08allFilesB\0\x123\n\x06cancel\x18\x08\x20\x01(\x0b2\x17.hbb.F\
+    ileTransferCancelH\0R\x06cancelB\0B\t\n\x05union\x12\0:\0\"(\n\x12FileTr\
+    ansferCancel\x12\x10\n\x02id\x18\x01\x20\x01(\x05R\x02idB\0:\0\"\xd8\x01\
+    \n\x0cFileResponse\x12(\n\x03dir\x18\x01\x20\x01(\x0b2\x12.hbb.FileDirec\
+    toryH\0R\x03dirB\0\x120\n\x05block\x18\x02\x20\x01(\x0b2\x16.hbb.FileTra\
+    nsferBlockH\0R\x05blockB\0\x120\n\x05error\x18\x03\x20\x01(\x0b2\x16.hbb\
+    .FileTransferErrorH\0R\x05errorB\0\x12-\n\x04done\x18\x04\x20\x01(\x0b2\
+    \x15.hbb.FileTransferDoneH\0R\x04doneB\0B\t\n\x05union\x12\0:\0\"|\n\x11\
+    FileTransferBlock\x12\x10\n\x02id\x18\x01\x20\x01(\x05R\x02idB\0\x12\x1b\
+    \n\x08file_num\x18\x02\x20\x01(\x11R\x07fileNumB\0\x12\x14\n\x04data\x18\
+    \x03\x20\x01(\x0cR\x04dataB\0\x12\x20\n\ncompressed\x18\x04\x20\x01(\x08\
+    R\ncompressedB\0:\0\"\\\n\x11FileTransferError\x12\x10\n\x02id\x18\x01\
+    \x20\x01(\x05R\x02idB\0\x12\x16\n\x05error\x18\x02\x20\x01(\tR\x05errorB\
+    \0\x12\x1b\n\x08file_num\x18\x03\x20\x01(\x11R\x07fileNumB\0:\0\"l\n\x17\
+    FileTransferSendRequest\x12\x10\n\x02id\x18\x01\x20\x01(\x05R\x02idB\0\
+    \x12\x14\n\x04path\x18\x02\x20\x01(\tR\x04pathB\0\x12'\n\x0einclude_hidd\
+    en\x18\x03\x20\x01(\x08R\rincludeHiddenB\0:\0\"C\n\x10FileTransferDone\
+    \x12\x10\n\x02id\x18\x01\x20\x01(\x05R\x02idB\0\x12\x1b\n\x08file_num\
+    \x18\x02\x20\x01(\x11R\x07fileNumB\0:\0\"n\n\x1aFileTransferReceiveReque\
+    st\x12\x10\n\x02id\x18\x01\x20\x01(\x05R\x02idB\0\x12\x14\n\x04path\x18\
+    \x02\x20\x01(\tR\x04pathB\0\x12&\n\x05files\x18\x03\x20\x03(\x0b2\x0e.hb\
+    b.FileEntryR\x05filesB\0:\0\"Y\n\rFileRemoveDir\x12\x10\n\x02id\x18\x01\
+    \x20\x01(\x05R\x02idB\0\x12\x14\n\x04path\x18\x02\x20\x01(\tR\x04pathB\0\
+    \x12\x1e\n\trecursive\x18\x03\x20\x01(\x08R\trecursiveB\0:\0\"W\n\x0eFil\
+    eRemoveFile\x12\x10\n\x02id\x18\x01\x20\x01(\x05R\x02idB\0\x12\x14\n\x04\
+    path\x18\x02\x20\x01(\tR\x04pathB\0\x12\x1b\n\x08file_num\x18\x03\x20\
+    \x01(\x11R\x07fileNumB\0:\0\"9\n\rFileDirCreate\x12\x10\n\x02id\x18\x01\
+    \x20\x01(\x05R\x02idB\0\x12\x14\n\x04path\x18\x02\x20\x01(\tR\x04pathB\0\
+    :\0\"\x7f\n\rSwitchDisplay\x12\x1a\n\x07display\x18\x01\x20\x01(\x05R\
+    \x07displayB\0\x12\x0e\n\x01x\x18\x02\x20\x01(\x11R\x01xB\0\x12\x0e\n\
+    \x01y\x18\x03\x20\x01(\x11R\x01yB\0\x12\x16\n\x05width\x18\x04\x20\x01(\
+    \x05R\x05widthB\0\x12\x18\n\x06height\x18\x05\x20\x01(\x05R\x06heightB\0\
+    :\0\"a\n\x0ePermissionInfo\x121\n\npermission\x18\x01\x20\x01(\x0e2\x0f.\
+    hbb.PermissionR\npermissionB\0\x12\x1a\n\x07enabled\x18\x02\x20\x01(\x08\
+    R\x07enabledB\0:\0\"\xea\x03\n\rOptionMessage\x128\n\rimage_quality\x18\
+    \x01\x20\x01(\x0e2\x11.hbb.ImageQualityR\x0cimageQualityB\0\x12F\n\x16lo\
+    ck_after_session_end\x18\x02\x20\x01(\x0e2\x0f.hbb.BoolOptionR\x13lockAf\
+    terSessionEndB\0\x12?\n\x12show_remote_cursor\x18\x03\x20\x01(\x0e2\x0f.\
+    hbb.BoolOptionR\x10showRemoteCursorB\0\x124\n\x0cprivacy_mode\x18\x04\
+    \x20\x01(\x0e2\x0f.hbb.BoolOptionR\x0bprivacyModeB\0\x122\n\x0bblock_inp\
+    ut\x18\x05\x20\x01(\x0e2\x0f.hbb.BoolOptionR\nblockInputB\0\x122\n\x14cu\
+    stom_image_quality\x18\x06\x20\x01(\x05R\x12customImageQualityB\0\x126\n\
+    \rdisable_audio\x18\x07\x20\x01(\x0e2\x0f.hbb.BoolOptionR\x0cdisableAudi\
+    oB\0\x12>\n\x11disable_clipboard\x18\x08\x20\x01(\x0e2\x0f.hbb.BoolOptio\
+    nR\x10disableClipboardB\0:\0\"F\n\tTestDelay\x12\x14\n\x04time\x18\x01\
+    \x20\x01(\x03R\x04timeB\0\x12!\n\x0bfrom_client\x18\x02\x20\x01(\x08R\nf\
+    romClientB\0:\0\"e\n\tPublicKey\x12+\n\x10asymmetric_value\x18\x01\x20\
+    \x01(\x0cR\x0fasymmetricValueB\0\x12)\n\x0fsymmetric_value\x18\x02\x20\
+    \x01(\x0cR\x0esymmetricValueB\0:\0\"\x1e\n\x08SignedId\x12\x10\n\x02id\
+    \x18\x01\x20\x01(\x0cR\x02idB\0:\0\"P\n\x0bAudioFormat\x12!\n\x0bsample_\
+    rate\x18\x01\x20\x01(\rR\nsampleRateB\0\x12\x1c\n\x08channels\x18\x02\
+    \x20\x01(\rR\x08channelsB\0:\0\"$\n\nAudioFrame\x12\x14\n\x04data\x18\
+    \x01\x20\x01(\x0cR\x04dataB\0:\0\"\x86\x03\n\x04Misc\x127\n\x0cchat_mess\
+    age\x18\x04\x20\x01(\x0b2\x10.hbb.ChatMessageH\0R\x0bchatMessageB\0\x12=\
+    \n\x0eswitch_display\x18\x05\x20\x01(\x0b2\x12.hbb.SwitchDisplayH\0R\rsw\
+    itchDisplayB\0\x12@\n\x0fpermission_info\x18\x06\x20\x01(\x0b2\x13.hbb.P\
+    ermissionInfoH\0R\x0epermissionInfoB\0\x12.\n\x06option\x18\x07\x20\x01(\
+    \x0b2\x12.hbb.OptionMessageH\0R\x06optionB\0\x127\n\x0caudio_format\x18\
+    \x08\x20\x01(\x0b2\x10.hbb.AudioFormatH\0R\x0baudioFormatB\0\x12%\n\x0cc\
+    lose_reason\x18\t\x20\x01(\tH\0R\x0bcloseReasonB\0\x12'\n\rrefresh_video\
+    \x18\n\x20\x01(\x08H\0R\x0crefreshVideoB\0B\t\n\x05union\x12\0:\0\"\xcb\
+    \x07\n\x07Message\x12.\n\tsigned_id\x18\x03\x20\x01(\x0b2\r.hbb.SignedId\
+    H\0R\x08signedIdB\0\x121\n\npublic_key\x18\x04\x20\x01(\x0b2\x0e.hbb.Pub\
+    licKeyH\0R\tpublicKeyB\0\x121\n\ntest_delay\x18\x05\x20\x01(\x0b2\x0e.hb\
+    b.TestDelayH\0R\ttestDelayB\0\x124\n\x0bvideo_frame\x18\x06\x20\x01(\x0b\
+    2\x0f.hbb.VideoFrameH\0R\nvideoFrameB\0\x12:\n\rlogin_request\x18\x07\
+    \x20\x01(\x0b2\x11.hbb.LoginRequestH\0R\x0cloginRequestB\0\x12=\n\x0elog\
+    in_response\x18\x08\x20\x01(\x0b2\x12.hbb.LoginResponseH\0R\rloginRespon\
+    seB\0\x12!\n\x04hash\x18\t\x20\x01(\x0b2\t.hbb.HashH\0R\x04hashB\0\x124\
+    \n\x0bmouse_event\x18\n\x20\x01(\x0b2\x0f.hbb.MouseEventH\0R\nmouseEvent\
+    B\0\x124\n\x0baudio_frame\x18\x0b\x20\x01(\x0b2\x0f.hbb.AudioFrameH\0R\n\
+    audioFrameB\0\x124\n\x0bcursor_data\x18\x0c\x20\x01(\x0b2\x0f.hbb.Cursor\
+    DataH\0R\ncursorDataB\0\x12@\n\x0fcursor_position\x18\r\x20\x01(\x0b2\
+    \x13.hbb.CursorPositionH\0R\x0ecursorPositionB\0\x12\x1f\n\tcursor_id\
+    \x18\x0e\x20\x01(\x04H\0R\x08cursorIdB\0\x12.\n\tkey_event\x18\x0f\x20\
+    \x01(\x0b2\r.hbb.KeyEventH\0R\x08keyEventB\0\x120\n\tclipboard\x18\x10\
+    \x20\x01(\x0b2\x0e.hbb.ClipboardH\0R\tclipboardB\0\x124\n\x0bfile_action\
+    \x18\x11\x20\x01(\x0b2\x0f.hbb.FileActionH\0R\nfileActionB\0\x12:\n\rfil\
+    e_response\x18\x12\x20\x01(\x0b2\x11.hbb.FileResponseH\0R\x0cfileRespons\
+    eB\0\x12!\n\x04misc\x18\x13\x20\x01(\x0b2\t.hbb.MiscH\0R\x04miscB\0\x12M\
+    \n\x14pointer_device_event\x18\x1a\x20\x01(\x0b2\x17.hbb.PointerDeviceEv\
+    entH\0R\x12pointerDeviceEventB\0B\t\n\x05union\x12\0:\0\"\x88\x01\n\x12P\
+    ointerDeviceEvent\x124\n\x0btouch_event\x18\x01\x20\x01(\x0b2\x0f.hbb.To\
+    uchEventH\0R\ntouchEventB\0\x12/\n\tmodifiers\x18\x02\x20\x03(\x0e2\x0f.\
+    hbb.ControlKeyR\tmodifiersB\0B\t\n\x05union\x12\0:\0\"\xf3\x01\n\nTouchE\
+    vent\x12<\n\x0cscale_update\x18\x01\x20\x01(\x0b2\x15.hbb.TouchScaleUpda\
+    teH\0R\x0bscaleUpdateB\0\x123\n\tpan_start\x18\x02\x20\x01(\x0b2\x12.hbb\
+    .TouchPanStartH\0R\x08panStartB\0\x126\n\npan_update\x18\x03\x20\x01(\
+    \x0b2\x13.hbb.TouchPanUpdateH\0R\tpanUpdateB\0\x12-\n\x07pan_end\x18\x04\
+    \x20\x01(\x0b2\x10.hbb.TouchPanEndH\0R\x06panEndB\0B\t\n\x05union\x12\0:\
+    \0\",\n\x10TouchScaleUpdate\x12\x16\n\x05scale\x18\x01\x20\x01(\x05R\x05\
+    scaleB\0:\0\"1\n\rTouchPanStart\x12\x0e\n\x01x\x18\x01\x20\x01(\x05R\x01\
+    xB\0\x12\x0e\n\x01y\x18\x02\x20\x01(\x05R\x01yB\0:\0\"2\n\x0eTouchPanUpd\
+    ate\x12\x0e\n\x01x\x18\x01\x20\x01(\x05R\x01xB\0\x12\x0e\n\x01y\x18\x02\
+    \x20\x01(\x05R\x01yB\0:\0\"/\n\x0bTouchPanEnd\x12\x0e\n\x01x\x18\x01\x20\
+    \x01(\x05R\x01xB\0\x12\x0e\n\x01y\x18\x02\x20\x01(\x05R\x01yB\0:\0*\xaa\
+    \x08\n\nControlKey\x12\t\n\x03Alt\x10\x01\x1a\0\x12\x0f\n\tBackspace\x10\
+    \x02\x1a\0\x12\x0e\n\x08CapsLock\x10\x03\x1a\0\x12\r\n\x07Control\x10\
+    \x04\x1a\0\x12\x0c\n\x06Delete\x10\x05\x1a\0\x12\x0f\n\tDownArrow\x10\
+    \x06\x1a\0\x12\t\n\x03End\x10\x07\x1a\0\x12\x0c\n\x06Escape\x10\x08\x1a\
+    \0\x12\x08\n\x02F1\x10\t\x1a\0\x12\t\n\x03F10\x10\n\x1a\0\x12\t\n\x03F11\
+    \x10\x0b\x1a\0\x12\t\n\x03F12\x10\x0c\x1a\0\x12\x08\n\x02F2\x10\r\x1a\0\
+    \x12\x08\n\x02F3\x10\x0e\x1a\0\x12\x08\n\x02F4\x10\x0f\x1a\0\x12\x08\n\
+    \x02F5\x10\x10\x1a\0\x12\x08\n\x02F6\x10\x11\x1a\0\x12\x08\n\x02F7\x10\
+    \x12\x1a\0\x12\x08\n\x02F8\x10\x13\x1a\0\x12\x08\n\x02F9\x10\x14\x1a\0\
+    \x12\n\n\x04Home\x10\x15\x1a\0\x12\x0f\n\tLeftArrow\x10\x16\x1a\0\x12\n\
+    \n\x04Meta\x10\x17\x1a\0\x12\x0c\n\x06Option\x10\x18\x1a\0\x12\x0e\n\x08\
+    PageDown\x10\x19\x1a\0\x12\x0c\n\x06PageUp\x10\x1a\x1a\0\x12\x0c\n\x06Re\
+    turn\x10\x1b\x1a\0\x12\x10\n\nRightArrow\x10\x1c\x1a\0\x12\x0b\n\x05Shif\
+    t\x10\x1d\x1a\0\x12\x0b\n\x05Space\x10\x1e\x1a\0\x12\t\n\x03Tab\x10\x1f\
+    \x1a\0\x12\r\n\x07UpArrow\x10\x20\x1a\0\x12\r\n\x07Numpad0\x10!\x1a\0\
+    \x12\r\n\x07Numpad1\x10\"\x1a\0\x12\r\n\x07Numpad2\x10#\x1a\0\x12\r\n\
+    \x07Numpad3\x10$\x1a\0\x12\r\n\x07Numpad4\x10%\x1a\0\x12\r\n\x07Numpad5\
+    \x10&\x1a\0\x12\r\n\x07Numpad6\x10'\x1a\0\x12\r\n\x07Numpad7\x10(\x1a\0\
+    \x12\r\n\x07Numpad8\x10)\x1a\0\x12\r\n\x07Numpad9\x10*\x1a\0\x12\x0c\n\
     \x06Cancel\x10+\x1a\0\x12\x0b\n\x05Clear\x10,\x1a\0\x12\n\n\x04Menu\x10-\
     \x1a\0\x12\x0b\n\x05Pause\x10.\x1a\0\x12\n\n\x04Kana\x10/\x1a\0\x12\x0c\
     \n\x06Hangul\x100\x1a\0\x12\x0b\n\x05Junja\x101\x1a\0\x12\x0b\n\x05Final\
@@ -12352,16 +12427,18 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \x10E\x1a\0\x12\x0c\n\x06Divide\x10F\x1a\0\x12\x0c\n\x06Equals\x10G\x1a\
     \0\x12\x11\n\x0bNumpadEnter\x10H\x1a\0\x12\x0c\n\x06RShift\x10I\x1a\0\
     \x12\x0e\n\x08RControl\x10J\x1a\0\x12\n\n\x04RAlt\x10K\x1a\0\x12\x10\n\n\
-    CtrlAltDel\x10d\x1a\0\x12\x10\n\nLockScreen\x10e\x1a\0\x1a\0*R\n\x08File\
-    Type\x12\t\n\x03Dir\x10\x01\x1a\0\x12\r\n\x07DirLink\x10\x02\x1a\0\x12\
-    \x0e\n\x08DirDrive\x10\x03\x1a\0\x12\n\n\x04File\x10\x04\x1a\0\x12\x0e\n\
-    \x08FileLink\x10\x05\x1a\0\x1a\0*<\n\nPermission\x12\x0e\n\x08Keyboard\
-    \x10\x01\x1a\0\x12\x0f\n\tClipboard\x10\x02\x1a\0\x12\x0b\n\x05Audio\x10\
-    \x03\x1a\0\x1a\0*E\n\x0cImageQuality\x12\x0c\n\x06NotSet\x10\0\x1a\0\x12\
-    \t\n\x03Low\x10\x02\x1a\0\x12\x0e\n\x08Balanced\x10\x03\x1a\0\x12\n\n\
-    \x04Best\x10\x04\x1a\0\x1a\0*1\n\nBoolOption\x12\x0c\n\x06NotSet\x10\0\
-    \x1a\0\x12\x08\n\x02No\x10\x01\x1a\0\x12\t\n\x03Yes\x10\x02\x1a\0\x1a\0B\
-    \0b\x06proto3\
+    CtrlAltDel\x10d\x1a\0\x12\x10\n\nLockScreen\x10e\x1a\0\x1a\0*F\n\x0cKeyb\
+    oardMode\x12\x0c\n\x06Legacy\x10\0\x1a\0\x12\t\n\x03Map\x10\x01\x1a\0\
+    \x12\x0f\n\tTranslate\x10\x02\x1a\0\x12\n\n\x04Auto\x10\x03\x1a\0\x1a\0*\
+    R\n\x08FileType\x12\t\n\x03Dir\x10\x01\x1a\0\x12\r\n\x07DirLink\x10\x02\
+    \x1a\0\x12\x0e\n\x08DirDrive\x10\x03\x1a\0\x12\n\n\x04File\x10\x04\x1a\0\
+    \x12\x0e\n\x08FileLink\x10\x05\x1a\0\x1a\0*<\n\nPermission\x12\x0e\n\x08\
+    Keyboard\x10\x01\x1a\0\x12\x0f\n\tClipboard\x10\x02\x1a\0\x12\x0b\n\x05A\
+    udio\x10\x03\x1a\0\x1a\0*E\n\x0cImageQuality\x12\x0c\n\x06NotSet\x10\0\
+    \x1a\0\x12\t\n\x03Low\x10\x02\x1a\0\x12\x0e\n\x08Balanced\x10\x03\x1a\0\
+    \x12\n\n\x04Best\x10\x04\x1a\0\x1a\0*1\n\nBoolOption\x12\x0c\n\x06NotSet\
+    \x10\0\x1a\0\x12\x08\n\x02No\x10\x01\x1a\0\x12\t\n\x03Yes\x10\x02\x1a\0\
+    \x1a\0B\0b\x06proto3\
 ";
 
 /// `FileDescriptorProto` object which was a source for this generated file
@@ -12429,6 +12506,7 @@ pub fn file_descriptor() -> ::protobuf::reflect::FileDescriptor {
         messages.push(TouchPanEnd::generated_message_descriptor_data());
         let mut enums = ::std::vec::Vec::new();
         enums.push(ControlKey::generated_enum_descriptor_data());
+        enums.push(KeyboardMode::generated_enum_descriptor_data());
         enums.push(FileType::generated_enum_descriptor_data());
         enums.push(Permission::generated_enum_descriptor_data());
         enums.push(ImageQuality::generated_enum_descriptor_data());
