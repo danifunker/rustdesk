@@ -122,8 +122,11 @@ const MAX_LOGIN_ATTEMPTS: u32 = 10;
 ///   `KeyEvent.mode`, and typing was confirmed in both modes against a real
 ///   client. Hence the value below.
 /// * **1.2.4** -- the refresh button switches to `Misc::refresh_video_display`
-///   (field 31) from `refresh_video` (field 10). Backported and handled, but the
-///   rest of what this version gates has not been surveyed. **Not yet.**
+///   (field 31) from `refresh_video` (field 10). *Implemented and measured*:
+///   field 31 is backported and `drain_input` handles both. Several other
+///   things are gated on this same version and were checked one at a time
+///   before claiming it; all of them turn out to need something else we do not
+///   send, and the survey is in `docs/BACKLOG.md` so it is not repeated.
 /// * **1.4.5** -- the client may use *relative* mouse mode and send deltas
 ///   rather than absolute coordinates. `decide_mouse` takes absolutes, so the
 ///   pointer would come apart entirely. **Not yet.**
@@ -133,7 +136,7 @@ const MAX_LOGIN_ATTEMPTS: u32 = 10;
 /// would silently have moved the client onto paths this agent does not
 /// implement, with no error anywhere. Pinned here, and guarded by a test that
 /// encodes exactly which gates have been earned.
-const REPORTED_VERSION: &str = "1.2.0";
+const REPORTED_VERSION: &str = "1.2.4";
 
 /// Is there anything to read without waiting?
 ///
@@ -1166,11 +1169,11 @@ mod version_tests {
             REPORTED_VERSION
         );
 
-        // Not earned yet: field 31 is handled, but the rest of what this
-        // version gates has not been surveyed.
+        // Earned: Misc::refresh_video_display (field 31) is backported and
+        // handled, which is the field the peer's refresh button moves to here.
         assert!(
-            ours < version_number("1.2.4"),
-            "{} claims the multi-UI-session gate; survey the rest of it first",
+            ours >= version_number("1.2.4"),
+            "{} is below the multi-UI-session gate, and field 31 is handled",
             REPORTED_VERSION
         );
 
