@@ -678,6 +678,61 @@ fn probe_live_fn() {
     let moved = (after.0 - tx as f64).abs() < 4.0 && (after.1 - ty as f64).abs() < 4.0;
     println!("  => injection {}", if moved { "WORKS" } else { "did NOT move the cursor" });
 
+    // The same check for relative movement -- `mask` kind 5, where the same two
+    // fields carry a delta instead of a position. Checked here rather than
+    // reasoned about, because the failure mode is not a crash: taking a delta
+    // for a position parks the pointer a few pixels from the top-left corner,
+    // which looks like the pointer being broken rather than like a decoding bug.
+    // Second because it is relative to wherever the move above landed.
+    let (dx, dy) = (60i32, -40i32);
+    let base = cursor_position();
+    let mut ev = MouseEvent::new();
+    ev.mask = 5;
+    ev.x = dx;
+    ev.y = dy;
+    inj.mouse(&ev);
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    let rel = cursor_position();
+    let want = (base.0 + dx as f64, base.1 + dy as f64);
+    println!("  relative      : {:+},{:+} from {:.0},{:.0}", dx, dy, base.0, base.1);
+    println!(
+        "  cursor after  : {:.0},{:.0}  (wanted {:.0},{:.0})",
+        rel.0, rel.1, want.0, want.1
+    );
+    let by = (rel.0 - want.0).abs() < 4.0 && (rel.1 - want.1).abs() < 4.0;
+    println!(
+        "  => relative injection {}",
+        if by { "WORKS" } else { "did NOT move the cursor by the delta" }
+    );
+
+    // And the bound. This check is why `land_delta` exists: it was written
+    // expecting the window server to clamp the pointer at the edge the way a
+    // physical mouse does, and it does not -- an unclamped +5000,+5000 put the
+    // cursor at 5700,5320 on a 1920x1080 screen, reported back at that position,
+    // never to return. One hard flick in relative mode was a mouse that stopped
+    // working, with nothing in any log. Kept as a standing check because the
+    // clamp is now the only thing preventing it.
+    let mut ev = MouseEvent::new();
+    ev.mask = 5;
+    ev.x = 5000;
+    ev.y = 5000;
+    inj.mouse(&ev);
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    let far = cursor_position();
+    let inside = far.0 >= 0.0
+        && far.1 >= 0.0
+        && far.0 < c.width as f64
+        && far.1 < c.height as f64;
+    println!("  +5000,+5000   : cursor at {:.0},{:.0}", far.0, far.1);
+    println!(
+        "  => the bound {}",
+        if inside {
+            "holds; the pointer stayed on the display"
+        } else {
+            "FAILED: the pointer is off the display and cannot come back"
+        }
+    );
+
     // Cause the change we are looking for, rather than asking someone to stand
     // at the machine and wiggle a window. Opening the Apple menu repaints a
     // large, unmistakable region; Escape closes it again, which doubles as an

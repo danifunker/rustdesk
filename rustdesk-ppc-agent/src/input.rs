@@ -76,6 +76,22 @@ pub fn keycode_for_char(cp: u32) -> Option<(i32, bool)> {
     }
 }
 
+/// Where a relative move lands: the current position plus the delta, held inside
+/// the display.
+///
+/// Separate and pure because the clamp is the part that has to be right --
+/// `MouseAction::MoveBy` records what happens without it -- and because a
+/// display size arrives from CoreGraphics, which host tests do not have.
+///
+/// A position already outside the display is pulled back in rather than left
+/// where it is, so a pointer lost by anything else recovers on the next event.
+pub fn land_delta(x: f64, y: f64, dx: f64, dy: f64, width: f64, height: f64) -> (f64, f64) {
+    // An empty display would make the bounds cross over; treat it as a single
+    // pixel rather than returning something ordered the wrong way round.
+    let (xmax, ymax) = ((width - 1.0).max(0.0), (height - 1.0).max(0.0));
+    ((x + dx).max(0.0).min(xmax), (y + dy).max(0.0).min(ymax))
+}
+
 /// Where the system thinks the cursor is. Out-params, not a returned struct.
 #[cfg(target_os = "macos")]
 pub fn cursor_position() -> (f64, f64) {
@@ -154,6 +170,31 @@ pub enum MouseAction {
     /// A plain move, or a drag when a button is held. `ty` is what the shim
     /// takes: 0 moved, 3 left-dragged, 4 right-dragged.
     MoveOrDrag { ty: i32, x: f64, y: f64 },
+    /// A *relative* move: the deltas the client sends in relative mouse mode,
+    /// which it uses for games and 3D applications once it has taken a pointer
+    /// lock. `ty` is the same dial as `MoveOrDrag`, because dragging works there
+    /// too.
+    ///
+    /// Applied against wherever the cursor is *now*, read back from the system on
+    /// every event rather than accumulated here -- so a person using the real
+    /// mouse on the G5 at the same moment is not fought over.
+    ///
+    /// The result is then clamped to the display by [`land_delta`], and that
+    /// clamp is not belt-and-braces. It was written on the assumption that the
+    /// window server clamps the pointer at the edge the way a physical mouse
+    /// behaves, which would have made the read-back self-correcting and a bounds
+    /// check unnecessary. `--probe-live` was extended to check that claim rather
+    /// than rest on it, and it is false:
+    ///
+    /// ```text
+    /// +5000,+5000   : cursor at 5700,5320
+    /// ```
+    ///
+    /// `CGPostMouseEvent` accepts a point outside the display and
+    /// `CGEventGetLocation` reports it back, so one hard flick in relative mode
+    /// would have put the pointer in a coordinate space it never returned from --
+    /// a mouse that simply stops working, with nothing in any log.
+    MoveBy { ty: i32, dx: f64, dy: f64 },
     /// A press or release. `at_cursor` means the event carried no coordinates,
     /// so the position must come from the system rather than from the message.
     Button { down: bool, button: i32, at_cursor: bool, x: f64, y: f64 },
@@ -205,6 +246,14 @@ pub enum KeyAction {
     Ignore,
 }
 
+/// Largest relative-movement delta accepted on one event, in either axis.
+///
+/// Upstream's `input_service.rs` clamps to the same figure, and its comment says
+/// it matches the client's own `kMaxRelativeMouseDelta`. Kept because it costs
+/// nothing and the value arrives from the network: a delta of two billion would
+/// otherwise be added to a screen coordinate and handed to CoreGraphics.
+const MAX_RELATIVE_DELTA: i32 = 10_000;
+
 pub struct Injector {
     /// Buttons currently held, so a move can be reported as the drag it is —
     /// posting a plain move mid-drag breaks selection and drag-and-drop.
@@ -236,16 +285,7 @@ impl Injector {
         // position has to come from the system, as it does upstream.
         let at_cursor = ev.x == 0 && ev.y == 0;
         match kind {
-            0 => {
-                let ty = if self.buttons_down & 1 != 0 {
-                    3 // left-dragged
-                } else if self.buttons_down & 2 != 0 {
-                    4 // right-dragged
-                } else {
-                    0 // moved
-                };
-                MouseAction::MoveOrDrag { ty, x, y }
-            }
+            0 => MouseAction::MoveOrDrag { ty: self.drag_type(), x, y },
             1 => {
                 self.buttons_down |= button as u8;
                 MouseAction::Button { down: true, button: btn_idx, at_cursor, x, y }
@@ -279,7 +319,39 @@ impl Injector {
             // work" turned out to mean. The deltas are pixels rather than
             // notches, hence the flag.
             4 => MouseAction::Scroll { dx: ev.x, dy: ev.y, pixels: true },
+            // Relative movement, kind 5, which a client sends only to a peer
+            // claiming 1.4.5 or newer. `x` and `y` are deltas rather than a
+            // position -- the same fields, a different meaning, which is why
+            // claiming that version without this arm would have taken every
+            // delta for an absolute coordinate and parked the pointer near the
+            // top-left corner.
+            //
+            // Nothing else about the mode is signalled: no option message, no
+            // handshake, and no `MouseEvent` field was added for it. A kind 0
+            // event ends the mode implicitly, here as upstream, because absolute
+            // movement simply resumes.
+            5 => {
+                let ty = self.drag_type();
+                MouseAction::MoveBy {
+                    ty,
+                    dx: ev.x.clamp(-MAX_RELATIVE_DELTA, MAX_RELATIVE_DELTA) as f64,
+                    dy: ev.y.clamp(-MAX_RELATIVE_DELTA, MAX_RELATIVE_DELTA) as f64,
+                }
+            }
             _ => MouseAction::Ignore,
+        }
+    }
+
+    /// 0 moved, 3 left-dragged, 4 right-dragged: what the shim's `type` means
+    /// once a button is held. Shared by absolute and relative movement, which
+    /// differ in where they land and not in what they are.
+    fn drag_type(&self) -> i32 {
+        if self.buttons_down & 1 != 0 {
+            3
+        } else if self.buttons_down & 2 != 0 {
+            4
+        } else {
+            0
         }
     }
 
@@ -391,6 +463,24 @@ impl Injector {
         unsafe {
             match action {
                 MouseAction::MoveOrDrag { ty, x, y } => rd_mouse(ty, x, y, 0),
+                MouseAction::MoveBy { ty, dx, dy } => {
+                    // Read the position back from the system every time rather
+                    // than keeping a running one here, so a person moving the
+                    // real mouse on the G5 at the same moment is not fought over.
+                    let (x, y) = cursor_position();
+                    // And the display size every time too: it can change
+                    // mid-session, and a stale one would clamp to the old screen.
+                    match (x >= 0.0 && y >= 0.0, crate::capture::display_size()) {
+                        (true, Some((w, h))) => {
+                            let (nx, ny) = land_delta(x, y, dx, dy, w as f64, h as f64);
+                            rd_mouse(ty, nx, ny, 0);
+                        }
+                        // No position to be relative to, or no display to clamp
+                        // against. Dropping the event is right: treating either
+                        // failure as a zero would fling the pointer to a corner.
+                        _ => log::debug!("relative move dropped: no cursor position or display"),
+                    }
+                }
                 MouseAction::Button { down, button, at_cursor, x, y } => {
                     let ty = if down { 1 } else { 2 };
                     if at_cursor {
@@ -478,6 +568,8 @@ mod tests {
     const DOWN: i32 = 1;
     const UP: i32 = 2;
     const WHEEL: i32 = 3;
+    /// `MOUSE_TYPE_MOVE_RELATIVE` in the client's `src/common.rs`.
+    const RELATIVE: i32 = 5;
     const LEFT: i32 = 1 << 3;
     const RIGHT: i32 = 2 << 3;
     const MIDDLE: i32 = 4 << 3;
@@ -638,6 +730,101 @@ mod tests {
     fn an_unknown_kind_is_ignored_rather_than_guessed() {
         let mut inj = Injector::new();
         assert_eq!(inj.decide_mouse(&mouse(7, 1, 2)), MouseAction::Ignore);
+    }
+
+    // -- relative movement, which is the same two fields meaning something else --
+
+    /// Kind 5 carries deltas, not a position. Taking one for the other is the
+    /// failure the 1.4.5 gate exists to prevent: every relative event would land
+    /// the pointer a few pixels from the top-left corner instead of moving it.
+    #[test]
+    fn kind_five_is_a_delta_and_not_a_position() {
+        let mut inj = Injector::new();
+        assert_eq!(
+            inj.decide_mouse(&mouse(RELATIVE, 7, -3)),
+            MouseAction::MoveBy { ty: 0, dx: 7.0, dy: -3.0 }
+        );
+        // A zero delta is a real event -- it is the marker the client sends to
+        // announce the mode -- and must not be confused with the positionless
+        // press that `at_cursor` exists for.
+        assert_eq!(
+            inj.decide_mouse(&mouse(RELATIVE, 0, 0)),
+            MouseAction::MoveBy { ty: 0, dx: 0.0, dy: 0.0 }
+        );
+    }
+
+    /// Relative movement drags exactly as absolute movement does; the buttons
+    /// never carried coordinates, so nothing about them changes with the mode.
+    #[test]
+    fn a_relative_move_while_a_button_is_held_is_also_a_drag() {
+        let mut inj = Injector::new();
+        inj.decide_mouse(&mouse(LEFT | DOWN, 0, 0));
+        assert_eq!(
+            inj.decide_mouse(&mouse(RELATIVE, 4, 4)),
+            MouseAction::MoveBy { ty: 3, dx: 4.0, dy: 4.0 }
+        );
+        inj.decide_mouse(&mouse(RIGHT | DOWN, 0, 0));
+        inj.decide_mouse(&mouse(LEFT | UP, 0, 0));
+        assert_eq!(
+            inj.decide_mouse(&mouse(RELATIVE, -1, 0)),
+            MouseAction::MoveBy { ty: 4, dx: -1.0, dy: 0.0 }
+        );
+    }
+
+    /// The delta comes off the network and is added to a screen coordinate, so
+    /// it is clamped the way upstream clamps it.
+    #[test]
+    fn an_absurd_delta_is_clamped_rather_than_added() {
+        let mut inj = Injector::new();
+        assert_eq!(
+            inj.decide_mouse(&mouse(RELATIVE, i32::MAX, i32::MIN)),
+            MouseAction::MoveBy {
+                ty: 0,
+                dx: MAX_RELATIVE_DELTA as f64,
+                dy: -MAX_RELATIVE_DELTA as f64,
+            }
+        );
+        // And a delta inside the limit is untouched, including at the edge.
+        assert_eq!(
+            inj.decide_mouse(&mouse(RELATIVE, MAX_RELATIVE_DELTA, -MAX_RELATIVE_DELTA)),
+            MouseAction::MoveBy {
+                ty: 0,
+                dx: MAX_RELATIVE_DELTA as f64,
+                dy: -MAX_RELATIVE_DELTA as f64,
+            }
+        );
+    }
+
+    /// The clamp that `--probe-live` showed was needed. `CGPostMouseEvent` takes
+    /// a point outside the display and `CGEventGetLocation` reports it straight
+    /// back, so without this a single hard flick sent the pointer to 5700,5320
+    /// on a 1920x1080 screen and it never came back.
+    #[test]
+    fn a_relative_move_cannot_push_the_pointer_off_the_display() {
+        // Ordinary movement is untouched.
+        assert_eq!(land_delta(640.0, 360.0, 60.0, -40.0, 1920.0, 1080.0), (700.0, 320.0));
+        // Each edge holds, at the last real pixel rather than one past it.
+        assert_eq!(land_delta(1900.0, 1070.0, 5000.0, 5000.0, 1920.0, 1080.0), (1919.0, 1079.0));
+        assert_eq!(land_delta(10.0, 10.0, -5000.0, -5000.0, 1920.0, 1080.0), (0.0, 0.0));
+        // Exactly reaching the far edge is allowed.
+        assert_eq!(land_delta(1918.0, 1078.0, 1.0, 1.0, 1920.0, 1080.0), (1919.0, 1079.0));
+        // A pointer already lost outside comes back rather than staying out.
+        assert_eq!(land_delta(5700.0, 5320.0, 0.0, 0.0, 1920.0, 1080.0), (1919.0, 1079.0));
+        // A degenerate display must not produce bounds the wrong way round.
+        assert_eq!(land_delta(5.0, 5.0, 0.0, 0.0, 0.0, 0.0), (0.0, 0.0));
+    }
+
+    /// An absolute move after a relative one is just an absolute move -- which is
+    /// how the client ends the mode, so it has to keep working without any state
+    /// being unwound here.
+    #[test]
+    fn an_absolute_move_after_a_relative_one_still_goes_where_it_says() {
+        let mut inj = Injector::new();
+        inj.decide_mouse(&mouse(RELATIVE, 100, 100));
+        assert_eq!(
+            inj.decide_mouse(&mouse(0, 640, 360)),
+            MouseAction::MoveOrDrag { ty: 0, x: 640.0, y: 360.0 }
+        );
     }
 
     // -- drag state ----------------------------------------------------------
