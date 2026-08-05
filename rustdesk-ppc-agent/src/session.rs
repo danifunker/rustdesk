@@ -122,8 +122,8 @@ const MAX_LOGIN_ATTEMPTS: u32 = 10;
 ///   `KeyEvent.mode`, and typing was confirmed in both modes against a real
 ///   client. Hence the value below.
 /// * **1.2.4** -- the refresh button switches to `Misc::refresh_video_display`
-///   (field 31) from `refresh_video` (field 10). Not backported, so the button
-///   would silently stop working. **Not yet.**
+///   (field 31) from `refresh_video` (field 10). Backported and handled, but the
+///   rest of what this version gates has not been surveyed. **Not yet.**
 /// * **1.4.5** -- the client may use *relative* mouse mode and send deltas
 ///   rather than absolute coordinates. `decide_mouse` takes absolutes, so the
 ///   pointer would come apart entirely. **Not yet.**
@@ -1048,15 +1048,28 @@ fn drain_input(
                     }
                 }
             }
-            // The peer's options. Worth logging rather than dropping: the
-            // client only draws a remote pointer when its "show remote cursor"
-            // toggle is on, and this is the only way to tell from here whether
-            // it is.
             Some(message::Union::misc(mi)) => {
+                // The peer's "refresh" button, which arrives in one of two
+                // fields depending on what version we claim to be:
+                // `refresh_video` (10) below 1.2.4, `refresh_video_display`
+                // (31, backported) at or above it. The client picks between
+                // them in `is_support_multi_ui_session`, so the field we do not
+                // handle is the one whose button does nothing at all.
                 if let Some(misc::Union::refresh_video(true)) = mi.union {
-                    // The peer's "refresh" button. Previously dropped on the
-                    // floor, which meant it did nothing at all.
                     *refresh_requested = true;
+                } else if let Some(misc::Union::refresh_video_display(d)) = mi.union {
+                    // The int32 is which display to refresh. This agent serves
+                    // one, so any value means the same thing; anything but 0
+                    // would mean the peer thinks otherwise, which is worth
+                    // hearing about rather than silently obeying.
+                    if d != 0 {
+                        log::warn!("peer asked to refresh display {}, of which there is only 0", d);
+                    }
+                    *refresh_requested = true;
+                // The peer's options. Worth logging rather than dropping: the
+                // client only draws a remote pointer when its "show remote
+                // cursor" toggle is on, and this is the only way to tell from
+                // here whether it is.
                 } else if let Some(misc::Union::option(o)) = mi.union {
                     log::info!(
                         "peer options: show_remote_cursor={:?} image_quality={:?} \
@@ -1153,11 +1166,11 @@ mod version_tests {
             REPORTED_VERSION
         );
 
-        // Not earned: Misc::refresh_video_display (field 31) is not backported,
-        // so the peer's refresh button would stop working.
+        // Not earned yet: field 31 is handled, but the rest of what this
+        // version gates has not been surveyed.
         assert!(
             ours < version_number("1.2.4"),
-            "{} claims the multi-UI-session gate; backport field 31 first",
+            "{} claims the multi-UI-session gate; survey the rest of it first",
             REPORTED_VERSION
         );
 

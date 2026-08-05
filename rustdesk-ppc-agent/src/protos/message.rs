@@ -8723,6 +8723,31 @@ impl Misc {
         self.union = ::std::option::Option::Some(misc::Union::refresh_video(v))
     }
 
+    // int32 refresh_video_display = 31;
+
+    pub fn get_refresh_video_display(&self) -> i32 {
+        match self.union {
+            ::std::option::Option::Some(misc::Union::refresh_video_display(v)) => v,
+            _ => 0,
+        }
+    }
+
+    pub fn clear_refresh_video_display(&mut self) {
+        self.union = ::std::option::Option::None;
+    }
+
+    pub fn has_refresh_video_display(&self) -> bool {
+        match self.union {
+            ::std::option::Option::Some(misc::Union::refresh_video_display(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_refresh_video_display(&mut self, v: i32) {
+        self.union = ::std::option::Option::Some(misc::Union::refresh_video_display(v))
+    }
+
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
         let mut fields = ::std::vec::Vec::new();
         fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, ChatMessage>(
@@ -8771,6 +8796,12 @@ impl Misc {
             Misc::has_refresh_video,
             Misc::get_refresh_video,
             Misc::set_refresh_video,
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_copy_has_get_set_simpler_accessors::<_, _>(
+            "refresh_video_display",
+            Misc::has_refresh_video_display,
+            Misc::get_refresh_video_display,
+            Misc::set_refresh_video_display,
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<Misc>(
             "Misc",
@@ -8856,6 +8887,12 @@ impl ::protobuf::Message for Misc {
                     }
                     self.union = ::std::option::Option::Some(misc::Union::refresh_video(is.read_bool()?));
                 },
+                31 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    self.union = ::std::option::Option::Some(misc::Union::refresh_video_display(is.read_int32()?));
+                },
                 _ => {
                     ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
                 },
@@ -8896,6 +8933,9 @@ impl ::protobuf::Message for Misc {
                 &misc::Union::refresh_video(v) => {
                     my_size += 2;
                 },
+                &misc::Union::refresh_video_display(v) => {
+                    my_size += ::protobuf::rt::value_size(31, v, ::protobuf::wire_format::WireTypeVarint);
+                },
             };
         }
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
@@ -8926,6 +8966,9 @@ impl ::protobuf::Message for Misc {
                 },
                 &misc::Union::refresh_video(v) => {
                     os.write_bool(10, v)?;
+                },
+                &misc::Union::refresh_video_display(v) => {
+                    os.write_int32(31, v)?;
                 },
             };
         }
@@ -8972,6 +9015,7 @@ impl ::protobuf::Clear for Misc {
         self.union = ::std::option::Option::None;
         self.union = ::std::option::Option::None;
         self.union = ::std::option::Option::None;
+        self.union = ::std::option::Option::None;
         self.unknown_fields.clear();
     }
 }
@@ -8998,6 +9042,7 @@ pub mod misc {
         audio_format(super::AudioFormat),
         close_reason(::std::string::String),
         refresh_video(bool),
+        refresh_video_display(i32),
     }
 
     impl ::protobuf::Oneof for Union {
@@ -12350,7 +12395,7 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \x18\x01\x20\x01(\x0cR\x02idB\0:\0\"P\n\x0bAudioFormat\x12!\n\x0bsample_\
     rate\x18\x01\x20\x01(\rR\nsampleRateB\0\x12\x1c\n\x08channels\x18\x02\
     \x20\x01(\rR\x08channelsB\0:\0\"$\n\nAudioFrame\x12\x14\n\x04data\x18\
-    \x01\x20\x01(\x0cR\x04dataB\0:\0\"\x86\x03\n\x04Misc\x127\n\x0cchat_mess\
+    \x01\x20\x01(\x0cR\x04dataB\0:\0\"\xbe\x03\n\x04Misc\x127\n\x0cchat_mess\
     age\x18\x04\x20\x01(\x0b2\x10.hbb.ChatMessageH\0R\x0bchatMessageB\0\x12=\
     \n\x0eswitch_display\x18\x05\x20\x01(\x0b2\x12.hbb.SwitchDisplayH\0R\rsw\
     itchDisplayB\0\x12@\n\x0fpermission_info\x18\x06\x20\x01(\x0b2\x13.hbb.P\
@@ -12358,61 +12403,62 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \x0b2\x12.hbb.OptionMessageH\0R\x06optionB\0\x127\n\x0caudio_format\x18\
     \x08\x20\x01(\x0b2\x10.hbb.AudioFormatH\0R\x0baudioFormatB\0\x12%\n\x0cc\
     lose_reason\x18\t\x20\x01(\tH\0R\x0bcloseReasonB\0\x12'\n\rrefresh_video\
-    \x18\n\x20\x01(\x08H\0R\x0crefreshVideoB\0B\t\n\x05union\x12\0:\0\"\xcb\
-    \x07\n\x07Message\x12.\n\tsigned_id\x18\x03\x20\x01(\x0b2\r.hbb.SignedId\
-    H\0R\x08signedIdB\0\x121\n\npublic_key\x18\x04\x20\x01(\x0b2\x0e.hbb.Pub\
-    licKeyH\0R\tpublicKeyB\0\x121\n\ntest_delay\x18\x05\x20\x01(\x0b2\x0e.hb\
-    b.TestDelayH\0R\ttestDelayB\0\x124\n\x0bvideo_frame\x18\x06\x20\x01(\x0b\
-    2\x0f.hbb.VideoFrameH\0R\nvideoFrameB\0\x12:\n\rlogin_request\x18\x07\
-    \x20\x01(\x0b2\x11.hbb.LoginRequestH\0R\x0cloginRequestB\0\x12=\n\x0elog\
-    in_response\x18\x08\x20\x01(\x0b2\x12.hbb.LoginResponseH\0R\rloginRespon\
-    seB\0\x12!\n\x04hash\x18\t\x20\x01(\x0b2\t.hbb.HashH\0R\x04hashB\0\x124\
-    \n\x0bmouse_event\x18\n\x20\x01(\x0b2\x0f.hbb.MouseEventH\0R\nmouseEvent\
-    B\0\x124\n\x0baudio_frame\x18\x0b\x20\x01(\x0b2\x0f.hbb.AudioFrameH\0R\n\
-    audioFrameB\0\x124\n\x0bcursor_data\x18\x0c\x20\x01(\x0b2\x0f.hbb.Cursor\
-    DataH\0R\ncursorDataB\0\x12@\n\x0fcursor_position\x18\r\x20\x01(\x0b2\
-    \x13.hbb.CursorPositionH\0R\x0ecursorPositionB\0\x12\x1f\n\tcursor_id\
-    \x18\x0e\x20\x01(\x04H\0R\x08cursorIdB\0\x12.\n\tkey_event\x18\x0f\x20\
-    \x01(\x0b2\r.hbb.KeyEventH\0R\x08keyEventB\0\x120\n\tclipboard\x18\x10\
-    \x20\x01(\x0b2\x0e.hbb.ClipboardH\0R\tclipboardB\0\x124\n\x0bfile_action\
-    \x18\x11\x20\x01(\x0b2\x0f.hbb.FileActionH\0R\nfileActionB\0\x12:\n\rfil\
-    e_response\x18\x12\x20\x01(\x0b2\x11.hbb.FileResponseH\0R\x0cfileRespons\
-    eB\0\x12!\n\x04misc\x18\x13\x20\x01(\x0b2\t.hbb.MiscH\0R\x04miscB\0\x12M\
-    \n\x14pointer_device_event\x18\x1a\x20\x01(\x0b2\x17.hbb.PointerDeviceEv\
-    entH\0R\x12pointerDeviceEventB\0B\t\n\x05union\x12\0:\0\"\x88\x01\n\x12P\
-    ointerDeviceEvent\x124\n\x0btouch_event\x18\x01\x20\x01(\x0b2\x0f.hbb.To\
-    uchEventH\0R\ntouchEventB\0\x12/\n\tmodifiers\x18\x02\x20\x03(\x0e2\x0f.\
-    hbb.ControlKeyR\tmodifiersB\0B\t\n\x05union\x12\0:\0\"\xf3\x01\n\nTouchE\
-    vent\x12<\n\x0cscale_update\x18\x01\x20\x01(\x0b2\x15.hbb.TouchScaleUpda\
-    teH\0R\x0bscaleUpdateB\0\x123\n\tpan_start\x18\x02\x20\x01(\x0b2\x12.hbb\
-    .TouchPanStartH\0R\x08panStartB\0\x126\n\npan_update\x18\x03\x20\x01(\
-    \x0b2\x13.hbb.TouchPanUpdateH\0R\tpanUpdateB\0\x12-\n\x07pan_end\x18\x04\
-    \x20\x01(\x0b2\x10.hbb.TouchPanEndH\0R\x06panEndB\0B\t\n\x05union\x12\0:\
-    \0\",\n\x10TouchScaleUpdate\x12\x16\n\x05scale\x18\x01\x20\x01(\x05R\x05\
-    scaleB\0:\0\"1\n\rTouchPanStart\x12\x0e\n\x01x\x18\x01\x20\x01(\x05R\x01\
-    xB\0\x12\x0e\n\x01y\x18\x02\x20\x01(\x05R\x01yB\0:\0\"2\n\x0eTouchPanUpd\
-    ate\x12\x0e\n\x01x\x18\x01\x20\x01(\x05R\x01xB\0\x12\x0e\n\x01y\x18\x02\
-    \x20\x01(\x05R\x01yB\0:\0\"/\n\x0bTouchPanEnd\x12\x0e\n\x01x\x18\x01\x20\
-    \x01(\x05R\x01xB\0\x12\x0e\n\x01y\x18\x02\x20\x01(\x05R\x01yB\0:\0*\xaa\
-    \x08\n\nControlKey\x12\t\n\x03Alt\x10\x01\x1a\0\x12\x0f\n\tBackspace\x10\
-    \x02\x1a\0\x12\x0e\n\x08CapsLock\x10\x03\x1a\0\x12\r\n\x07Control\x10\
-    \x04\x1a\0\x12\x0c\n\x06Delete\x10\x05\x1a\0\x12\x0f\n\tDownArrow\x10\
-    \x06\x1a\0\x12\t\n\x03End\x10\x07\x1a\0\x12\x0c\n\x06Escape\x10\x08\x1a\
-    \0\x12\x08\n\x02F1\x10\t\x1a\0\x12\t\n\x03F10\x10\n\x1a\0\x12\t\n\x03F11\
-    \x10\x0b\x1a\0\x12\t\n\x03F12\x10\x0c\x1a\0\x12\x08\n\x02F2\x10\r\x1a\0\
-    \x12\x08\n\x02F3\x10\x0e\x1a\0\x12\x08\n\x02F4\x10\x0f\x1a\0\x12\x08\n\
-    \x02F5\x10\x10\x1a\0\x12\x08\n\x02F6\x10\x11\x1a\0\x12\x08\n\x02F7\x10\
-    \x12\x1a\0\x12\x08\n\x02F8\x10\x13\x1a\0\x12\x08\n\x02F9\x10\x14\x1a\0\
-    \x12\n\n\x04Home\x10\x15\x1a\0\x12\x0f\n\tLeftArrow\x10\x16\x1a\0\x12\n\
-    \n\x04Meta\x10\x17\x1a\0\x12\x0c\n\x06Option\x10\x18\x1a\0\x12\x0e\n\x08\
-    PageDown\x10\x19\x1a\0\x12\x0c\n\x06PageUp\x10\x1a\x1a\0\x12\x0c\n\x06Re\
-    turn\x10\x1b\x1a\0\x12\x10\n\nRightArrow\x10\x1c\x1a\0\x12\x0b\n\x05Shif\
-    t\x10\x1d\x1a\0\x12\x0b\n\x05Space\x10\x1e\x1a\0\x12\t\n\x03Tab\x10\x1f\
-    \x1a\0\x12\r\n\x07UpArrow\x10\x20\x1a\0\x12\r\n\x07Numpad0\x10!\x1a\0\
-    \x12\r\n\x07Numpad1\x10\"\x1a\0\x12\r\n\x07Numpad2\x10#\x1a\0\x12\r\n\
-    \x07Numpad3\x10$\x1a\0\x12\r\n\x07Numpad4\x10%\x1a\0\x12\r\n\x07Numpad5\
-    \x10&\x1a\0\x12\r\n\x07Numpad6\x10'\x1a\0\x12\r\n\x07Numpad7\x10(\x1a\0\
-    \x12\r\n\x07Numpad8\x10)\x1a\0\x12\r\n\x07Numpad9\x10*\x1a\0\x12\x0c\n\
+    \x18\n\x20\x01(\x08H\0R\x0crefreshVideoB\0\x126\n\x15refresh_video_displ\
+    ay\x18\x1f\x20\x01(\x05H\0R\x13refreshVideoDisplayB\0B\t\n\x05union\x12\
+    \0:\0\"\xcb\x07\n\x07Message\x12.\n\tsigned_id\x18\x03\x20\x01(\x0b2\r.h\
+    bb.SignedIdH\0R\x08signedIdB\0\x121\n\npublic_key\x18\x04\x20\x01(\x0b2\
+    \x0e.hbb.PublicKeyH\0R\tpublicKeyB\0\x121\n\ntest_delay\x18\x05\x20\x01(\
+    \x0b2\x0e.hbb.TestDelayH\0R\ttestDelayB\0\x124\n\x0bvideo_frame\x18\x06\
+    \x20\x01(\x0b2\x0f.hbb.VideoFrameH\0R\nvideoFrameB\0\x12:\n\rlogin_reque\
+    st\x18\x07\x20\x01(\x0b2\x11.hbb.LoginRequestH\0R\x0cloginRequestB\0\x12\
+    =\n\x0elogin_response\x18\x08\x20\x01(\x0b2\x12.hbb.LoginResponseH\0R\rl\
+    oginResponseB\0\x12!\n\x04hash\x18\t\x20\x01(\x0b2\t.hbb.HashH\0R\x04has\
+    hB\0\x124\n\x0bmouse_event\x18\n\x20\x01(\x0b2\x0f.hbb.MouseEventH\0R\nm\
+    ouseEventB\0\x124\n\x0baudio_frame\x18\x0b\x20\x01(\x0b2\x0f.hbb.AudioFr\
+    ameH\0R\naudioFrameB\0\x124\n\x0bcursor_data\x18\x0c\x20\x01(\x0b2\x0f.h\
+    bb.CursorDataH\0R\ncursorDataB\0\x12@\n\x0fcursor_position\x18\r\x20\x01\
+    (\x0b2\x13.hbb.CursorPositionH\0R\x0ecursorPositionB\0\x12\x1f\n\tcursor\
+    _id\x18\x0e\x20\x01(\x04H\0R\x08cursorIdB\0\x12.\n\tkey_event\x18\x0f\
+    \x20\x01(\x0b2\r.hbb.KeyEventH\0R\x08keyEventB\0\x120\n\tclipboard\x18\
+    \x10\x20\x01(\x0b2\x0e.hbb.ClipboardH\0R\tclipboardB\0\x124\n\x0bfile_ac\
+    tion\x18\x11\x20\x01(\x0b2\x0f.hbb.FileActionH\0R\nfileActionB\0\x12:\n\
+    \rfile_response\x18\x12\x20\x01(\x0b2\x11.hbb.FileResponseH\0R\x0cfileRe\
+    sponseB\0\x12!\n\x04misc\x18\x13\x20\x01(\x0b2\t.hbb.MiscH\0R\x04miscB\0\
+    \x12M\n\x14pointer_device_event\x18\x1a\x20\x01(\x0b2\x17.hbb.PointerDev\
+    iceEventH\0R\x12pointerDeviceEventB\0B\t\n\x05union\x12\0:\0\"\x88\x01\n\
+    \x12PointerDeviceEvent\x124\n\x0btouch_event\x18\x01\x20\x01(\x0b2\x0f.h\
+    bb.TouchEventH\0R\ntouchEventB\0\x12/\n\tmodifiers\x18\x02\x20\x03(\x0e2\
+    \x0f.hbb.ControlKeyR\tmodifiersB\0B\t\n\x05union\x12\0:\0\"\xf3\x01\n\nT\
+    ouchEvent\x12<\n\x0cscale_update\x18\x01\x20\x01(\x0b2\x15.hbb.TouchScal\
+    eUpdateH\0R\x0bscaleUpdateB\0\x123\n\tpan_start\x18\x02\x20\x01(\x0b2\
+    \x12.hbb.TouchPanStartH\0R\x08panStartB\0\x126\n\npan_update\x18\x03\x20\
+    \x01(\x0b2\x13.hbb.TouchPanUpdateH\0R\tpanUpdateB\0\x12-\n\x07pan_end\
+    \x18\x04\x20\x01(\x0b2\x10.hbb.TouchPanEndH\0R\x06panEndB\0B\t\n\x05unio\
+    n\x12\0:\0\",\n\x10TouchScaleUpdate\x12\x16\n\x05scale\x18\x01\x20\x01(\
+    \x05R\x05scaleB\0:\0\"1\n\rTouchPanStart\x12\x0e\n\x01x\x18\x01\x20\x01(\
+    \x05R\x01xB\0\x12\x0e\n\x01y\x18\x02\x20\x01(\x05R\x01yB\0:\0\"2\n\x0eTo\
+    uchPanUpdate\x12\x0e\n\x01x\x18\x01\x20\x01(\x05R\x01xB\0\x12\x0e\n\x01y\
+    \x18\x02\x20\x01(\x05R\x01yB\0:\0\"/\n\x0bTouchPanEnd\x12\x0e\n\x01x\x18\
+    \x01\x20\x01(\x05R\x01xB\0\x12\x0e\n\x01y\x18\x02\x20\x01(\x05R\x01yB\0:\
+    \0*\xaa\x08\n\nControlKey\x12\t\n\x03Alt\x10\x01\x1a\0\x12\x0f\n\tBacksp\
+    ace\x10\x02\x1a\0\x12\x0e\n\x08CapsLock\x10\x03\x1a\0\x12\r\n\x07Control\
+    \x10\x04\x1a\0\x12\x0c\n\x06Delete\x10\x05\x1a\0\x12\x0f\n\tDownArrow\
+    \x10\x06\x1a\0\x12\t\n\x03End\x10\x07\x1a\0\x12\x0c\n\x06Escape\x10\x08\
+    \x1a\0\x12\x08\n\x02F1\x10\t\x1a\0\x12\t\n\x03F10\x10\n\x1a\0\x12\t\n\
+    \x03F11\x10\x0b\x1a\0\x12\t\n\x03F12\x10\x0c\x1a\0\x12\x08\n\x02F2\x10\r\
+    \x1a\0\x12\x08\n\x02F3\x10\x0e\x1a\0\x12\x08\n\x02F4\x10\x0f\x1a\0\x12\
+    \x08\n\x02F5\x10\x10\x1a\0\x12\x08\n\x02F6\x10\x11\x1a\0\x12\x08\n\x02F7\
+    \x10\x12\x1a\0\x12\x08\n\x02F8\x10\x13\x1a\0\x12\x08\n\x02F9\x10\x14\x1a\
+    \0\x12\n\n\x04Home\x10\x15\x1a\0\x12\x0f\n\tLeftArrow\x10\x16\x1a\0\x12\
+    \n\n\x04Meta\x10\x17\x1a\0\x12\x0c\n\x06Option\x10\x18\x1a\0\x12\x0e\n\
+    \x08PageDown\x10\x19\x1a\0\x12\x0c\n\x06PageUp\x10\x1a\x1a\0\x12\x0c\n\
+    \x06Return\x10\x1b\x1a\0\x12\x10\n\nRightArrow\x10\x1c\x1a\0\x12\x0b\n\
+    \x05Shift\x10\x1d\x1a\0\x12\x0b\n\x05Space\x10\x1e\x1a\0\x12\t\n\x03Tab\
+    \x10\x1f\x1a\0\x12\r\n\x07UpArrow\x10\x20\x1a\0\x12\r\n\x07Numpad0\x10!\
+    \x1a\0\x12\r\n\x07Numpad1\x10\"\x1a\0\x12\r\n\x07Numpad2\x10#\x1a\0\x12\
+    \r\n\x07Numpad3\x10$\x1a\0\x12\r\n\x07Numpad4\x10%\x1a\0\x12\r\n\x07Nump\
+    ad5\x10&\x1a\0\x12\r\n\x07Numpad6\x10'\x1a\0\x12\r\n\x07Numpad7\x10(\x1a\
+    \0\x12\r\n\x07Numpad8\x10)\x1a\0\x12\r\n\x07Numpad9\x10*\x1a\0\x12\x0c\n\
     \x06Cancel\x10+\x1a\0\x12\x0b\n\x05Clear\x10,\x1a\0\x12\n\n\x04Menu\x10-\
     \x1a\0\x12\x0b\n\x05Pause\x10.\x1a\0\x12\n\n\x04Kana\x10/\x1a\0\x12\x0c\
     \n\x06Hangul\x100\x1a\0\x12\x0b\n\x05Junja\x101\x1a\0\x12\x0b\n\x05Final\
