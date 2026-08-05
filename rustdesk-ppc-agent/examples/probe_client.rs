@@ -76,72 +76,92 @@ fn main() {
     s.set_read_timeout(Some(Duration::from_secs(20))).ok();
     let mut ch: Option<SecureChannel> = None;
 
-    // 1. SignedId
-    let signed = match recv(&mut s, &mut ch).expect("no signed_id").union {
-        Some(message::Union::signed_id(x)) => x.id,
-        other => {
-            eprintln!("FAIL: expected signed_id, got {:?}", other.is_some());
-            std::process::exit(1)
+    // 1. The agent either opens with signed_id (secure mode) or goes straight to
+    //    hash (direct-IP mode, which is what a real client gets).
+    let first = recv(&mut s, &mut ch).expect("no first message");
+    let hash = match first.union {
+        Some(message::Union::hash(h)) => {
+            println!("  mode: direct-IP (no key exchange, UNENCRYPTED)");
+            h
         }
-    };
-    let text = match &expect_pk {
-        Some(pkb) if pkb.len() == sign::PUBLICKEYBYTES => {
-            let mut k = [0u8; sign::PUBLICKEYBYTES];
-            k.copy_from_slice(pkb);
-            match sign::verify(&signed, &sign::PublicKey(k)) {
-                Ok(v) => {
-                    println!("  signed_id signature: VERIFIED");
-                    String::from_utf8(v).unwrap()
+        Some(message::Union::signed_id(x)) => {
+            println!("  mode: secure (signed_id offered)");
+            let signed = x.id;
+            let text = match &expect_pk {
+                Some(pkb) if pkb.len() == sign::PUBLICKEYBYTES => {
+                    let mut k = [0u8; sign::PUBLICKEYBYTES];
+                    k.copy_from_slice(pkb);
+                    match sign::verify(&signed, &sign::PublicKey(k)) {
+                        Ok(v) => {
+                            println!("  signed_id signature: VERIFIED");
+                            String::from_utf8(v).unwrap()
+                        }
+                        Err(_) => {
+                            eprintln!("FAIL: signed_id signature did not verify");
+                            std::process::exit(1)
+                        }
+                    }
                 }
-                Err(_) => {
-                    eprintln!("FAIL: signed_id signature did not verify");
+                _ => {
+                    println!("  signed_id signature: not checked (no pubkey given)");
+                    String::from_utf8_lossy(&signed[sign::SIGNATUREBYTES..]).into_owned()
+                }
+            };
+            let mut parts = text.splitn(2, '\0');
+            println!("  agent id  : {}", parts.next().unwrap_or(""));
+            let raw = b64_decode(parts.next().unwrap_or("")).expect("bad ephemeral key b64");
+            let mut pkb = [0u8; box_::PUBLICKEYBYTES];
+            pkb.copy_from_slice(&raw);
+
+            let sym = secretbox::gen_key();
+            let (our_pk, our_sk) = box_::gen_keypair();
+            let sealed = box_::seal(
+                &sym.0,
+                &box_::Nonce([0u8; box_::NONCEBYTES]),
+                &box_::PublicKey(pkb),
+                &our_sk,
+            );
+            let mut pk = PublicKey::new();
+            pk.asymmetric_value = our_pk.0.to_vec();
+            pk.symmetric_value = sealed;
+            let mut m = Message::new();
+            m.set_public_key(pk);
+            send(&mut s, &mut ch, &m).expect("send public_key");
+            ch = Some(SecureChannel::new(sym));
+            println!("  secure channel established");
+
+            match recv(&mut s, &mut ch).expect("no hash").union {
+                Some(message::Union::hash(h)) => h,
+                _ => {
+                    eprintln!("FAIL: expected hash");
                     std::process::exit(1)
                 }
             }
         }
-        _ => {
-            println!("  signed_id signature: not checked (no pubkey given)");
-            // Combined form: 64-byte signature then the message.
-            String::from_utf8_lossy(&signed[sign::SIGNATUREBYTES..]).into_owned()
-        }
-    };
-    let mut parts = text.splitn(2, '\0');
-    let their_id = parts.next().unwrap_or("");
-    let their_pk_b64 = parts.next().unwrap_or("");
-    println!("  agent id  : {}", their_id);
-    let raw = b64_decode(their_pk_b64).expect("bad ephemeral key b64");
-    assert_eq!(raw.len(), box_::PUBLICKEYBYTES, "ephemeral key wrong length");
-    let mut pkb = [0u8; box_::PUBLICKEYBYTES];
-    pkb.copy_from_slice(&raw);
-
-    // 2. seal a symmetric key to the agent's ephemeral key
-    let sym = secretbox::gen_key();
-    let (our_pk, our_sk) = box_::gen_keypair();
-    let sealed = box_::seal(
-        &sym.0,
-        &box_::Nonce([0u8; box_::NONCEBYTES]),
-        &box_::PublicKey(pkb),
-        &our_sk,
-    );
-    let mut pk = PublicKey::new();
-    pk.asymmetric_value = our_pk.0.to_vec();
-    pk.symmetric_value = sealed;
-    let mut m = Message::new();
-    m.set_public_key(pk);
-    send(&mut s, &mut ch, &m).expect("send public_key");
-    ch = Some(SecureChannel::new(sym));
-    println!("  secure channel established");
-
-    // 3. Hash
-    let hash = match recv(&mut s, &mut ch).expect("no hash").union {
-        Some(message::Union::hash(h)) => h,
-        _ => {
-            eprintln!("FAIL: expected hash");
+        other => {
+            eprintln!("FAIL: unexpected first message (some={})", other.is_some());
             std::process::exit(1)
         }
     };
 
-    // 4. LoginRequest
+    // 2. Probe with an empty password exactly as a real client does, then send
+    //    the real one on the SAME connection.
+    let mut req = LoginRequest::new();
+    req.my_id = "probe-client".into();
+    req.my_name = "probe".into();
+    let mut m = Message::new();
+    m.set_login_request(req);
+    send(&mut s, &mut ch, &m).expect("send empty-password probe");
+    match recv(&mut s, &mut ch).expect("no reply to probe").union {
+        Some(message::Union::login_response(r)) => match r.union {
+            Some(login_response::Union::error(e)) => println!("  probe -> \"{}\" (expected \"Empty Password\")", e),
+            Some(login_response::Union::peer_info(_)) => println!("  probe -> accepted with no password?!"),
+            None => println!("  probe -> empty login_response"),
+        },
+        other => println!("  probe -> unexpected {:?}", other.is_some()),
+    }
+
+    // 3. LoginRequest with the real password, on the same connection
     let mut req = LoginRequest::new();
     req.my_id = "probe-client".into();
     req.my_name = "probe".into();

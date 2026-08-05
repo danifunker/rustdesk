@@ -1,170 +1,195 @@
-//! Mouse and keyboard injection via Quartz Event Services.
+//! Mouse and keyboard injection, over the C shim in `input_shim.c`.
 //!
-//! Unlike capture, this needed no archaeology: `CGEventCreateMouseEvent`,
-//! `CGEventCreateKeyboardEvent`, `CGEventCreateScrollWheelEvent` and `CGEventPost`
-//! all date from 10.4 and are present on the G5 (verified against the 10.5 SDK
-//! headers). Upstream's `libs/enigo` uses the same calls.
+//! Everything goes through the shim because `CGPoint` is two doubles passed
+//! **by value**, and on 32-bit PowerPC that is exactly where a naive
+//! `extern "C"` declaration stops matching the calling convention. A direct FFI
+//! delivered x correctly and left y as denormal garbage:
 //!
-//! `MouseEvent.mask` packs two fields, as in `libs/enigo` and RustDesk's client:
-//!   * low 3 bits  — event type: 0 move, 1 button down, 2 button up, 3 wheel
-//!   * bits 3..    — which button: 1 left, 2 right, 4 middle
+//! ```text
+//!   asked for     : 640, 360
+//!   cursor after  : 640, 0.0000...805
+//! ```
+//!
+//! Only scalars cross the boundary now; the struct is built and consumed in C.
+//!
+//! `MouseEvent.mask` packs two fields, matching `input_service.rs`:
+//!   * low 3 bits — 0 move, 1 down, 2 up, 3 wheel
+//!   * bits 3..   — 1 left, 2 right, 4 middle
 
-use std::os::raw::{c_double, c_int, c_void};
+use std::os::raw::{c_double, c_int, c_uint};
 
-use crate::message_proto::{KeyEvent, MouseEvent};
+use crate::message_proto::{key_event, ControlKey, KeyEvent, MouseEvent};
 
-type CGEventRef = *mut c_void;
-type CGEventSourceRef = *mut c_void;
-type CGEventType = u32;
-type CGKeyCode = u16;
-type CGMouseButton = u32;
-type CGEventTapLocation = u32;
-
-const K_CG_HID_EVENT_TAP: CGEventTapLocation = 0;
-const K_CG_EVENT_SOURCE_STATE_HID: c_int = 1;
-
-const NX_MOUSEMOVED: CGEventType = 5;
-const NX_LMOUSEDOWN: CGEventType = 1;
-const NX_LMOUSEUP: CGEventType = 2;
-const NX_RMOUSEDOWN: CGEventType = 3;
-const NX_RMOUSEUP: CGEventType = 4;
-const NX_OMOUSEDOWN: CGEventType = 25;
-const NX_OMOUSEUP: CGEventType = 26;
-const NX_LMOUSEDRAGGED: CGEventType = 6;
-const NX_RMOUSEDRAGGED: CGEventType = 7;
-
-const BTN_LEFT: CGMouseButton = 0;
-const BTN_RIGHT: CGMouseButton = 1;
-const BTN_CENTER: CGMouseButton = 2;
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct CGPoint {
-    x: c_double,
-    y: c_double,
+extern "C" {
+    fn rd_mouse(ty: c_int, x: c_double, y: c_double, button: c_int);
+    fn rd_scroll(dy: c_int);
+    fn rd_key(keycode: c_int, down: c_int);
+    fn rd_key_unicode(cp: c_uint, down: c_int);
+    fn rd_key_with_flags(keycode: c_int, down: c_int, flags: c_uint);
+    fn rd_cursor_pos(x: *mut c_double, y: *mut c_double);
 }
 
-#[link(name = "ApplicationServices", kind = "framework")]
-extern "C" {
-    fn CGEventSourceCreate(state: c_int) -> CGEventSourceRef;
-    fn CGEventCreateMouseEvent(
-        source: CGEventSourceRef,
-        mouse_type: CGEventType,
-        position: CGPoint,
-        button: CGMouseButton,
-    ) -> CGEventRef;
-    fn CGEventCreateKeyboardEvent(
-        source: CGEventSourceRef,
-        keycode: CGKeyCode,
-        keydown: bool,
-    ) -> CGEventRef;
-    fn CGEventCreateScrollWheelEvent(
-        source: CGEventSourceRef,
-        units: u32,
-        wheel_count: u32,
-        wheel1: i32,
-    ) -> CGEventRef;
-    fn CGEventPost(tap: CGEventTapLocation, event: CGEventRef);
-    fn CFRelease(cf: *mut c_void);
+/// Where the system thinks the cursor is. Out-params, not a returned struct.
+pub fn cursor_position() -> (f64, f64) {
+    let (mut x, mut y) = (0.0f64, 0.0f64);
+    unsafe { rd_cursor_pos(&mut x, &mut y) };
+    (x, y)
+}
+
+/// Mac virtual keycodes, from `HIToolbox/Events.h`. Only the keys a remote
+/// session actually needs; anything else falls back to unicode entry.
+fn control_key_to_keycode(k: ControlKey) -> Option<c_int> {
+    Some(match k {
+        ControlKey::Return | ControlKey::NumpadEnter => 36,
+        ControlKey::Tab => 48,
+        ControlKey::Space => 49,
+        ControlKey::Backspace => 51,
+        ControlKey::Escape => 53,
+        ControlKey::Delete => 117,
+        ControlKey::Home => 115,
+        ControlKey::End => 119,
+        ControlKey::PageUp => 116,
+        ControlKey::PageDown => 121,
+        ControlKey::LeftArrow => 123,
+        ControlKey::RightArrow => 124,
+        ControlKey::DownArrow => 125,
+        ControlKey::UpArrow => 126,
+        ControlKey::Shift => 56,
+        ControlKey::RShift => 60,
+        ControlKey::Control => 59,
+        ControlKey::RControl => 62,
+        ControlKey::Alt => 58,
+        ControlKey::RAlt => 61,
+        ControlKey::Meta => 55,
+        ControlKey::RWin => 54,
+        ControlKey::CapsLock => 57,
+        ControlKey::F1 => 122,
+        ControlKey::F2 => 120,
+        ControlKey::F3 => 99,
+        ControlKey::F4 => 118,
+        ControlKey::F5 => 96,
+        ControlKey::F6 => 97,
+        ControlKey::F7 => 98,
+        ControlKey::F8 => 100,
+        ControlKey::F9 => 101,
+        ControlKey::F10 => 109,
+        ControlKey::F11 => 103,
+        ControlKey::F12 => 111,
+        _ => return None,
+    })
+}
+
+/// `CGEventFlags` bits for the modifiers a client sends alongside a key.
+/// Protobuf wraps repeated enums, so these arrive as `ProtobufEnumOrUnknown`.
+fn modifier_flags(mods: &[protobuf::ProtobufEnumOrUnknown<ControlKey>]) -> c_uint {
+    let mut f: c_uint = 0;
+    for m in mods {
+        f |= match m.enum_value_or_default() {
+            ControlKey::Shift | ControlKey::RShift => 0x0002_0000,
+            ControlKey::Control | ControlKey::RControl => 0x0004_0000,
+            ControlKey::Alt | ControlKey::RAlt => 0x0008_0000,
+            ControlKey::Meta | ControlKey::RWin => 0x0010_0000,
+            ControlKey::CapsLock => 0x0001_0000,
+            _ => 0,
+        };
+    }
+    f
 }
 
 pub struct Injector {
-    source: CGEventSourceRef,
     /// Buttons currently held, so a move can be reported as the drag it is —
-    /// posting a plain move while a button is down breaks selection and drag.
+    /// posting a plain move mid-drag breaks selection and drag-and-drop.
     buttons_down: u8,
-    last: (f64, f64),
 }
-
-// The event source is only touched from the single session thread.
-unsafe impl Send for Injector {}
 
 impl Injector {
     pub fn new() -> Self {
-        Self {
-            source: unsafe { CGEventSourceCreate(K_CG_EVENT_SOURCE_STATE_HID) },
-            buttons_down: 0,
-            last: (0.0, 0.0),
-        }
-    }
-
-    fn post_mouse(&self, ty: CGEventType, pt: CGPoint, button: CGMouseButton) {
-        unsafe {
-            let e = CGEventCreateMouseEvent(self.source, ty, pt, button);
-            if !e.is_null() {
-                CGEventPost(K_CG_HID_EVENT_TAP, e);
-                CFRelease(e);
-            }
-        }
+        Self { buttons_down: 0 }
     }
 
     pub fn mouse(&mut self, ev: &MouseEvent) {
-        let pt = CGPoint { x: ev.x as f64, y: ev.y as f64 };
-        self.last = (pt.x, pt.y);
+        let (x, y) = (ev.x as f64, ev.y as f64);
         let kind = ev.mask & 0x7;
         let button = ev.mask >> 3;
-        match kind {
-            0 => {
-                // Report a move as a drag if a button is held.
-                let ty = if self.buttons_down & 1 != 0 {
-                    NX_LMOUSEDRAGGED
-                } else if self.buttons_down & 2 != 0 {
-                    NX_RMOUSEDRAGGED
-                } else {
-                    NX_MOUSEMOVED
-                };
-                self.post_mouse(ty, pt, BTN_LEFT);
-            }
-            1 => {
-                let (ty, b) = match button {
-                    2 => (NX_RMOUSEDOWN, BTN_RIGHT),
-                    4 => (NX_OMOUSEDOWN, BTN_CENTER),
-                    _ => (NX_LMOUSEDOWN, BTN_LEFT),
-                };
-                self.buttons_down |= button as u8;
-                self.post_mouse(ty, pt, b);
-            }
-            2 => {
-                let (ty, b) = match button {
-                    2 => (NX_RMOUSEUP, BTN_RIGHT),
-                    4 => (NX_OMOUSEUP, BTN_CENTER),
-                    _ => (NX_LMOUSEUP, BTN_LEFT),
-                };
-                self.buttons_down &= !(button as u8);
-                self.post_mouse(ty, pt, b);
-            }
-            3 => unsafe {
-                // Wheel delta arrives in y; 1 = "line" units.
-                let e = CGEventCreateScrollWheelEvent(self.source, 1, 1, ev.y);
-                if !e.is_null() {
-                    CGEventPost(K_CG_HID_EVENT_TAP, e);
-                    CFRelease(e);
+        let btn_idx = match button {
+            2 => 1, // right
+            4 => 2, // middle
+            _ => 0, // left
+        };
+        unsafe {
+            match kind {
+                0 => {
+                    let ty = if self.buttons_down & 1 != 0 {
+                        3 // left-dragged
+                    } else if self.buttons_down & 2 != 0 {
+                        4 // right-dragged
+                    } else {
+                        0 // moved
+                    };
+                    rd_mouse(ty, x, y, 0);
                 }
-            },
-            _ => {}
+                1 => {
+                    self.buttons_down |= button as u8;
+                    rd_mouse(1, x, y, btn_idx);
+                }
+                2 => {
+                    self.buttons_down &= !(button as u8);
+                    rd_mouse(2, x, y, btn_idx);
+                }
+                3 => rd_scroll(ev.y),
+                _ => {}
+            }
         }
     }
 
     pub fn key(&mut self, ev: &KeyEvent) {
-        // Only raw keycodes for now; ControlKey/unicode mapping comes with the
-        // keymap table, which is a table-building exercise rather than a
-        // platform one.
-        if let Some(crate::message_proto::key_event::Union::chr(c)) = ev.union {
-            unsafe {
-                let e = CGEventCreateKeyboardEvent(self.source, c as CGKeyCode, ev.down);
-                if !e.is_null() {
-                    CGEventPost(K_CG_HID_EVENT_TAP, e);
-                    CFRelease(e);
+        let flags = modifier_flags(&ev.modifiers);
+        let down = if ev.down { 1 } else { 0 };
+        unsafe {
+            match &ev.union {
+                Some(key_event::Union::control_key(ck)) => {
+                    match control_key_to_keycode(ck.enum_value_or_default()) {
+                        Some(code) => {
+                            if flags != 0 {
+                                rd_key_with_flags(code, down, flags);
+                            } else {
+                                rd_key(code, down);
+                            }
+                            // `press` means a full down+up in one message.
+                            if ev.press {
+                                rd_key(code, 0);
+                            }
+                        }
+                        None => log::debug!("unmapped control key {:?}", ck),
+                    }
                 }
+                // A raw Mac virtual keycode.
+                Some(key_event::Union::chr(c)) => {
+                    if flags != 0 {
+                        rd_key_with_flags(*c as c_int, down, flags);
+                    } else {
+                        rd_key(*c as c_int, down);
+                    }
+                    if ev.press {
+                        rd_key(*c as c_int, 0);
+                    }
+                }
+                // A character, with no keycode implied. Typed via the event's
+                // unicode string, which avoids needing a layout-specific map.
+                Some(key_event::Union::unicode(u)) => {
+                    rd_key_unicode(*u, down);
+                    if ev.press {
+                        rd_key_unicode(*u, 0);
+                    }
+                }
+                Some(key_event::Union::seq(s)) => {
+                    for ch in s.chars() {
+                        rd_key_unicode(ch as c_uint, 1);
+                        rd_key_unicode(ch as c_uint, 0);
+                    }
+                }
+                None => {}
             }
-        }
-    }
-}
-
-impl Drop for Injector {
-    fn drop(&mut self) {
-        if !self.source.is_null() {
-            unsafe { CFRelease(self.source) };
         }
     }
 }

@@ -18,4 +18,13 @@ fn main() {
         .compile("vpxshim");
     println!("cargo:rustc-link-lib=static=vpx");
     println!("cargo:rerun-if-changed=src/vpx_shim.c");
+
+    // Quartz injection. In C because CGPoint crosses the API by value, and a
+    // 16-byte two-double struct is where the 32-bit PowerPC calling convention
+    // diverges from a naive extern "C" declaration.
+    cc::Build::new()
+        .file("src/input_shim.c")
+        .opt_level(2)
+        .compile("inputshim");
+    println!("cargo:rerun-if-changed=src/input_shim.c");
 }
