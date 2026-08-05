@@ -1,224 +1,201 @@
 # RESUME — RustDesk agent for PowerPC Mac OS X (G5 / Leopard)
 
-Pick-up point for the PowerPC port. Written 2026-08-04.
+Pick-up point. Last updated 2026-08-04, end of the session where it first worked.
 
-**Goal:** run a RustDesk *agent* on a dual-G5 running Mac OS X 10.5.8, so a
-modern client can connect **into** it (the G5 is the controlled machine). Video
-+ input are phase 1, audio is wanted in phase 1, clipboard is phase 2.
-
-Read [`powerpc-mrustc-scope.md`](powerpc-mrustc-scope.md) for the *why*; this
-file is the *where we are and what's next*.
+**A modern RustDesk client connects to a dual-G5 running Mac OS X 10.5.8 and
+displays its screen.** Login works, mouse and keyboard injection work. One
+blocker remains: the captured image is frozen after the first frame.
 
 ---
 
-## The one decision that shapes everything
+## Current state in one screen
 
-**We are NOT porting `src/server/`. We are building a small standalone agent.**
+```
+branch          rustdesk/ppc-agent          (based on upstream 1931cb8c7, v1.1.8)
+mrustc          ppc-upstream               2 commits off upstream/master, for PRs
+                ppc-async-fixes            5 async fixes, not needed by this agent
+the machine     ssh ppctiger  = admin@192.168.99.116
+agent binary    ~/rustdesk-agent on the G5, running with -vv, log at ~/agent.log
+password        ppctest123
+connect         type 192.168.99.116 into the client's ID field (no port)
+```
 
-RustDesk is tokio top to bottom, and mrustc has two async gaps that are deep and
-unbounded — an `async {}` block nested inside an `async fn` (which is exactly
-`tokio::spawn(async move { .. })`, used unavoidably in
-`rendezvous_mediator.rs:59,75`) and `Pin<&mut Self>` vtable thunks. Neither is
-optional for a real port.
-
-A single-peer agent needs no async at all: blocking I/O and a couple of threads.
-That removes both gaps and takes the dependency graph from **376 crates**
-(current RustDesk) → **175** (ported 1.1.8) → **18** (this agent).
-
-The `ppc-agent` branch still carries the *port* attempt (manifest deviations,
-headless CM, build tooling). It is not wasted — it is where the protocol was
-mapped, and the headless-CM/self-hosted work applies either way — but the
-active line of work is `rustdesk-ppc-agent/`.
+Working: handshake, auth, config/identity, capture (once), ARGB→I420, VP8
+encode, VideoFrame delivery, mouse injection, keyboard injection.
+30 host tests.
 
 ---
 
-## Where things stand
+## THE BLOCKER: the framebuffer is frozen
 
-### Done and verified
+`CGDisplayBaseAddress` returns a valid image **once** and then never changes.
+`--probe-live` on the G5:
 
-- **mrustc**: 5 async fixes, committed as one commit on branch
-  `ppc-async-fixes` in `~/repos/mrustc` (`16cbf311`). Regression set: 6 pass,
-  2 known-remaining (the two gaps above). See the commit message for each fix.
-- **`rustdesk-ppc-agent/`**: crate scaffolded, **13 tests passing**.
-  - `src/frame.rs` — RustDesk's length-prefix framing on blocking `std::io`,
-    checked against upstream's own boundary vectors.
-  - `src/crypto.rs` — secure channel + handshake + login hash, with the wire
-    spec written down in the module header. Tests pin the details that would
-    silently break: nonce is little-endian **on a big-endian host**, counters
-    are **pre-incremented** (first frame uses nonce 1, not 0), the box nonce in
-    the key exchange is **all zeros**, `sign::sign` is the **combined** form.
-  - protobuf generated from `../libs/hbb_common/protos/*.proto`, so the wire
-    format is shared with the peer rather than re-specified.
-- **G5 is reachable again**, see "SSH" below.
+```
+t= 0s  dirty bands: 16
+t= 1s  dirty bands: 0
+...
+t= 9s  dirty bands: 0
+=> framebuffer appears FROZEN (nothing changed after the first probe)
+```
 
-### Not started
+Already ruled out:
+- **Not** a stale cached pointer — `CGDisplayBaseAddress` is now re-read every
+  frame (in case the window server page-flips). No change.
+- **Not** the dirty-band sampling being too coarse — the very first probe sees
+  all 16 bands, so the mechanism works; later probes see a genuinely identical
+  buffer.
 
-- `src/session.rs` — handshake sequence + message loop (lift from
-  `src/server/connection.rs`).
-- `src/capture.rs` — **the one genuinely new piece.** `CGDisplayStream` is
-  10.8+; Leopard needs `CGDisplayCapture` + `CGDisplayBaseAddress` /
-  `CGDisplayBytesPerRow`.
-- `src/encode.rs` (libvpx VP8), `src/input.rs` (`CGEventPost`),
-  `src/convert.rs` (BGRA→I420, hand-written to avoid libyuv).
-- Native libraries on the G5 — see below. **Nothing has been built or installed
-  on the G5 yet; all G5 access so far has been read-only probing.**
+Leading hypothesis: under **Quartz Extreme** the desktop is composited on the
+GPU, and this pointer hands back a main-memory buffer that is no longer updated.
+If that is right, capture must be replaced — the usual pre-10.6 route is an
+OpenGL readback (`CGLCreateContext` with a full-screen pixel format, then
+`glReadPixels`). That is real work, not a tweak.
+
+**Next diagnostic:** with a client connected, move the mouse and watch the G5's
+*physical* screen. If the cursor moves there while the client's image stays
+frozen, input is live and capture is dead — which confirms the hypothesis and
+justifies the OpenGL rewrite.
+
+Worth also trying first, cheaply: disabling Quartz Extreme / beam-sync, or
+running at a lower colour depth, to see whether the framebuffer becomes live.
 
 ---
 
-## The G5
+## The lesson that cost the most time
 
-`ssh ppctiger` → `admin@192.168.99.116`. Mac OS X **10.5.8** (Darwin 9.8.0,
-RELEASE_PPC), **dual PowerPC 970 @ 2.3 GHz, 4 GB RAM**, 27 GB free.
+**Do not let C structs cross the FFI boundary on 32-bit PowerPC.**
 
-### SSH — the key is passphrase-protected
+`CGPoint` is two doubles passed *by value*. A naive `extern "C"` declaration
+delivered x correctly and left y as denormal garbage:
 
-Claude's shell env does not persist between commands, so an agent at a *fixed
-socket path* is required:
+```
+asked for     : 640, 360
+cursor after  : 640, 0.0000...805
+```
+
+`CGEventGetLocation` was broken for the mirror-image reason — a 16-byte *return*
+uses a hidden pointer here. The Rust was byte-for-byte equivalent to enigo's
+macOS implementation, so reading it found nothing.
+
+The fix, and the rule: build and consume the struct in C, pass only scalars, use
+out-params instead of returned structs. Two shims exist for exactly this —
+`src/input_shim.c` (CGPoint) and `src/vpx_shim.c` (`vpx_codec_enc_cfg_t`).
+Anything new that touches a struct-taking C API should follow suit.
+
+---
+
+## Protocol lessons (all found by testing against a real client)
+
+Three deviations, none of which host tests could have caught:
+
+1. **Direct IP means unencrypted, and the client speaks second.** Upstream's
+   `direct_server` calls `create_tcp_connection(.., secure = false)`, and the
+   client's direct branch never calls `secure_connection` at all. Sending
+   `signed_id` and waiting for `public_key` deadlocks both sides. `--secure`
+   re-enables the exchange for peers that know our key.
+2. **Login error strings are protocol, not prose.** `handle_login_error`
+   compares literals: `"Empty Password"` makes the client prompt,
+   `"Wrong Password"` makes it offer a retry. Answering an empty-password probe
+   with "Wrong Password" makes it loop silently.
+3. **The connection must survive a failed login.** A client needs two attempts
+   on one socket — an empty probe, then the real password. Closing after the
+   error makes the password dialog flash up and vanish.
+
+Also: `VideoFrame.vp8s` is **field 12**; sending VP8 in `vp9s` (field 6) feeds it
+to the client's VP9 decoder. Backported into our proto.
+
+Verified compatible against current `hbb_common`: framing is byte-identical,
+`PublicKey`/`Hash` are field-for-field identical, and `LoginRequest`/
+`LoginResponse`/`PeerInfo` only gained fields.
+
+---
+
+## Build and deploy
+
+Incremental PowerPC build is **~90 seconds**; clean is ~14 minutes.
 
 ```bash
 ssh-agent -a /tmp/ssh-agent-ppc.sock >/dev/null 2>&1
-SSH_AUTH_SOCK=/tmp/ssh-agent-ppc.sock ssh-add ~/.ssh/id_rsa   # prompts once
+SSH_AUTH_SOCK=/tmp/ssh-agent-ppc.sock ssh-add ~/.ssh/id_rsa    # passphrase, once
+
+export SSH_AUTH_SOCK=/tmp/ssh-agent-ppc.sock
+export PPC_HOST=ppctiger PPC_CPU_FLAGS="-mcpu=970 -maltivec" PPC_JOBS=2
+export PPC_SHIM=~/repos/rusty-backup/rb-cli-ppc/shim/ppc-compat.c
+export PPC_LDFLAGS="-L/opt/local/lib -L/Users/admin/ppc-libs/lib -latomic \
+    -lMacportsLegacySupport -lgcc_s.1 -lsodium -lvpx"
+cd ~/repos/mrustc
+SODIUM_LIB_DIR=/Users/admin/ppc-libs/lib \
+CC_powerpc_apple_darwin=~/repos/rusty-backup/scripts/ppc-cc-remote.py \
+AR_powerpc_apple_darwin=~/repos/rusty-backup/scripts/ppc-ar-remote.py \
+MRUSTC_TARGET_VER=1.74 ./bin/minicargo ~/repos/rustdesk/rustdesk-ppc-agent \
+  --vendor-dir ~/repos/rustdesk/rustdesk-ppc-agent/vendor \
+  --target powerpc-apple-darwin \
+  -L output-1.74.0-powerpc-apple-darwin-g5 --output-dir <out> -j 2
 ```
 
-Then prefix every remote call with `SSH_AUTH_SOCK=/tmp/ssh-agent-ppc.sock`.
-`~/.ssh/config` already has the `ppctiger` entry with
-`PubkeyAcceptedAlgorithms +ssh-rsa` (Leopard's sshd needs it).
+Deploy and restart (kill by `comm`, never by matching the full command line —
+a pattern that matches your own shell will kill it):
 
-### Already installed — nothing to do
+```bash
+ssh ppctiger 'ps -axo pid,comm | awk "\$2 ~ /rustdesk-agent/ {print \$1}" \
+  | while read p; do kill -9 $p; done; sleep 2'
+scp <out>/rustdesk-agent ppctiger:~/rustdesk-agent
+ssh ppctiger 'rm -f ~/agent.log; nohup ~/rustdesk-agent --port 21118 -vv > ~/agent.log 2>&1 &'
+```
 
-gcc **10.5.0** (`/opt/local/libexec/gcc10-bootstrap/bin/gcc`, needed for C11
-`<stdatomic.h>`), **MacportsLegacySupport**, SDKs 10.3.9 / 10.4u / 10.5,
-cctools + ld64 (`darwin-xtools`), gmake, MacPorts 2.12.5.
+Diagnostics:
 
-### Missing — the actual gap
+```bash
+ssh ppctiger '~/rustdesk-agent --probe-display'   # per-stage timings
+ssh ppctiger '~/rustdesk-agent --probe-live'      # capture liveness + injection self-test
+ssh ppctiger 'tail -f ~/agent.log'                # protocol trace
+cd rustdesk-ppc-agent && cargo test               # 30 host tests
+cargo run --example probe_client -- 192.168.99.116:21118 ppctest123
+```
 
-| library | for | notes |
-|---|---|---|
-| **libsodium** | all protocol crypto | `libsodium-sys` takes `SODIUM_LIB_DIR`, so point it at the PPC build |
-| **libvpx** | VP8 encode | the slow one to build |
-| **libopus** | audio (phase 1) | via `magnum-opus`, which ships a checked-in `src/opus_ffi.rs` — its bindgen call can be script-overridden away |
-| ~~libyuv~~ | BGRA→I420 | **skip** — ~30 lines to hand-write; its port drags cmake + ninja + libjpeg-turbo |
+Note the agent serves **one peer at a time**, so probe_client fails while a real
+client is connected.
 
-### Prebuilt 32-bit Leopard binaries DO exist — use them
+---
 
-I initially concluded they didn't. That was wrong: I had only checked
-macos-powerpc.org, whose `packages/` is all `darwin_10` (Snow Leopard) and whose
-`packages_ppc64/` is `darwin_9.**ppc64**` — right OS, wrong architecture, since
-our whole toolchain is 32-bit (`powerpc-apple-darwin`).
+## Performance (measured, 1920x1080)
 
-Two *other* mirrors publish **`darwin_9.ppc`** — Leopard, 32-bit, exactly ours:
-
-| mirror | url |
+| stage | cost |
 |---|---|
-| **kemonomimi** | `https://kemonomimi.nl/ppcports/software` |
-| **leopard-ports** | `https://dist.leopard-ports.org/software` |
+| dirty-band probe | 6 ms |
+| capture (VRAM → RAM) | 347 ms |
+| ARGB → I420 | 180 ms |
+| VP8 encode | 83 ms |
+| **full-screen change** | **610 ms** |
+| **idle** | **6 ms** |
 
-Between them everything we need is prebuilt:
-
-| package | where | note |
-|---|---|---|
-| `libvpx-1.16.0_2+altivec` | kemonomimi | **AltiVec** — matters for G5 encode |
-| `libopus-1.6.1_0` | both | |
-| `libsodium-1.0.22_0` | kemonomimi | leopard-ports has no libsodium |
-| `libyuv-0.0.1922-20260128_0` | both | |
-| `legacy-support`, `libjpeg-turbo`, `libgcc14`, `pkgconfig` | leopard-ports | deps, resolved automatically |
-
-**This reverses the "skip libyuv" advice** in the scope doc: it was only worth
-hand-writing the BGRA→I420 conversion because its port dragged in cmake + ninja
-+ libjpeg-turbo from source. As a prebuilt binary it is free, and likely faster
-than anything hand-rolled.
-
-Setup (needs sudo; Leopard's sudo has no `-n`, so it must be run interactively):
-
-```bash
-curl -fL https://leopard-ports.org/add-mirrors.sh -o /tmp/add-mirrors.sh
-less /tmp/add-mirrors.sh          # 31 lines: backs up archive_sites.conf, adds 3 mirrors
-sudo bash /tmp/add-mirrors.sh
-sudo port sync
-sudo port install libvpx libyuv           # +altivec libvpx from kemonomimi
-```
-
-The signing key is **already installed** — `pubkeys.conf` points at
-`/opt/local/share/macports/leopard-ports-pubkey.pem`.
-
-### What was already built from source (before the mirrors were found)
-
-Both live in `~/ppc-libs` and work; keeping them avoids re-testing:
-
-- **libsodium 1.0.18** — `libsodium.a`, arch `ppc7400`, ~3 min to build. Worth
-  keeping over the mirror's 1.0.22: `libsodium-sys 0.2.7` targets 1.0.18 exactly.
-- **libopus 1.3.1** — `libopus.a`. Either this or the mirror's 1.6.1 is fine.
-
-Build recipe, if either needs redoing:
-
-```bash
-CC=/opt/local/libexec/gcc10-bootstrap/bin/gcc ./configure \
-    --prefix=$HOME/ppc-libs --disable-shared --enable-static \
-    --disable-dependency-tracking
-gnumake -j2 install
-```
-
-Static-only on purpose: no dylib path juggling at runtime, and the same compiler
-that builds the mrustc-emitted C, so one libgcc throughout.
-
-### Fetching on the G5
-
-**`/opt/bootstrap/bin/curl` is 8.13.0 with OpenSSL 3.5.0** and does modern TLS
-fine; only `/usr/bin/curl` (7.16.4 / OpenSSL 0.9.7l) is stuck. Note
-`download.libsodium.org` now 404s for 1.0.18 — use the GitHub release asset.
-Opus is on `downloads.xiph.org`, not as a GitHub release asset.
-
-### Port trees
-
-`sources.conf` points at `PPCPorts/powerpc-ports.tar`. There is no separate
-Leopard *ports tree* to switch to — `PPCPorts-Leopard-2.12.5_1.zip` is the
-MacPorts **base** build for Leopard, and this box already runs base 2.12.5
-reporting `darwin 9 powerpc` with `build_arch ppc`. What differs per-OS is the
-binary archive, handled above.
+Capture is a hardware floor at ~23 MB/s, so **resolution is the lever** —
+1024x768 is 126 ms. Encode is the *cheapest* stage; tuning the codec is the
+least valuable thing available. Full detail and the reasoning in
+[`../rustdesk-ppc-agent/docs/videoperformance.md`](../rustdesk-ppc-agent/docs/videoperformance.md).
 
 ---
 
-## Next steps, in order
+## What is not implemented
 
-1. **Build libsodium** for PPC into `~/ppc-libs` (quick, unblocks all crypto).
-2. **`src/session.rs`** — handshake + message loop. Can be written and tested on
-   the Linux host against a real RustDesk client, before any PPC work.
-3. **Build libvpx + libopus.**
-4. **`src/capture.rs`** — the Leopard capture path. The one piece with no
-   upstream to copy.
-5. **First end-to-end transpile** through mrustc for `powerpc-apple-darwin`,
-   then compile on the G5 via `ppc-cc-remote.py`.
+See [`../rustdesk-ppc-agent/docs/BACKLOG.md`](../rustdesk-ppc-agent/docs/BACKLOG.md).
+Headlines: LAN discovery (the G5 will not appear in the client's discovered list;
+UDP 21119, `PeerDiscovery` needs backporting), audio (libopus is already on the
+machine), clipboard, cursor shape, multi-monitor, running as a service.
 
-Steps 2 and 4 are independent of the native libraries and of each other.
+Sessions are **unencrypted** in direct-IP mode. That is upstream's behaviour, and
+the user has accepted it for now.
 
 ---
 
-## Commands
+## Native libraries on the G5
 
-```bash
-# agent crate (host tests — this is the fast inner loop)
-cd rustdesk-ppc-agent && cargo test
+In `~/ppc-libs`: libsodium 1.0.18 and libopus 1.3.1 built from source with
+gcc10; libvpx 1.16.0 **+altivec** and libyuv taken prebuilt from the
+leopard-ports / kemonomimi `darwin_9.ppc` mirrors. There are no 32-bit Leopard
+binaries on macos-powerpc.org — its `packages/` is Snow Leopard and its
+`packages_ppc64/` is the wrong architecture.
 
-# the PORT attempt (separate line of work, see rustdesk-ppc/README.md)
-PPC_STUB_CC=1 rustdesk-ppc/build-ppc.sh hbb      # front-end only, no G5 needed
-rustdesk-ppc/build-ppc.sh vendor                 # re-resolve + re-vendor
-
-# mrustc
-cd ~/repos/mrustc && git checkout ppc-async-fixes && make -j$(nproc)
-```
-
-## Gotchas already paid for
-
-- **minicargo cannot read `git =` dependencies.** `rustdesk-ppc/patches/git-deps.py`
-  rewrites them to path deps into the vendor dir, and reverses (cargo needs the
-  real URLs to re-resolve). The build driver applies it automatically.
-- **`libc` must be pinned `=0.2.174`.** 0.2.175 introduced the `src/new/` module
-  tree, whose cfg_if'd glob re-exports mrustc cannot resolve on Apple targets.
-- **`bytes` must be pinned `=1.10.1`.** 1.11+ trips a mrustc lifetime bug.
-- **`protobuf-codegen-pure` aborts under modern std**, so every crate that runs
-  it needs `[profile.*.build-override] debug-assertions = false`.
-- **`psutil` looks de-forkable and is not** — its source is byte-identical to
-  published 3.2.1, but the fork exists to bump `platforms` off 0.2.1, and every
-  `platforms` 0.2.x is yanked. See the audit table in the scope doc §3f.
-- **`cpal` *was* de-forkable** — the fork only touches ALSA and Windows ASIO;
-  CoreAudio is byte-identical.
+MacPorts cannot supply these: every port wants `gcc16` as a build dependency,
+which on Leopard would build from source.
