@@ -340,6 +340,11 @@ struct Video {
     enc: crate::encode::Encoder,
     img: crate::convert::I420,
     start: std::time::Instant,
+    /// Kept so the encoder can be rebuilt if the resolution changes.
+    bitrate_kbps: u32,
+    /// Set when the encoder could not be rebuilt; the session carries on with
+    /// input only rather than dropping the peer.
+    broken: bool,
 }
 
 #[cfg(all(target_os = "macos", not(no_vpx)))]
@@ -349,12 +354,40 @@ impl Video {
         let img = crate::convert::I420::new(cap.width, cap.height);
         let enc = crate::encode::Encoder::new(img.width, img.height, bitrate_kbps)?;
         cap.invalidate();   // the new peer needs a full frame regardless
-        Ok(Self { cap, enc, img, start: std::time::Instant::now() })
+        Ok(Self {
+            cap,
+            enc,
+            img,
+            start: std::time::Instant::now(),
+            bitrate_kbps,
+            broken: false,
+        })
+    }
+
+    /// Rebuild the conversion and encode buffers around the current geometry.
+    fn resize(&mut self) -> Result<(), &'static str> {
+        self.img = crate::convert::I420::new(self.cap.width, self.cap.height);
+        self.enc = crate::encode::Encoder::new(self.img.width, self.img.height, self.bitrate_kbps)?;
+        self.cap.invalidate();
+        Ok(())
     }
 
     /// Probe, and if anything moved, capture/convert/encode one frame.
-    /// Returns None when the screen is unchanged -- the cheap path, ~21 ms.
+    /// Returns None when the screen is unchanged -- the cheap path, ~15 ms.
     fn next_frame(&mut self) -> Option<(Vec<u8>, bool, i64)> {
+        // Before anything reads the framebuffer: the copy length is derived from
+        // the cached geometry, so a resolution change that goes unnoticed reads
+        // past the end of the mapping.
+        if self.cap.refresh() {
+            log::info!("display is now {}x{}; rebuilding the encoder", self.cap.width, self.cap.height);
+            if let Err(e) = self.resize() {
+                log::error!("could not restart the encoder at the new size: {}", e);
+                self.broken = true;
+            }
+        }
+        if self.broken {
+            return None;
+        }
         let dirty = self.cap.dirty_bands();
         if !dirty.iter().any(|d| *d) {
             return None;

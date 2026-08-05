@@ -307,8 +307,16 @@ impl Capturer {
         }
     }
 
-    /// Re-read geometry; the user may have changed resolution under us.
-    /// Returns true if anything moved, in which case the encoder needs restarting.
+    /// Re-read the geometry, because the user may have changed resolution.
+    ///
+    /// **This has to be called before every read.** The copy length comes from
+    /// the cached `bytes_per_row * height`; if the screen has since become
+    /// smaller, that reads past the end of the mapping, which is a segfault
+    /// rather than a wrong picture.
+    ///
+    /// Returns true only when the *geometry* moved, meaning the encoder and the
+    /// I420 buffers have to be rebuilt around the new size. A base address that
+    /// moves on its own is not interesting -- it is picked up silently.
     pub fn refresh(&mut self) -> bool {
         unsafe {
             let (w, h, bpr) = (
@@ -317,12 +325,22 @@ impl Capturer {
                 CGDisplayBytesPerRow(self.display),
             );
             let base = CGDisplayBaseAddress(self.display);
-            let changed = w != self.width || h != self.height || bpr != self.bytes_per_row || base != self.base;
-            self.width = w;
-            self.height = h;
-            self.bytes_per_row = bpr;
             if !base.is_null() {
                 self.base = base;
+            }
+            // A geometry read can come back as zeros if the window server is
+            // momentarily unreachable. Keeping the old values is right: they
+            // describe a mapping that still exists, and a zero-sized frame would
+            // just break the encoder.
+            if w == 0 || h == 0 || bpr == 0 {
+                return false;
+            }
+            let changed = w != self.width || h != self.height || bpr != self.bytes_per_row;
+            if changed {
+                self.width = w;
+                self.height = h;
+                self.bytes_per_row = bpr;
+                self.sums = vec![u64::MAX; BANDS];
             }
             changed
         }
