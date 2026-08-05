@@ -490,6 +490,10 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
     #[cfg(target_os = "macos")]
     let mut last_peer_input = std::time::Instant::now()
         - std::time::Duration::from_millis(crate::cursor::SUPPRESS_AFTER_INPUT_MS + 1);
+    // Start from a clean slate: see `input::release_modifiers`.
+    #[cfg(target_os = "macos")]
+    crate::input::release_modifiers();
+
     #[cfg(target_os = "macos")]
     send_cursor_data(peer)?;
 
