@@ -27,56 +27,6 @@ static CGEventSourceRef src(void)
     return s;
 }
 
-/* How close in time and space two presses must be to count as a double click.
- *
- * GetDblTime() would give the machine's own setting, but it is Carbon and
- * returns ticks; half a second is the Mac default at the middle slider
- * position and is what every synthetic-click implementation settles on. Four
- * pixels of slop matches what the window server allows a real mouse. */
-#define DOUBLE_CLICK_SECONDS 0.5
-#define DOUBLE_CLICK_SLOP_SQ 16.0
-
-/* The click count carried by the next press, and the state to derive it.
- *
- * **A mouse event with no click state is not a click.** CGEventCreateMouseEvent
- * leaves kCGMouseEventClickState at zero, and AppKit's -clickCount then reports
- * zero, so anything that asks "was this a click?" rather than watching raw
- * down/up decides it was not. Symptom from a real session: a Dock stack opens
- * -- the Dock acts on the press -- and then will not collapse, because the
- * second press is not recognised as a click. Double-clicking anything could
- * never have worked either.
- *
- * Single-peer, single-threaded, so plain statics are enough; see session.rs.
- */
-static int g_clicks;
-static double g_last_click_at;
-static CGPoint g_last_click_pt;
-
-static double now_seconds(void)
-{
-    return (double)CFAbsoluteTimeGetCurrent();
-}
-
-/* 1 for a click, 2 for a double click, 3 for a triple, as the window server
- * would have counted them for a real mouse. */
-static int click_state_for(CGPoint pt)
-{
-    double dx = pt.x - g_last_click_pt.x;
-    double dy = pt.y - g_last_click_pt.y;
-    double now = now_seconds();
-
-    if (g_clicks > 0
-        && (now - g_last_click_at) <= DOUBLE_CLICK_SECONDS
-        && (dx * dx + dy * dy) <= DOUBLE_CLICK_SLOP_SQ)
-        g_clicks++;
-    else
-        g_clicks = 1;
-
-    g_last_click_at = now;
-    g_last_click_pt = pt;
-    return g_clicks;
-}
-
 /* type: 0 move, 1 down, 2 up, 3 dragged-left, 4 dragged-right
  * button: 0 left, 1 right, 2 centre */
 static void post_mouse(int type, CGPoint pt, int button)
@@ -100,12 +50,6 @@ static void post_mouse(int type, CGPoint pt, int button)
 
     CGEventRef e = CGEventCreateMouseEvent(src(), et, pt, b);
     if (e) {
-        /* The press decides the count; the release and any drag in between must
-         * carry the same one, or the pair does not read as a single gesture. */
-        if (type == 1)
-            CGEventSetIntegerValueField(e, kCGMouseEventClickState, click_state_for(pt));
-        else if (type == 2 || type == 3 || type == 4)
-            CGEventSetIntegerValueField(e, kCGMouseEventClickState, g_clicks > 0 ? g_clicks : 1);
         CGEventPost(kCGHIDEventTap, e);
         CFRelease(e);
     }

@@ -48,6 +48,35 @@ re-sending after ten seconds if an answer goes missing so a peer that ignores
 them cannot wedge the timer. It also logs the round trip, which is the client's
 latency readout as well.
 
+## 1e. The C shims are built at the one optimisation level that miscompiles
+
+Found by crashing the agent for a real user. A small static function doing
+nothing but double arithmetic over file-scope statics -- no CoreGraphics call in
+it -- faults with SIGBUS when built by `gcc10-bootstrap` for
+`powerpc-apple-darwin`, and only at `-O2`:
+
+```text
+-O0 : ok      -O2          : Bus error
+-O1 : ok      -O2 -maltivec: Bus error
+-Os : ok
+```
+
+Reduced in `probes/` (the clickprobe/bisect pair, kept out of the tree since
+they were throwaway): breaking the same statements apart with `printf` between
+them makes it survive, which is the signature of a codegen bug rather than
+anything in the source. `build.rs` compiles all three shims with
+`.opt_level(2)`.
+
+Nothing currently shipping is known to be affected -- `convert_shim.c` is
+checked byte-for-byte against the Rust reference on a real frame by
+`--probe-display`, and the vpx and input shims have run for hours -- but the
+next arithmetic-heavy shim is a coin toss. Worth doing:
+
+- Reduce it properly and see whether `-fno-strict-aliasing` or a narrower
+  `-fno-` flag avoids it, rather than dropping the whole file to `-O1`.
+- Whatever the outcome, **verify C shims against a reference on the target**,
+  the way the converter is. That check is what makes a miscompile survivable.
+
 ## 1d. Video is given up on for the whole session if it fails once
 
 `Video::new` runs at login, and if `Capturer::new` fails the session logs
