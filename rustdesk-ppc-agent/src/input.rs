@@ -33,11 +33,31 @@ extern "C" {
     fn rd_mouse(ty: c_int, x: c_double, y: c_double, button: c_int);
     fn rd_mouse_here(ty: c_int, button: c_int);
     fn rd_key_char(cp: c_uint, down: c_int, flags: c_uint);
+    fn rd_keycode_for_char(cp: c_uint, needs_shift: *mut c_int) -> c_int;
     fn rd_scroll(dy: c_int);
     fn rd_key(keycode: c_int, down: c_int);
     fn rd_key_unicode(cp: c_uint, down: c_int);
     fn rd_key_with_flags(keycode: c_int, down: c_int, flags: c_uint);
     fn rd_cursor_pos(x: *mut c_double, y: *mut c_double);
+}
+
+/// Which keycode a character would be typed as under the current layout, and
+/// whether it needs shift. `None` means the layout cannot produce it and the
+/// character falls back to unicode entry.
+///
+/// Diagnostic only, for `--probe-keys`: the mapping is otherwise invisible, and
+/// the alternatives for checking it on this OS are all blocked (event taps need
+/// an accessibility toggle, and typing into a window tests focus as much as it
+/// tests the mapping).
+#[cfg(target_os = "macos")]
+pub fn keycode_for_char(cp: u32) -> Option<(i32, bool)> {
+    let mut shift: c_int = 0;
+    let code = unsafe { rd_keycode_for_char(cp, &mut shift) };
+    if code < 0 {
+        None
+    } else {
+        Some((code, shift != 0))
+    }
 }
 
 /// Where the system thinks the cursor is. Out-params, not a returned struct.

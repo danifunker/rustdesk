@@ -28,7 +28,7 @@ OPTIONS:
     --show-key       print the public key a peer needs, and exit
     --probe-display  report what the framebuffer looks like, and exit
     --probe-live     watch the framebuffer for change and self-test the mouse
-    --probe-keys     type into the focused window, photograph it (~/keys.ppm)
+    --probe-keys [X Y]  click at X,Y to take focus, type, photograph (~/keys.ppm)
     --config PATH    config file (default ~/.rustdesk-ppc-agent.conf)
     --secure         require the signed_id/public_key exchange. OFF by default:
                      a client connecting by IP does not take part, and enabling
@@ -54,6 +54,7 @@ fn main() {
     let (mut show_id, mut show_key, mut probe) = (false, false, false);
     let mut probe_live = false;
     let mut probe_keys = false;
+    let mut probe_keys_at: Option<(i32, i32)> = None;
     let mut level = log::LevelFilter::Info;
     let mut secure = false;
 
@@ -95,6 +96,14 @@ fn main() {
             }
             "--probe-keys" => {
                 probe_keys = true;
+                // Optional click target: typing tests nothing if the focus is
+                // somewhere that does not echo.
+                if let (Some(x), Some(y)) = (argv.get(i + 1), argv.get(i + 2)) {
+                    if let (Ok(x), Ok(y)) = (x.parse::<i32>(), y.parse::<i32>()) {
+                        probe_keys_at = Some((x, y));
+                        i += 2;
+                    }
+                }
                 i += 1;
             }
             "--log" => {
@@ -163,7 +172,7 @@ fn main() {
         return;
     }
     if probe_keys {
-        probe_keys_fn();
+        probe_keys_fn(probe_keys_at);
         return;
     }
 
@@ -290,8 +299,9 @@ fn probe_display() {
 /// screen. Goes through `Injector` deliberately -- this exercises the same path
 /// the session loop uses, `chr` values and all.
 #[cfg(target_os = "macos")]
-fn probe_keys_fn() {
+fn probe_keys_fn(click_at: Option<(i32, i32)>) {
     use protobuf::ProtobufEnumOrUnknown;
+    use rustdesk_ppc_agent::message_proto::MouseEvent;
     use rustdesk_ppc_agent::input::Injector;
     use rustdesk_ppc_agent::message_proto::{key_event, ControlKey, KeyEvent};
 
@@ -315,18 +325,64 @@ fn probe_keys_fn() {
         inj.key(&k);
     };
 
-    // Finder's Go-to-Folder sheet, not Spotlight: the Spotlight panel and open
-    // menus are drawn in overlay layers that the framebuffer read does not pick
-    // up (Cmd+Space visibly highlights the menu-bar icon, yet no panel appears
-    // in the capture). A sheet belongs to an ordinary window, so it is captured
-    // and the typed text can actually be read back.
-    println!("opening Finder's Go to Folder (Cmd+Shift+G)");
-    send(&mut inj, key_event::Union::chr('g' as u32), true, &[ControlKey::Meta, ControlKey::Shift]);
-    sleep(60);
-    send(&mut inj, key_event::Union::chr('g' as u32), false, &[ControlKey::Meta, ControlKey::Shift]);
-    sleep(1500);
+    // Type into whatever is focused, having first cleared the line with ctrl-C.
+    //
+    // Earlier versions aimed at Spotlight, then at Finder's Go-to-Folder sheet.
+    // Both were fragile: the probe cannot tell what is frontmost, and the wrong
+    // target leaves the result unreadable. A shell prompt echoes exactly what it
+    // was sent, and a ctrl-C on each side leaves nothing behind. Note that
+    // ctrl-C is itself part of the test -- it only works if a character composes
+    // with its modifier into a real keycode.
+    // Keystrokes go to whatever holds the keyboard focus, so a probe that only
+    // types proves nothing about the mapping when the focus is somewhere that
+    // does not echo. Click into the target first when one is given.
+    if let Some((x, y)) = click_at {
+        println!("clicking at {},{} to take focus", x, y);
+        let mut m = MouseEvent::new();
+        m.mask = 0;
+        m.x = x;
+        m.y = y;
+        inj.mouse(&m);
+        sleep(400);
+        m.mask = (1 << 3) | 1;
+        inj.mouse(&m);
+        sleep(120);
+        m.mask = (1 << 3) | 2;
+        inj.mouse(&m);
+        sleep(800);
+    }
 
-    let word = "hello";
+    // Report the mapping before using it: if this is empty, rd_key_char is
+    // falling back to unicode entry and shortcuts will not compose, which looks
+    // from the client end exactly like keys not arriving.
+    println!("\ncharacter -> keycode, as the shim will type them:");
+    let mut mapped = 0;
+    for ch in "rustdesk R!".chars() {
+        match rustdesk_ppc_agent::input::keycode_for_char(ch as u32) {
+            Some((code, shift)) => {
+                mapped += 1;
+                println!("  {:?} -> keycode {}{}", ch, code, if shift { " + shift" } else { "" });
+            }
+            None => println!("  {:?} -> unmapped (falls back to unicode entry)", ch),
+        }
+    }
+    println!("  {} of 11 mapped\n", mapped);
+
+    println!("clearing the line (ctrl-C)");
+    let ctrl_c = |inj: &mut Injector| {
+        let mut k = KeyEvent::new();
+        k.down = true;
+        k.union = Some(key_event::Union::chr('c' as u32));
+        k.modifiers.push(ProtobufEnumOrUnknown::new(ControlKey::Control));
+        inj.key(&k);
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        k.down = false;
+        inj.key(&k);
+    };
+    ctrl_c(&mut inj);
+    sleep(900);
+
+    let word = "rustdesk";
     println!("typing {:?} as chr() codepoints, exactly as a client sends them", word);
     for ch in word.chars() {
         send(&mut inj, key_event::Union::chr(ch as u32), true, &[]);
@@ -334,25 +390,22 @@ fn probe_keys_fn() {
         send(&mut inj, key_event::Union::chr(ch as u32), false, &[]);
         sleep(120);
     }
-    sleep(1500);
+    sleep(1200);
 
     let (w, h, stride) = (c.width, c.height, c.stride());
     let frame = c.frame();
     let path = format!("{}/keys.ppm", std::env::var("HOME").unwrap_or_else(|_| ".".into()));
     match write_ppm(&path, frame, w, h, stride) {
-        Ok(()) => println!("wrote {} -- look for {:?} in the Spotlight field", path, word),
+        Ok(()) => println!("wrote {} -- {:?} should appear wherever the focus was", path, word),
         Err(e) => println!("could not write {}: {}", path, e),
     }
 
-    println!("closing Spotlight (Escape)");
-    let esc = || key_event::Union::control_key(ProtobufEnumOrUnknown::new(ControlKey::Escape));
-    send(&mut inj, esc(), true, &[]);
-    sleep(60);
-    send(&mut inj, esc(), false, &[]);
+    println!("clearing up (ctrl-C)");
+    ctrl_c(&mut inj);
 }
 
 #[cfg(not(target_os = "macos"))]
-fn probe_keys_fn() {
+fn probe_keys_fn(_click_at: Option<(i32, i32)>) {
     println!("--probe-keys is only meaningful on macOS");
 }
 

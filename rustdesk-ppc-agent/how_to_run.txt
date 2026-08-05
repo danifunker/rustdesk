@@ -110,7 +110,9 @@ CHECKING IT WORKS
 
     ssh ppctiger '~/rustdesk-agent --probe-display'   # geometry and per-stage timings
     ssh ppctiger '~/rustdesk-agent --probe-live'      # capture liveness + mouse self-test
-    ssh ppctiger '~/rustdesk-agent --probe-keys'      # types into the focused window -> ~/keys.ppm
+    ssh ppctiger '~/rustdesk-agent --probe-keys'          # prints the character -> keycode map,
+                                                      # then types into whatever has focus
+    ssh ppctiger '~/rustdesk-agent --probe-keys 1050 620' # click there first to take focus
     ssh ppctiger 'tail -f ~/agent.log'                # protocol trace, with -vv
     cargo test                                        # 32 host tests
     cargo run --example probe_client -- 192.168.99.116:21118 ppctest123
@@ -123,6 +125,13 @@ The C probes under probes/ are for questions about the machine rather than the
 agent (framebuffer behaviour, keyboard layout mapping):
 
     PPC_HOST=ppctiger probes/run.sh display-info
+
+Verifying the keyboard is harder than it looks. Keystrokes go wherever the
+focus is, so typing into the desktop tests focus as much as it tests the
+mapping, and the passive alternative -- a listen-only CGEventTap -- needs
+"Enable access for assistive devices" in Universal Access, which is off. That is
+why `--probe-keys` prints the character -> keycode table first: it is the part
+that can be checked without guessing. All 95 printable ASCII characters map.
 
 Logs: ~/agent.log on the G5. Crash reports, which are worth reading when the
 agent vanishes without a message, are in

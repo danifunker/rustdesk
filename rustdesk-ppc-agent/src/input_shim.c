@@ -157,6 +157,29 @@ static void build_keymap(void)
     CFRelease(s);
 }
 
+/* Diagnostic: which keycode would this character be typed as, and does it need
+ * shift? Returns -1 if the layout cannot produce it, in which case rd_key_char
+ * falls back to unicode entry. Exists because the alternative ways to check the
+ * mapping on this OS are all unavailable: a listen-only event tap needs
+ * "Enable access for assistive devices", and typing into a window only proves
+ * something if you already know which window has focus.
+ */
+int rd_keycode_for_char(unsigned int cp, int *needs_shift)
+{
+    if (!kc_ready)
+        build_keymap();
+    *needs_shift = 0;
+    if (cp >= 128)
+        return -1;
+    if (kc_plain[cp])
+        return kc_plain[cp] - 1;
+    if (kc_shift[cp]) {
+        *needs_shift = 1;
+        return kc_shift[cp] - 1;
+    }
+    return -1;
+}
+
 /* Type a character the client sent as `chr`.
  *
  * `chr` carries a *character*, not a keycode -- typing "test" arrives as
