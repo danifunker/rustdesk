@@ -20,7 +20,10 @@
 use std::os::raw::c_double;
 use std::os::raw::{c_int, c_uint};
 
-use crate::message_proto::{key_event, ControlKey, KeyEvent, MouseEvent};
+use crate::message_proto::{
+    key_event, pointer_device_event, touch_event, ControlKey, KeyEvent, MouseEvent,
+    PointerDeviceEvent,
+};
 
 // The shim reverse-maps characters to keycodes with UCKeyTranslate, which lives
 // in Carbon; CoreGraphics alone cannot do it on this OS (see `rd_key_char`).
@@ -163,6 +166,27 @@ pub enum MouseAction {
     Ignore,
 }
 
+/// What a touch gesture from the peer amounts to here.
+///
+/// `PointerDeviceEvent` is field 26, backported from current upstream -- this
+/// proto's oneof stops at 19. A modern client sends it during ordinary trackpad
+/// use, and every one seen in a real session has been a `TouchScaleUpdate` with
+/// scale 0, which upstream's proto documents as "scale end": the marker a
+/// two-finger gesture emits when it finishes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TouchAction {
+    /// A two-finger pan, which is a pixel scroll by another name.
+    Scroll { dx: i32, dy: i32 },
+    /// A pinch, as a delta scale factor x1000. **Nothing posts this yet**: a
+    /// magnify event has no public constructor on any version of macOS, so
+    /// honouring one means undocumented `CGEvent` fields. Recognised and logged
+    /// so the values a real client sends are visible before anyone writes that.
+    Zoom { scale: i32 },
+    /// A gesture with nothing to do: a pan boundary, a pinch ending, or a
+    /// variant this proto does not carry.
+    Ignore,
+}
+
 /// What a `KeyEvent` means. See [`MouseAction`] for why this is separate.
 #[derive(Debug, Clone, PartialEq)]
 pub enum KeyAction {
@@ -259,6 +283,41 @@ impl Injector {
         }
     }
 
+    /// Decide what a touch gesture means.
+    ///
+    /// `PointerDeviceEvent` is field 26, backported from current upstream --
+    /// this proto's oneof stops at 19. A modern client sends it during ordinary
+    /// trackpad use, and every one seen so far has been a `TouchScaleUpdate`
+    /// with scale 0, which that proto documents as "scale end": the marker a
+    /// two-finger gesture emits when it finishes.
+    ///
+    /// Pure and free-standing so the mapping can be tested away from a Mac; the
+    /// version gate lives at the call site, because *whether* to act on a
+    /// gesture is a property of the system and *what it means* is not.
+    pub fn decide_touch(ev: &PointerDeviceEvent) -> TouchAction {
+        let touch = match &ev.union {
+            Some(pointer_device_event::Union::touch_event(t)) => t,
+            _ => return TouchAction::Ignore,
+        };
+        match &touch.union {
+            // A pan is a scroll with a different name: the deltas are pixels,
+            // and pass through unnegated for the same reason `mask` kind 4
+            // does.
+            Some(touch_event::Union::pan_update(p)) => {
+                TouchAction::Scroll { dx: p.x, dy: p.y }
+            }
+            // Start and end carry an absolute position and no movement; acting
+            // on them would scroll by wherever the fingers happened to land.
+            Some(touch_event::Union::pan_start(_)) => TouchAction::Ignore,
+            Some(touch_event::Union::pan_end(_)) => TouchAction::Ignore,
+            // Delta scale factor x1000, and zero means the pinch ended.
+            Some(touch_event::Union::scale_update(u)) if u.scale != 0 => {
+                TouchAction::Zoom { scale: u.scale }
+            }
+            _ => TouchAction::Ignore,
+        }
+    }
+
     /// Decide what a key event means. `press` asks for a full down-and-up.
     pub fn decide_key(&self, ev: &KeyEvent) -> KeyAction {
         let flags = modifier_flags(&ev.modifiers);
@@ -279,6 +338,28 @@ impl Injector {
             Some(key_event::Union::unicode(u)) => KeyAction::Unicode { cp: *u, down, then_up },
             Some(key_event::Union::seq(s)) => KeyAction::Seq(s.clone()),
             None => KeyAction::Ignore,
+        }
+    }
+
+    /// Act on a touch gesture, if this system has gestures at all.
+    ///
+    /// The gate is here rather than in `decide_touch` because it is a fact
+    /// about the machine, not about the message: 10.5 has no magnify event to
+    /// post and no reason to pretend, so a peer's gestures are dropped rather
+    /// than approximated into something nobody asked for.
+    #[cfg(target_os = "macos")]
+    pub fn touch(&mut self, ev: &PointerDeviceEvent) {
+        if !crate::sys::has_gesture_events() {
+            return;
+        }
+        let action = Self::decide_touch(ev);
+        log::debug!("touch -> {:?}", action);
+        match action {
+            TouchAction::Scroll { dx, dy } => unsafe { rd_scroll(dy, dx, 1) },
+            TouchAction::Zoom { scale } => {
+                log::debug!("pinch, delta scale {}/1000 -- no magnify event to post it through", scale)
+            }
+            TouchAction::Ignore => {}
         }
     }
 
@@ -349,6 +430,9 @@ impl Injector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::message_proto::{
+        TouchEvent, TouchPanEnd, TouchPanStart, TouchPanUpdate, TouchScaleUpdate,
+    };
     use protobuf::ProtobufEnumOrUnknown;
 
     fn mouse(mask: i32, x: i32, y: i32) -> MouseEvent {
@@ -436,6 +520,72 @@ mod tests {
 
     /// Wheel events carry both axes and are inverted relative to the wire,
     /// matching upstream's non-Windows path.
+    /// Build a PointerDeviceEvent carrying one touch variant.
+    fn touch(u: touch_event::Union) -> PointerDeviceEvent {
+        let mut t = TouchEvent::new();
+        t.union = Some(u);
+        let mut p = PointerDeviceEvent::new();
+        p.union = Some(pointer_device_event::Union::touch_event(t));
+        p
+    }
+
+    #[test]
+    fn a_two_finger_pan_is_a_scroll() {
+        let mut u = TouchPanUpdate::new();
+        u.x = 4;
+        u.y = -9;
+        assert_eq!(
+            Injector::decide_touch(&touch(touch_event::Union::pan_update(u))),
+            TouchAction::Scroll { dx: 4, dy: -9 }
+        );
+    }
+
+    /// Start and end carry an absolute position, not a movement. Scrolling by
+    /// it would jump by wherever the fingers landed.
+    #[test]
+    fn pan_start_and_end_move_nothing() {
+        let mut s = TouchPanStart::new();
+        s.x = 700;
+        s.y = 400;
+        assert_eq!(
+            Injector::decide_touch(&touch(touch_event::Union::pan_start(s))),
+            TouchAction::Ignore
+        );
+        let mut e = TouchPanEnd::new();
+        e.x = 700;
+        e.y = 400;
+        assert_eq!(
+            Injector::decide_touch(&touch(touch_event::Union::pan_end(e))),
+            TouchAction::Ignore
+        );
+    }
+
+    /// The one every real client has actually sent: scale 0, which the upstream
+    /// proto documents as the end of a pinch rather than a zoom of nothing.
+    #[test]
+    fn a_zero_scale_is_the_end_of_a_pinch_not_a_zoom() {
+        let mut z = TouchScaleUpdate::new();
+        z.scale = 0;
+        assert_eq!(
+            Injector::decide_touch(&touch(touch_event::Union::scale_update(z))),
+            TouchAction::Ignore
+        );
+        let mut z = TouchScaleUpdate::new();
+        z.scale = 120;
+        assert_eq!(
+            Injector::decide_touch(&touch(touch_event::Union::scale_update(z))),
+            TouchAction::Zoom { scale: 120 }
+        );
+    }
+
+    #[test]
+    fn an_empty_pointer_event_is_ignored() {
+        assert_eq!(
+            Injector::decide_touch(&PointerDeviceEvent::new()),
+            TouchAction::Ignore
+        );
+    }
+
     #[test]
     fn a_wheel_event_carries_both_axes_unchanged() {
         let mut inj = Injector::new();

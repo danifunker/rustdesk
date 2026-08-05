@@ -25,7 +25,7 @@ message VideoFrame {
     // Field 12 is `vp8s` in modern RustDesk (an EncodedVideoFrames, which is
     // wire-identical to VP9s). Backported here so a modern client decodes our
     // VP8 stream as VP8 -- sending it in `vp9s` would have it fed to the VP9
-    // decoder. Nothing else in this file diverges from upstream.
+    // decoder. See also `pointer_device_event` on Message, the other backport.
     VP9s vp8s = 12;
   }
 }
@@ -404,5 +404,52 @@ message Message {
     FileAction file_action = 17;
     FileResponse file_response = 18;
     Misc misc = 19;
+    // Field 26 in modern RustDesk, absent from 1.1.8 -- this oneof stops at 19
+    // and current master runs to 32. Backported because a modern client sends
+    // it during ordinary trackpad use: every two-finger gesture ends with a
+    // TouchScaleUpdate whose scale is 0, and without the field they arrive as
+    // "message had no recognised field" and are dropped. Definitions copied
+    // verbatim from github.com/rustdesk/hbb_common.
+    PointerDeviceEvent pointer_device_event = 26;
   }
+}
+
+message PointerDeviceEvent {
+  oneof union {
+    TouchEvent touch_event = 1;
+  }
+  repeated ControlKey modifiers = 2;
+}
+
+message TouchEvent {
+  oneof union {
+    TouchScaleUpdate scale_update = 1;
+    TouchPanStart pan_start = 2;
+    TouchPanUpdate pan_update = 3;
+    TouchPanEnd pan_end = 4;
+  }
+}
+
+message TouchScaleUpdate {
+  // The delta scale factor relative to the previous scale.
+  // delta * 1000
+  // 0 means scale end
+  int32 scale = 1;
+}
+
+message TouchPanStart {
+  int32 x = 1;
+  int32 y = 2;
+}
+
+message TouchPanUpdate {
+  // The delta x position relative to the previous position.
+  int32 x = 1;
+  // The delta y position relative to the previous position.
+  int32 y = 2;
+}
+
+message TouchPanEnd {
+  int32 x = 1;
+  int32 y = 2;
 }
