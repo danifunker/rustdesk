@@ -6,7 +6,15 @@ and the C probes in `probes/`.
 
 **The short version:** capture is a raw VRAM read, and no codec setting touches
 it. The only real optimisation is reading fewer bytes. That took a capture cycle
-from 6364 ms to 6 ms on an idle desktop.
+from 6364 ms to 15 ms on an idle desktop.
+
+Two corrections worth reading before trusting older numbers here. The idle
+figure was once quoted as 6 ms, measured while the dirty-band probe was reading
+one byte per sampled pixel -- which landed on the constant alpha byte, so it was
+timing a probe that could not detect anything. It now reads R, G and B and costs
+15 ms. And for a while the agent ran a display capture/release cycle before each
+probe, which added ~256 ms to *every* poll; that turned out to be unnecessary as
+well as hostile to the machine's own user, and is gone. See `src/capture.rs`.
 
 ---
 
@@ -85,21 +93,21 @@ Full pipeline, measured with `--probe-display`:
 
 | stage | cost |
 |---|---|
-| dirty-band probe | 6 ms |
+| dirty-band probe | 15 ms |
 | capture (VRAM → RAM) | 347 ms |
-| ARGB → I420 | 180 ms |
-| VP8 encode | 83 ms (8 KB out) |
-| **full-screen change** | **610 ms** |
-| **idle** | **6 ms** |
+| ARGB → I420 | 172 ms |
+| VP8 encode | 89 ms (8 KB out) |
+| **full-screen change** | **608 ms** |
+| **idle** | **15 ms** |
 
 | scenario | cost | notes |
 |---|---|---|
-| idle | **6 ms** | probe only |
-| one band changed (typing, a menu) | ~50 ms | probe + band read + convert + encode |
-| whole screen changed (video) | ~610 ms | everything |
+| idle | **15 ms** | probe only |
+| one band changed (typing, a menu) | ~60 ms | probe + band read + convert + encode |
+| whole screen changed (video) | ~608 ms | everything |
 
-Note the shape: **encode is the cheapest stage**, at 83 ms against 347 ms for
-capture and 180 ms for conversion. Tuning the codec is the least valuable thing
+Note the shape: **encode is the cheapest stage**, at 89 ms against 347 ms for
+capture and 172 ms for conversion. Tuning the codec is the least valuable thing
 that could be done here.
 
 Normal interactive work is genuinely usable; only full-screen motion falls back
