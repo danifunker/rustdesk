@@ -58,9 +58,19 @@ mod login_msg {
 const POLL_MS: u64 = 30;
 /// Modest by modern standards, but the encoder is not the constraint here.
 const DEFAULT_BITRATE_KBPS: u32 = 1500;
-/// How long the screen must be still before a full repaint is sent to cover
-/// anything the sampled change detection missed.
+/// How long the screen must be still before re-reading a slice of it to cover
+/// anything the sampled change detection missed, and how much to re-read each
+/// time.
+///
+/// **A slice, not the screen.** Repainting all sixteen bands at once costs a
+/// ~370 ms stall, and ordinary typing pauses for longer than `SETTLE_REPAINT`
+/// several times a minute -- so a real terminal session hit a full repaint
+/// every ~1.4 seconds, each one freezing the picture for 0.6-1.5 s while the
+/// typing itself cost only 110 ms. Insurance that expensive was worse than what
+/// it insured against. Two bands is ~45 ms, and the rotation covers the whole
+/// screen within about seven ticks of quiet.
 const SETTLE_REPAINT: std::time::Duration = std::time::Duration::from_millis(900);
+const REPAIR_BANDS_PER_TICK: usize = crate::capture::BANDS / 8;
 
 /// How long the screen must be still before the probe backs off, and how far
 /// apart probes may then be.
@@ -89,6 +99,9 @@ const IDLE_PROBE_INTERVAL: std::time::Duration = std::time::Duration::from_milli
 /// Measured before this existed: after the settle repaint's last frame, not one
 /// byte crossed the wire in either direction, and the client dropped the
 /// session 57.4 seconds later. Three times running, to the tenth of a second.
+/// Longest a peer goes without an exact frame. See the settle repaint.
+const KEYFRAME_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+
 const TEST_DELAY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
 const TEST_DELAY_STALE: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -423,10 +436,14 @@ struct Video {
     bitrate_kbps: u32,
     /// Set when the colour depth left 32, so the warning is logged once.
     bpp_warned: bool,
-    /// When the screen last changed, and whether the settling repaint has been
-    /// done since. See `probe`.
+    /// When the screen last changed. See `probe`.
     last_change: std::time::Instant,
-    repaired: bool,
+    /// Bands still to be re-read since the last detected change, and where the
+    /// rotation is up to. Reset to a full screen's worth whenever anything
+    /// moves; drained `REPAIR_BANDS_PER_TICK` at a time while it stays still.
+    repair_left: usize,
+    repair_next: usize,
+    last_repair: std::time::Instant,
     /// When the framebuffer was last sampled, for the idle backoff.
     last_probe: std::time::Instant,
     /// Where the current frame's time is going. See `FrameTimes`.
@@ -444,6 +461,8 @@ struct Video {
     /// arrive without its predecessor. What is left is the peer *asking*, which
     /// it can now do -- see `Misc::refresh_video`.
     want_key: bool,
+    /// When the last keyframe went out, so the settle repaint can pace them.
+    last_key: std::time::Instant,
     /// Set when the encoder could not be rebuilt; the session carries on with
     /// input only rather than dropping the peer.
     broken: bool,
@@ -464,10 +483,13 @@ impl Video {
             bitrate_kbps,
             bpp_warned: false,
             last_change: std::time::Instant::now(),
-            repaired: false,
+            repair_left: 0,
+            repair_next: 0,
+            last_repair: std::time::Instant::now(),
             last_probe: std::time::Instant::now(),
             t: FrameTimes::default(),
             want_key: true,
+            last_key: std::time::Instant::now(),
             broken: false,
         })
     }
@@ -509,7 +531,7 @@ impl Video {
         // reading VRAM as fast as the loop comes round. Gated on `repaired` so
         // the settle repaint below always happens at full rate first, and any
         // dirty band puts it straight back to probing every pass.
-        if self.repaired
+        if self.repair_left == 0
             && self.last_change.elapsed() >= IDLE_AFTER
             && self.last_probe.elapsed() < IDLE_PROBE_INTERVAL
         {
@@ -532,6 +554,37 @@ impl Video {
             self.bpp_warned = false;
             self.cap.invalidate();
         }
+        // Change detection is a sampled checksum, so it can miss: a small
+        // change that falls between sampled rows and columns leaves the peer
+        // showing stale pixels indefinitely, with nothing to correct it. Once
+        // the screen has been still for a moment, re-read a slice of it, and
+        // keep going a slice at a time until the whole screen has been covered.
+        // Bounded staleness without the stall -- see SETTLE_REPAINT.
+        //
+        // Marked *before* the probe so that one probe serves both purposes.
+        // Invalidating and then re-probing to discover the bands we had just
+        // marked ourselves cost a second full pass: 81 ms where 40 would do, on
+        // every tick of the rotation.
+        let repairing = self.repair_left > 0
+            && self.last_change.elapsed() >= SETTLE_REPAINT
+            && self.last_repair.elapsed() >= SETTLE_REPAINT;
+        if repairing {
+            self.last_repair = std::time::Instant::now();
+            let n = REPAIR_BANDS_PER_TICK.min(self.repair_left);
+            for _ in 0..n {
+                self.cap.invalidate_band(self.repair_next);
+                self.repair_next = (self.repair_next + 1) % crate::capture::BANDS;
+                self.repair_left -= 1;
+            }
+            log::debug!("repairing {} band(s); {} left to cover", n, self.repair_left);
+            // The one keyframe sent on a schedule: the encoder's static-skip
+            // threshold leaves a block uncoded while its error stays small, so
+            // a faint difference is bounded but not self-correcting.
+            if self.last_key.elapsed() >= KEYFRAME_INTERVAL {
+                self.want_key = true;
+            }
+        }
+
         let tp = std::time::Instant::now();
         let dirty = self.cap.dirty_bands();
         if dirty.iter().any(|d| *d) {
@@ -540,34 +593,12 @@ impl Video {
             self.t = FrameTimes::default();
             self.t.probe = tp.elapsed();
             self.last_change = std::time::Instant::now();
-            self.repaired = false;
-            return Some(dirty);
-        }
-
-        // Change detection is a sampled checksum, so it can miss: a small
-        // change that falls between sampled rows and columns leaves the peer
-        // showing stale pixels indefinitely, with nothing to correct it. Once
-        // the screen has been still for a moment, send everything once. It
-        // costs a full frame per burst of activity and bounds how long a
-        // missed change can persist to about a second.
-        if !self.repaired && self.last_change.elapsed() >= SETTLE_REPAINT {
-            self.repaired = true;
-            log::debug!("screen settled; repainting in full to cover any missed change");
-            // A keyframe, and the only one sent on a schedule. The encoder's
-            // static-skip threshold leaves a block uncoded when its error is
-            // small, so a faint difference can sit on the peer's screen for as
-            // long as it stays under the threshold -- bounded, but not
-            // self-correcting. This is the repair path and it runs when the
-            // screen has gone quiet, so an exact frame costs latency nobody is
-            // waiting on.
-            self.want_key = true;
-            self.cap.invalidate();
-            let all = self.cap.dirty_bands();
-            if all.iter().any(|d| *d) {
-                self.t = FrameTimes::default();
-                self.t.probe = tp.elapsed();
-                return Some(all);
+            // A repair tick dirties bands by design. Letting that restart the
+            // rotation would mean it never finished a lap of the screen.
+            if !repairing {
+                self.repair_left = crate::capture::BANDS;
             }
+            return Some(dirty);
         }
         None
     }
@@ -601,6 +632,9 @@ impl Video {
         let pts = self.start.elapsed().as_millis() as i64;
         let force = self.want_key;
         self.want_key = false;
+        if force {
+            self.last_key = std::time::Instant::now();
+        }
         let t = std::time::Instant::now();
         let r = self.enc.encode(&self.img, pts, force);
         self.t.encode = t.elapsed();
@@ -767,10 +801,12 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
     let mut refresh_requested = false;
 
     macro_rules! pump_input {
-        () => {{
+        () => { pump_input!(true) };
+        ($wait:expr) => {{
             #[cfg(target_os = "macos")]
             let alive = drain_input(
                 peer,
+                $wait,
                 &mut delay_outstanding,
                 &mut refresh_requested,
                 &mut injector,
@@ -778,7 +814,7 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
                 &mut last_peer_input,
             )?;
             #[cfg(not(target_os = "macos"))]
-            let alive = drain_input(peer, &mut delay_outstanding, &mut refresh_requested)?;
+            let alive = drain_input(peer, $wait, &mut delay_outstanding, &mut refresh_requested)?;
             if !alive {
                 return Ok(());
             }
@@ -804,9 +840,21 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
         }};
     }
 
+    // Blocking for POLL_MS at the top of the loop is what stops an idle session
+    // spinning, and it is pure latency when the screen is actually changing:
+    // measured on a real terminal session, frames cost 70 ms and arrived 103 ms
+    // apart, the difference being this wait. Only pay it when the last pass
+    // found nothing to send.
+    #[cfg_attr(not(all(target_os = "macos", not(no_vpx))), allow(unused_mut))]
+    let mut idle_last_pass = true;
+
     loop {
-        pump_input!();
+        pump_input!(idle_last_pass);
         keep_alive!();
+        #[cfg(all(target_os = "macos", not(no_vpx)))]
+        {
+            idle_last_pass = true;
+        }
 
         #[cfg(all(target_os = "macos", not(no_vpx)))]
         if let Some(v) = video.as_mut() {
@@ -845,12 +893,8 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
                         continue;
                     }
                     v.band(b);
-                    // Only when something is actually waiting: an unconditional
-                    // drain here costs POLL_MS per band whether or not the peer
-                    // has said anything. See `input_waiting`.
-                    if input_waiting(&peer.stream) {
-                        pump_input!();
-                    }
+                    // Poll, never wait: see `drain_input`'s `wait` argument.
+                    pump_input!(false);
                 }
                 if let Some((data, key, pts)) = v.encode() {
                     let mut vp = crate::message_proto::VP9::new();
@@ -872,6 +916,7 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
                     peer.send(&m)?;
                     v.t.send = ts.elapsed();
                     v.t.log(frame_start.elapsed());
+                    idle_last_pass = false;
                 }
             }
         }
@@ -890,6 +935,7 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
 /// only at frame boundaries makes the mouse stall for exactly that long.
 fn drain_input(
     peer: &mut Peer,
+    wait: bool,
     delay_outstanding: &mut bool,
     refresh_requested: &mut bool,
     #[cfg(target_os = "macos")] injector: &mut crate::input::Injector,
@@ -897,6 +943,14 @@ fn drain_input(
     #[cfg(target_os = "macos")] last_peer_input: &mut std::time::Instant,
 ) -> io::Result<bool> {
     loop {
+        // `wait` is what paces an idle loop, and is right exactly once per
+        // iteration. Between bands we only want whatever has already arrived:
+        // blocking there costs POLL_MS per band, and it cost it twice --
+        // skipping empty drains was not enough, because a drain that *did*
+        // find input still ended by waiting POLL_MS for more that never came.
+        if !wait && !input_waiting(&peer.stream) {
+            return Ok(true);
+        }
         let msg = match peer.recv() {
             Err(ref e) if is_timeout(e) => return Ok(true),
             Ok(m) => m,

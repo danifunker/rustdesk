@@ -60,11 +60,13 @@ const CPU_USED: c_int = -16;
 /// Measured on the dual G5 at 1920x1080, median of three steady-state frames:
 ///
 /// ```text
-///   threshold  1000 (was)   46 ms    threshold 15000   35 ms
-///   threshold  6000         39 ms    threshold 30000   32 ms
+///   threshold  1000   48 ms    threshold 15000   30 ms
+///   threshold  6000   39 ms    threshold 30000   29 ms
 /// ```
 ///
-/// Only the threshold pays. The other two are kept as knobs, and as recorded
+/// The threshold is the only one that moves the clock -- and it is not free
+/// speed, which is why the default sits at the slow end of that table. See
+/// `Default`. The other two are kept as knobs, and as recorded
 /// negative results: predicting from the last frame alone measured 47 ms, i.e.
 /// nothing, because at `cpu_used = -16` VP8's fast mode picker was never
 /// searching golden and altref anyway; and dropping error resilience measured
@@ -85,17 +87,22 @@ pub struct Tune {
 impl Default for Tune {
     fn default() -> Self {
         Self {
-            // 15000 rather than 30000, which was only 3 ms better and started
-            // emitting visibly more data (2084 bytes against 1263) -- the sign
-            // of skipping enough that the drift has to be paid for later. At
-            // 15000 the output stays the size 6000 produces, for 4 ms less.
+            // **1000, and the timings above are why this is not higher.**
+            // 15000 measured 18 ms faster and looked like free speed. It is
+            // not: a macroblock whose error falls under the threshold is not
+            // coded *at all*, and the bottom sliver of a line of text lands in
+            // a macroblock that is mostly background, so its error is small
+            // even though the change is perfectly visible. Reported from a real
+            // session as characters arriving in halves -- "the horizontal part
+            // of the t but not the bottom part" -- with the rest appearing
+            // whenever something later pushed those blocks over the threshold.
             //
-            // This is still a quality dial: a macroblock whose error falls
-            // under the threshold is not coded at all, so a subtle change can
-            // sit stale until the settle repaint in `session` forces a
-            // keyframe. High-contrast changes -- text, windows, menus -- are
-            // nowhere near it.
-            static_threshold: 15000,
+            // The reasoning that picked 15000 was that high-contrast changes
+            // are nowhere near the threshold. True of a whole glyph, false of
+            // the third of one that shares a macroblock with blank paper, and
+            // text is what this agent is mostly used to look at. 18 ms is not
+            // worth reading half a character.
+            static_threshold: 1000,
             last_ref_only: false,
             error_resilient: true,
         }

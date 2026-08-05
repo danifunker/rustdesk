@@ -77,6 +77,48 @@ capture the worst case for the encoder too. Fixed -- see §4a.
 What is left is almost entirely the VRAM read: **333 of a 405 ms full-screen
 frame, and ~35 of an 85 ms small update.** Everything else is now small.
 
+## 1b. What a terminal actually needs, which is not throughput
+
+Everything above optimises *frames per second*. A shell session turned out to be
+limited by two other things entirely, both found by a person using it and
+neither visible in any timing.
+
+**The repair was worse than what it repaired.** The settle repaint re-read all
+sixteen bands whenever the screen had been still for 900 ms — and ordinary
+typing pauses for longer than that constantly, so a real session hit a
+full-screen repaint every ~1.4 seconds, each freezing the picture for 0.6-1.5 s
+while the typing itself cost 110 ms. It now repairs a slice at a time,
+rotating, so a lap of the screen costs the same but arrives in ~45 ms pieces.
+
+**Sampling coverage is the wrong metric; the gap is the metric.** The probe was
+changed to sample a quarter of every row instead of a sixteenth — four times the
+bytes — and got *worse* at noticing typing, because clustering those bytes into
+128-byte windows leaves a 96-pixel hole between them and thirteen characters fit
+in one. Reported as "writing left to right, sometimes a bunch of delay where we
+don't detect the screen updates". What matters is that no gap is wider than the
+thing being looked for: a terminal glyph is ~7 pixels, so the window is now 8
+bytes in 32, a 6-pixel gap, and a character cannot fall in it.
+
+Narrower things still can — a vi insert cursor is ~2 pixels — so sampled rows
+now take turns looking at different columns. A glyph is ~12 pixels tall and rows
+are sampled every 8, so it always spans two sampled rows, and those two rows
+examine different quarters of the width. Twice the effective coverage for no
+extra reading.
+
+**And the encoder was dropping parts of letters.** `VP8E_SET_STATIC_THRESHOLD`
+at 15000 measured 18 ms faster per frame, and skips any macroblock whose error
+falls below it — which includes the one holding the bottom third of a line of
+text, because it is mostly blank background. Reported as characters arriving in
+halves, "the horizontal part of the t but not the bottom part". Back to 1000.
+The reasoning that picked 15000 was that text is high-contrast and nowhere near
+the threshold: true of a whole glyph, false of the fraction of one that shares a
+macroblock with blank paper.
+
+The lesson worth keeping: **every one of these was a correctness bug that
+measured as a speed win.** `--probe-display` reported each change as an
+improvement, and a person looking at a terminal reported all three as
+regressions.
+
 ### A correction to the old figures
 
 The 65 ms once quoted for encode was measured on the *first* inter frame after a
