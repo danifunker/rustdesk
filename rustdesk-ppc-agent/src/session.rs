@@ -40,6 +40,19 @@ use crate::crypto::{expected_login_hash, verify_login_hash, Handshake, SecureCha
 use crate::frame::{read_frame, write_frame, DEFAULT_MAX_PACKET};
 use crate::message_proto::*;
 
+/// Login error strings the client matches on **exactly** -- `handle_login_error`
+/// in client.rs compares against these literals to decide which dialog to show,
+/// so any deviation turns a password prompt into a silent retry loop.
+/// Values from hbb_common/src/lib.rs.
+mod login_msg {
+    /// Client clears its stored password and shows the "Password Required" input.
+    pub const PASSWORD_EMPTY: &str = "Empty Password";
+    /// Client shows "Wrong Password -- do you want to enter again?".
+    pub const PASSWORD_WRONG: &str = "Wrong Password";
+    /// Password login is not permitted at all.
+    pub const NO_PASSWORD_ACCESS: &str = "No Password Access";
+}
+
 /// Socket poll interval. Short enough that input stays responsive, long enough
 /// that an idle screen costs little more than the dirty-band probe.
 const POLL_MS: u64 = 30;
@@ -255,15 +268,27 @@ pub fn serve(stream: TcpStream, ident: &Identity) -> io::Result<()> {
     );
 
     if ident.password.is_empty() {
-        peer.send_login_error("This machine has no password set")?;
+        // Nothing to authenticate against. Upstream would fall through to the
+        // connection manager for interactive approval; we have no UI, so refuse
+        // with the string that tells the client password login is unavailable.
+        peer.send_login_error(login_msg::NO_PASSWORD_ACCESS)?;
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            "no password configured",
+            "no password configured on this machine",
         ));
+    }
+    if lr.password.is_empty() {
+        // A client always probes with an empty password first to discover
+        // whether one is needed. Answering PASSWORD_WRONG here makes it clear
+        // its stored password and retry in a loop; PASSWORD_EMPTY is what makes
+        // it show the password dialog.
+        log::info!("peer sent an empty password -- asking it to prompt");
+        peer.send_login_error(login_msg::PASSWORD_EMPTY)?;
+        return Ok(());
     }
     let expected = expected_login_hash(&ident.password, ident.salt.as_bytes(), challenge.as_bytes());
     if !verify_login_hash(&expected, &lr.password) {
-        peer.send_login_error("Wrong Password")?;
+        peer.send_login_error(login_msg::PASSWORD_WRONG)?;
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             format!("wrong password from {} ({})", peer.name, peer.id),
@@ -438,6 +463,16 @@ mod tests {
     /// Drive the agent's handshake from the peer side, exactly as client.rs does,
     /// and check a correct password is accepted and a wrong one refused.
     fn run_login(password: &str, peer_sends: &str) -> Result<PeerInfo, String> {
+        run_login_inner(password, Some(peer_sends))
+    }
+
+    /// Send a raw password payload -- notably the empty one a client probes with.
+    fn run_login_raw(password: &str, raw: Vec<u8>) -> Result<PeerInfo, String> {
+        assert!(raw.is_empty(), "only the empty probe is exercised this way");
+        run_login_inner(password, None)
+    }
+
+    fn run_login_inner(password: &str, peer_sends: Option<&str>) -> Result<PeerInfo, String> {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let (pk, sk) = sign::gen_keypair();
@@ -502,11 +537,10 @@ mod tests {
         let mut req = LoginRequest::new();
         req.my_id = "peer".into();
         req.my_name = "tester".into();
-        req.password = expected_login_hash(
-            peer_sends,
-            hash.salt.as_bytes(),
-            hash.challenge.as_bytes(),
-        );
+        req.password = match peer_sends {
+            Some(p) => expected_login_hash(p, hash.salt.as_bytes(), hash.challenge.as_bytes()),
+            None => Vec::new(),
+        };
         let mut m = Message::new();
         m.set_login_request(req);
         c.send(&m).unwrap();
@@ -608,6 +642,14 @@ mod tests {
         assert_eq!(pi.displays[0].height, 768);
     }
 
+    /// A client probes with an empty password first. Answering "Wrong Password"
+    /// there makes it loop instead of prompting, so pin the exact string.
+    #[test]
+    fn empty_password_asks_the_client_to_prompt() {
+        let err = run_login_raw("hunter2", Vec::new()).unwrap_err();
+        assert_eq!(err, "Empty Password");
+    }
+
     #[test]
     fn wrong_password_is_refused() {
         let err = run_login("hunter2", "wrong").unwrap_err();
@@ -617,6 +659,6 @@ mod tests {
     #[test]
     fn unset_password_refuses_rather_than_allowing_anyone() {
         let err = run_login("", "anything").unwrap_err();
-        assert!(err.contains("no password"), "got {:?}", err);
+        assert_eq!(err, "No Password Access");
     }
 }
