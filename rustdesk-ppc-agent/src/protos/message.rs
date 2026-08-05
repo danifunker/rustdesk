@@ -755,6 +755,55 @@ impl VideoFrame {
         }
     }
 
+    // .hbb.VP9s vp8s = 12;
+
+    pub fn get_vp8s(&self) -> &VP9s {
+        match self.union {
+            ::std::option::Option::Some(video_frame::Union::vp8s(ref v)) => v,
+            _ => <VP9s as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_vp8s(&mut self) {
+        self.union = ::std::option::Option::None;
+    }
+
+    pub fn has_vp8s(&self) -> bool {
+        match self.union {
+            ::std::option::Option::Some(video_frame::Union::vp8s(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_vp8s(&mut self, v: VP9s) {
+        self.union = ::std::option::Option::Some(video_frame::Union::vp8s(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_vp8s(&mut self) -> &mut VP9s {
+        if let ::std::option::Option::Some(video_frame::Union::vp8s(_)) = self.union {
+        } else {
+            self.union = ::std::option::Option::Some(video_frame::Union::vp8s(VP9s::new()));
+        }
+        match self.union {
+            ::std::option::Option::Some(video_frame::Union::vp8s(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_vp8s(&mut self) -> VP9s {
+        if self.has_vp8s() {
+            match self.union.take() {
+                ::std::option::Option::Some(video_frame::Union::vp8s(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            VP9s::new()
+        }
+    }
+
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
         let mut fields = ::std::vec::Vec::new();
         fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, VP9s>(
@@ -778,6 +827,13 @@ impl VideoFrame {
             VideoFrame::mut_yuv,
             VideoFrame::set_yuv,
         ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, VP9s>(
+            "vp8s",
+            VideoFrame::has_vp8s,
+            VideoFrame::get_vp8s,
+            VideoFrame::mut_vp8s,
+            VideoFrame::set_vp8s,
+        ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<VideoFrame>(
             "VideoFrame",
             4,
@@ -799,6 +855,11 @@ impl ::protobuf::Message for VideoFrame {
             }
         }
         if let Some(video_frame::Union::yuv(ref v)) = self.union {
+            if !v.is_initialized() {
+                return false;
+            }
+        }
+        if let Some(video_frame::Union::vp8s(ref v)) = self.union {
             if !v.is_initialized() {
                 return false;
             }
@@ -828,6 +889,12 @@ impl ::protobuf::Message for VideoFrame {
                     }
                     self.union = ::std::option::Option::Some(video_frame::Union::yuv(is.read_message()?));
                 },
+                12 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeLengthDelimited {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    self.union = ::std::option::Option::Some(video_frame::Union::vp8s(is.read_message()?));
+                },
                 _ => {
                     ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
                 },
@@ -854,6 +921,10 @@ impl ::protobuf::Message for VideoFrame {
                     let len = v.compute_size();
                     my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
                 },
+                &video_frame::Union::vp8s(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
+                },
             };
         }
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
@@ -872,6 +943,9 @@ impl ::protobuf::Message for VideoFrame {
                 },
                 &video_frame::Union::yuv(ref v) => {
                     ::protobuf::rt::write_message_field_with_cached_size(8, v, os)?;
+                },
+                &video_frame::Union::vp8s(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(12, v, os)?;
                 },
             };
         }
@@ -914,6 +988,7 @@ impl ::protobuf::Clear for VideoFrame {
         self.union = ::std::option::Option::None;
         self.union = ::std::option::Option::None;
         self.union = ::std::option::Option::None;
+        self.union = ::std::option::Option::None;
         self.unknown_fields.clear();
     }
 }
@@ -936,6 +1011,7 @@ pub mod video_frame {
         vp9s(super::VP9s),
         rgb(super::RGB),
         yuv(super::YUV),
+        vp8s(super::VP9s),
     }
 
     impl ::protobuf::Oneof for Union {
@@ -10791,12 +10867,13 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \n\x06frames\x18\x01\x20\x03(\x0b2\x08.hbb.VP9R\x06framesB\0:\0\"%\n\x03\
     RGB\x12\x1c\n\x08compress\x18\x01\x20\x01(\x08R\x08compressB\0:\0\"?\n\
     \x03YUV\x12\x1c\n\x08compress\x18\x01\x20\x01(\x08R\x08compressB\0\x12\
-    \x18\n\x06stride\x18\x02\x20\x01(\x05R\x06strideB\0:\0\"|\n\nVideoFrame\
-    \x12!\n\x04vp9s\x18\x06\x20\x01(\x0b2\t.hbb.VP9sH\0R\x04vp9sB\0\x12\x1e\
-    \n\x03rgb\x18\x07\x20\x01(\x0b2\x08.hbb.RGBH\0R\x03rgbB\0\x12\x1e\n\x03y\
-    uv\x18\x08\x20\x01(\x0b2\x08.hbb.YUVH\0R\x03yuvB\0B\t\n\x05union\x12\0:\
-    \0\"\x91\x01\n\x0bDisplayInfo\x12\x0e\n\x01x\x18\x01\x20\x01(\x11R\x01xB\
-    \0\x12\x0e\n\x01y\x18\x02\x20\x01(\x11R\x01yB\0\x12\x16\n\x05width\x18\
+    \x18\n\x06stride\x18\x02\x20\x01(\x05R\x06strideB\0:\0\"\x9f\x01\n\nVide\
+    oFrame\x12!\n\x04vp9s\x18\x06\x20\x01(\x0b2\t.hbb.VP9sH\0R\x04vp9sB\0\
+    \x12\x1e\n\x03rgb\x18\x07\x20\x01(\x0b2\x08.hbb.RGBH\0R\x03rgbB\0\x12\
+    \x1e\n\x03yuv\x18\x08\x20\x01(\x0b2\x08.hbb.YUVH\0R\x03yuvB\0\x12!\n\x04\
+    vp8s\x18\x0c\x20\x01(\x0b2\t.hbb.VP9sH\0R\x04vp8sB\0B\t\n\x05union\x12\0\
+    :\0\"\x91\x01\n\x0bDisplayInfo\x12\x0e\n\x01x\x18\x01\x20\x01(\x11R\x01x\
+    B\0\x12\x0e\n\x01y\x18\x02\x20\x01(\x11R\x01yB\0\x12\x16\n\x05width\x18\
     \x03\x20\x01(\x05R\x05widthB\0\x12\x18\n\x06height\x18\x04\x20\x01(\x05R\
     \x06heightB\0\x12\x14\n\x04name\x18\x05\x20\x01(\tR\x04nameB\0\x12\x18\n\
     \x06online\x18\x06\x20\x01(\x08R\x06onlineB\0:\0\";\n\x0bPortForward\x12\
