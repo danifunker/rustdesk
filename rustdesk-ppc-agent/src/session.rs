@@ -75,9 +75,65 @@ const SETTLE_REPAINT: std::time::Duration = std::time::Duration::from_millis(900
 const IDLE_AFTER: std::time::Duration = std::time::Duration::from_millis(3000);
 const IDLE_PROBE_INTERVAL: std::time::Duration = std::time::Duration::from_millis(150);
 
+/// How often to send the peer a `TestDelay`, and how long to wait for an answer
+/// before sending another anyway.
+///
+/// **This is what keeps the session alive, not a diagnostic.** Liveness in this
+/// protocol is driven by the *server*: upstream's `Connection::run` ticks every
+/// three seconds, sends a `TestDelay`, and drops the peer if nothing has been
+/// received for thirty (`src/server/connection.rs:281`). The client only ever
+/// answers -- it never initiates one. An agent that merely echoes therefore
+/// goes completely silent the moment the screen stops changing, and the client
+/// times out and reconnects on its own.
+///
+/// Measured before this existed: after the settle repaint's last frame, not one
+/// byte crossed the wire in either direction, and the client dropped the
+/// session 57.4 seconds later. Three times running, to the tenth of a second.
+const TEST_DELAY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
+const TEST_DELAY_STALE: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Login attempts allowed on a single connection before dropping it. The peer
 /// legitimately needs at least two (an empty probe, then the real password).
 const MAX_LOGIN_ATTEMPTS: u32 = 10;
+
+/// Is there anything to read without waiting?
+///
+/// `drain_input` blocks for `POLL_MS` whenever the socket is empty. At the top
+/// of the loop that is exactly right -- it is what paces an idle session. After
+/// every band it is exactly wrong, and the instrumentation put a number on it:
+/// a sixteen-band frame paid sixteen of those timeouts, 481 ms of a 1208 ms
+/// frame spent asleep on an empty socket.
+///
+/// Peeking consumes nothing, so the framing `read_frame` depends on is
+/// untouched -- which a shorter read timeout would not be, since a timeout
+/// landing mid-message leaves the stream out of sync with no way back.
+fn input_waiting(stream: &TcpStream) -> bool {
+    let mut b = [0u8; 1];
+    if stream.set_nonblocking(true).is_err() {
+        return true; // cannot tell; fall back to the blocking drain
+    }
+    let r = stream.peek(&mut b);
+    let _ = stream.set_nonblocking(false);
+    match r {
+        // Data waiting, or 0 bytes meaning the peer has gone -- either way the
+        // real read should run and deal with it.
+        Ok(_) => true,
+        Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => false,
+        Err(_) => true,
+    }
+}
+
+/// Milliseconds since the epoch, as `TestDelay.time` carries.
+///
+/// Only ever subtracted from another reading of this same clock, so a wrong
+/// wall clock costs nothing -- and a G5 that has been off for a while often has
+/// one.
+fn now_millis() -> i64 {
+    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        Ok(d) => d.as_millis() as i64,
+        Err(_) => 0,
+    }
+}
 
 /// Human-readable name for a message, so a trace shows what a client actually
 /// sent rather than "unhandled". Anything not listed is a field this vintage of
@@ -373,6 +429,8 @@ struct Video {
     repaired: bool,
     /// When the framebuffer was last sampled, for the idle backoff.
     last_probe: std::time::Instant,
+    /// Where the current frame's time is going. See `FrameTimes`.
+    t: FrameTimes,
     /// Set when the encoder could not be rebuilt; the session carries on with
     /// input only rather than dropping the peer.
     broken: bool,
@@ -395,6 +453,7 @@ impl Video {
             last_change: std::time::Instant::now(),
             repaired: false,
             last_probe: std::time::Instant::now(),
+            t: FrameTimes::default(),
             broken: false,
         })
     }
@@ -458,8 +517,13 @@ impl Video {
             self.bpp_warned = false;
             self.cap.invalidate();
         }
+        let tp = std::time::Instant::now();
         let dirty = self.cap.dirty_bands();
         if dirty.iter().any(|d| *d) {
+            // A frame is starting: reset the accounting and charge it the probe
+            // that found the change.
+            self.t = FrameTimes::default();
+            self.t.probe = tp.elapsed();
             self.last_change = std::time::Instant::now();
             self.repaired = false;
             return Some(dirty);
@@ -477,6 +541,8 @@ impl Video {
             self.cap.invalidate();
             let all = self.cap.dirty_bands();
             if all.iter().any(|d| *d) {
+                self.t = FrameTimes::default();
+                self.t.probe = tp.elapsed();
                 return Some(all);
             }
         }
@@ -490,21 +556,81 @@ impl Video {
     /// and converting a whole frame takes.
     fn band(&mut self, b: usize) {
         let stride = self.cap.stride();
+        let t = std::time::Instant::now();
         let (y0, y1) = self.cap.read_band(b);
+        let read = t.elapsed();
         crate::convert::argb_to_i420_rows(self.cap.buffer(), stride, &mut self.img, y0, y1);
+        self.t.convert += t.elapsed() - read;
+        self.t.read += read;
+        self.t.bands += 1;
     }
 
     /// Encode whatever is in the conversion buffer.
     fn encode(&mut self, all: bool) -> Option<(Vec<u8>, bool, i64)> {
         let pts = self.start.elapsed().as_millis() as i64;
-        match self.enc.encode(&self.img, pts, all) {
-            Ok(f) if !f.data.is_empty() => Some((f.data.to_vec(), f.key, f.pts_ms)),
+        let t = std::time::Instant::now();
+        let r = self.enc.encode(&self.img, pts, all);
+        self.t.encode = t.elapsed();
+        match r {
+            Ok(f) if !f.data.is_empty() => {
+                self.t.bytes = f.data.len();
+                self.t.key = f.key;
+                Some((f.data.to_vec(), f.key, f.pts_ms))
+            }
             Ok(_) => None,
             Err(e) => {
                 log::warn!("encode failed: {}", e);
                 None
             }
         }
+    }
+}
+
+/// Where one frame's milliseconds went.
+///
+/// Every stage is timed separately because the alternative -- inferring cost
+/// from the gap between sends -- cannot tell work from a screen that simply was
+/// not changing, and a live session is the only place some of this shows up at
+/// all. `--probe-display` measures the same stages in isolation; this measures
+/// them under a real client, with input arriving and a socket to write to.
+#[cfg(all(target_os = "macos", not(no_vpx)))]
+#[derive(Default)]
+struct FrameTimes {
+    probe: std::time::Duration,
+    read: std::time::Duration,
+    convert: std::time::Duration,
+    encode: std::time::Duration,
+    send: std::time::Duration,
+    bands: usize,
+    bytes: usize,
+    key: bool,
+}
+
+#[cfg(all(target_os = "macos", not(no_vpx)))]
+impl FrameTimes {
+    fn ms(d: std::time::Duration) -> u128 {
+        d.as_millis()
+    }
+
+    /// One line per frame sent. `other` is everything not accounted for above
+    /// -- servicing input between bands, and the protobuf encode -- so a frame
+    /// whose cost is not in a named stage still shows up somewhere.
+    fn log(&self, total: std::time::Duration) {
+        let named = self.probe + self.read + self.convert + self.encode + self.send;
+        let other = total.checked_sub(named).unwrap_or_default();
+        log::debug!(
+            "frame: {} band(s), probe {}, read {}, conv {}, enc {}{}, send {}, other {} = {} ms, {} B",
+            self.bands,
+            Self::ms(self.probe),
+            Self::ms(self.read),
+            Self::ms(self.convert),
+            Self::ms(self.encode),
+            if self.key { " (KEY)" } else { "" },
+            Self::ms(self.send),
+            Self::ms(other),
+            Self::ms(total),
+            self.bytes,
+        );
     }
 }
 
@@ -598,20 +724,51 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
     #[cfg(target_os = "macos")]
     send_cursor_data(peer)?;
 
+    // Liveness. See TEST_DELAY_INTERVAL -- without this the session dies of
+    // silence roughly a minute after the screen stops changing.
+    let mut delay_sent = std::time::Instant::now();
+    let mut delay_outstanding = false;
+
     macro_rules! pump_input {
         () => {{
             #[cfg(target_os = "macos")]
-            let alive = drain_input(peer, &mut injector, &mut cursor_tracker, &mut last_peer_input)?;
+            let alive = drain_input(
+                peer,
+                &mut delay_outstanding,
+                &mut injector,
+                &mut cursor_tracker,
+                &mut last_peer_input,
+            )?;
             #[cfg(not(target_os = "macos"))]
-            let alive = drain_input(peer)?;
+            let alive = drain_input(peer, &mut delay_outstanding)?;
             if !alive {
                 return Ok(());
             }
         }};
     }
 
+    macro_rules! keep_alive {
+        () => {{
+            // Re-send after TEST_DELAY_STALE even with one outstanding: a lost
+            // or ignored answer must not wedge the timer and take the session
+            // down with it.
+            let waited = delay_sent.elapsed();
+            if waited >= TEST_DELAY_INTERVAL && (!delay_outstanding || waited >= TEST_DELAY_STALE) {
+                let mut td = crate::message_proto::TestDelay::new();
+                td.time = now_millis();
+                td.from_client = false;
+                let mut m = Message::new();
+                m.set_test_delay(td);
+                peer.send(&m)?;
+                delay_sent = std::time::Instant::now();
+                delay_outstanding = true;
+            }
+        }};
+    }
+
     loop {
         pump_input!();
+        keep_alive!();
 
         #[cfg(all(target_os = "macos", not(no_vpx)))]
         if let Some(v) = video.as_mut() {
@@ -633,6 +790,7 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
             }
 
             if let Some(dirty) = v.probe() {
+                let frame_start = std::time::Instant::now() - v.t.probe;
                 let all = dirty.iter().all(|d| *d);
                 // One band at a time, servicing input in between. A whole
                 // frame is ~520 ms of reading and converting; a band is ~33 ms,
@@ -643,7 +801,12 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
                         continue;
                     }
                     v.band(b);
-                    pump_input!();
+                    // Only when something is actually waiting: an unconditional
+                    // drain here costs POLL_MS per band whether or not the peer
+                    // has said anything. See `input_waiting`.
+                    if input_waiting(&peer.stream) {
+                        pump_input!();
+                    }
                 }
                 if let Some((data, key, pts)) = v.encode(all) {
                     let mut vp = crate::message_proto::VP9::new();
@@ -658,7 +821,13 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
                     vf.set_vp8s(vp9s);
                     let mut m = Message::new();
                     m.set_video_frame(vf);
+                    // Timed separately: a 100 KB frame is a blocking write, and
+                    // if the peer is slow to drain its socket that lands here
+                    // rather than in any of the stages above.
+                    let ts = std::time::Instant::now();
                     peer.send(&m)?;
+                    v.t.send = ts.elapsed();
+                    v.t.log(frame_start.elapsed());
                 }
             }
         }
@@ -677,6 +846,7 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
 /// only at frame boundaries makes the mouse stall for exactly that long.
 fn drain_input(
     peer: &mut Peer,
+    delay_outstanding: &mut bool,
     #[cfg(target_os = "macos")] injector: &mut crate::input::Injector,
     #[cfg(target_os = "macos")] cursor_tracker: &mut crate::cursor::Tracker,
     #[cfg(target_os = "macos")] last_peer_input: &mut std::time::Instant,
@@ -714,6 +884,15 @@ fn drain_input(
                     let mut m = Message::new();
                     m.set_test_delay(t);
                     peer.send(&m)?;
+                } else {
+                    // The answer to one of ours. Both ends of the subtraction
+                    // are our own clock, so the figure is a real round trip
+                    // however far the peer's clock has drifted.
+                    *delay_outstanding = false;
+                    let rtt = now_millis() - t.time;
+                    if rtt >= 0 {
+                        log::debug!("peer round trip: {} ms", rtt);
+                    }
                 }
             }
             // The peer's options. Worth logging rather than dropping: the

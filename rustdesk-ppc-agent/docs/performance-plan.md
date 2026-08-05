@@ -41,6 +41,34 @@ interaction**, at 34 of those 81 ms, because VP8 encodes a whole frame however
 little of it moved. Full-screen motion is still capture-bound and essentially
 untouched — nothing done so far reads fewer bytes out of VRAM.
 
+## 1a. What a live session actually costs
+
+`--probe-display` measures stages in isolation. The agent now also logs where
+each frame's milliseconds went under a real client, which is the only place some
+of this shows up at all (`session::FrameTimes`, at debug level):
+
+```text
+frame: 16 band(s), probe 29, read 333, conv 206, enc 181 (KEY), send 1, other 0 = 754 ms, 94971 B
+frame:  2 band(s), probe 15, read  39, conv  24, enc  29,       send 0, other 0 = 109 ms,  1527 B
+frame:  1 band(s), probe 14, read  25, conv  13, enc  45,       send 2, other 0 = 101 ms,  1139 B
+```
+
+Three things came out of it that no isolated probe would have found.
+
+**`send` is 0-4 ms.** The network is not a factor, even for a 95 KB frame on
+this LAN. That was worth ruling out before optimising anything else.
+
+**`other` was 481 ms of a 1208 ms frame, and is now 0.** `drain_input` blocks
+for `POLL_MS` when the socket is empty, and it ran after every band -- so a
+sixteen-band frame paid sixteen 30 ms timeouts to discover the peer had said
+nothing. Servicing input between bands was right; paying a blocking wait for it
+was not. It now peeks first (`session::input_waiting`). **Full-screen 1208 →
+749 ms, a small update 179 → 109 ms**, measured before and after against the
+same forced repaint.
+
+**Every full-screen frame is a keyframe**, and that is a deliberate choice worth
+revisiting -- see option 4a below.
+
 ### A correction to the old figures
 
 The 65 ms once quoted for encode was measured on the *first* inter frame after a
@@ -110,6 +138,30 @@ Two more ways to spend a second core, in increasing order of effort:
 | 7 | Measure `CGWindowListCreateImage` | one probe run; could be −250 ms | trivial to find out | may be much worse |
 | 8 | Pipeline capture against encode | *est.* −30% wall clock | large | needs care around input latency |
 | 9 | Tiles as displays | small updates near-free | large | **speculative, read the client first** |
+
+### 4a — stop forcing a keyframe on every full-screen change
+
+Cheapest item on this list, and it was found by watching a live session rather
+than by reasoning. `message_loop` computes `all = dirty.iter().all(|d| *d)` and
+passes it as `force_key`, so **whenever all sixteen bands are dirty the agent
+forces a keyframe** -- which is to say, every time you drag a window or scroll.
+The worst case for capture is thereby also made the worst case for the encoder.
+Measured cost of that choice:
+
+```text
+16 bands, KEY   : enc 170-181 ms, 95 KB on the wire
+ 1-2 bands, inter: enc  27- 78 ms,  1-6 KB
+```
+
+Nothing appears to need it. The settle repaint repairs missed changes by
+re-reading VRAM, and an inter frame carries the corrected pixels just as well; a
+new peer gets a keyframe anyway, because a fresh encoder always emits one; and
+`kf_mode` is already `VPX_KF_AUTO`, so libvpx inserts them when they are
+actually worth it. *Estimate*: −130 ms and −90 KB on every full-screen frame.
+
+The one argument for keeping it is resynchronisation -- a keyframe lets a client
+that somehow lost state recover. Worth deciding deliberately rather than by
+accident, which is how it is decided now.
 
 ### 4 — serve at half resolution
 
@@ -198,6 +250,12 @@ Do not re-litigate these; each cost real time to establish.
 * **Assuming two processors.** The target family includes single-processor
   machines; use `sys::threads_for` and check what it returns on the machine in
   front of you.
+* **Measuring a session from the outside.** Before `FrameTimes` existed, the
+  only signal was the gap between sends -- which cannot tell work from a screen
+  that was not changing, and which hid 481 ms of blocking socket reads inside
+  what looked like encode cost. Two of the three findings in §1a were invisible
+  to `--probe-display` by construction. If a live session is behaving unlike the
+  model, instrument the session rather than re-running the probe.
 
 ## 6. How to measure
 
