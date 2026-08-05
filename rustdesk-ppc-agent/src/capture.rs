@@ -14,10 +14,10 @@
 //!
 //! Two things that matter and were verified rather than assumed:
 //!
-//! * **No `CGDisplayCapture` is required.** Capturing the display would give
-//!   exclusive access and blank the screen for whoever is sitting at the machine
-//!   — useless for remote *assistance*. Reading the framebuffer directly works
-//!   without it.
+//! * **The mapping is a snapshot until the display is captured and released.**
+//!   See [`Capturer::refresh_framebuffer`]. Reading without that gives one
+//!   plausible frame and then the same bytes forever, which looks exactly like a
+//!   frozen screen and is not one.
 //! * **Byte order is A,R,G,B in memory** — the natural big-endian ARGB32. Note
 //!   libyuv's `ARGB` means the little-endian layout, i.e. B,G,R,A in memory, so
 //!   its `ARGBToI420` is *not* the right entry point here. See `crate::convert`.
@@ -53,10 +53,12 @@
 //! returns which horizontal bands moved; [`Capturer::read_bands`] then reads only
 //! those. No codec choice affects any of this — the cost is a raw memory read.
 
+#[cfg(target_os = "macos")]
 use std::os::raw::{c_int, c_void};
 
 pub type CGDirectDisplayID = u32;
 
+#[cfg(target_os = "macos")]
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
     fn CGMainDisplayID() -> CGDirectDisplayID;
@@ -67,8 +69,15 @@ extern "C" {
     fn CGDisplayBaseAddress(d: CGDirectDisplayID) -> *mut c_void;
     fn CGDisplayHideCursor(d: CGDirectDisplayID) -> c_int;
     fn CGDisplayShowCursor(d: CGDirectDisplayID) -> c_int;
+    fn CGDisplayCaptureWithOptions(d: CGDirectDisplayID, options: u32) -> c_int;
+    fn CGDisplayRelease(d: CGDirectDisplayID) -> c_int;
 }
 
+/// `kCGCaptureNoFill` — capture without blanking the display, so the pixels the
+/// local user is looking at stay on screen throughout.
+const CAPTURE_NO_FILL: u32 = 1 << 0;
+
+#[cfg(target_os = "macos")]
 /// Re-read the framebuffer address every time rather than caching it.
 ///
 /// The WindowServer may page-flip between buffers, in which case a pointer
@@ -89,6 +98,66 @@ pub const BANDS: usize = 16;
 /// costs ~21 ms at 1920x1080 versus ~348 ms for the full frame.
 const PROBE_ROW_STEP: usize = 16;
 
+/// Pixels stepped over between samples within a row.
+const PROBE_PIXEL_STEP: usize = 16;
+
+/// Checksum the colour bytes of every `PROBE_PIXEL_STEP`th pixel in a row.
+///
+/// **Skip byte 0 of each pixel.** Memory order is A,R,G,B, and alpha is 0xff
+/// everywhere on a desktop, so sampling at a stride that is a multiple of the
+/// 4-byte pixel reads nothing but alpha: the checksum comes out constant and the
+/// screen looks permanently static no matter what changes on it. That bug cost
+/// an entire debugging session -- it presents exactly like a frozen framebuffer.
+#[inline]
+fn hash_row(line: &[u8], seed: u64) -> u64 {
+    let mut sum = seed;
+    let mut c = 1; // +1: R, then G, B follow
+    while c + 2 < line.len() {
+        sum = sum
+            .wrapping_mul(31)
+            .wrapping_add(line[c] as u64)
+            .wrapping_mul(31)
+            .wrapping_add(line[c + 1] as u64)
+            .wrapping_mul(31)
+            .wrapping_add(line[c + 2] as u64);
+        c += PROBE_PIXEL_STEP * 4;
+    }
+    sum
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hash_row;
+
+    /// A row whose colour changes must hash differently even though alpha,
+    /// which dominates a naive stride, does not move.
+    #[test]
+    fn hash_row_sees_colour_not_just_alpha() {
+        let mut a = vec![0u8; 7680];
+        for p in a.chunks_mut(4) {
+            p[0] = 0xff; // alpha, constant across a real desktop
+        }
+        let mut b = a.clone();
+        // Repaint every sampled pixel a different colour.
+        for p in b.chunks_mut(4) {
+            p[1] = 0x40;
+            p[2] = 0x80;
+            p[3] = 0xc0;
+        }
+        assert_ne!(hash_row(&a, 0), hash_row(&b, 0), "colour change went unnoticed");
+    }
+
+    /// A change to one sampled pixel is enough; identical rows must agree.
+    #[test]
+    fn hash_row_is_stable_and_sensitive() {
+        let mut a = vec![0xffu8; 7680];
+        assert_eq!(hash_row(&a, 0), hash_row(&a, 0));
+        a[1 + 64 * 3] ^= 0xff; // a sampled pixel's red byte
+        assert_ne!(hash_row(&a, 0), hash_row(&vec![0xffu8; 7680], 0));
+    }
+}
+
+#[cfg(target_os = "macos")]
 pub struct Capturer {
     display: CGDirectDisplayID,
     pub width: usize,
@@ -101,6 +170,7 @@ pub struct Capturer {
     sums: Vec<u64>,
 }
 
+#[cfg(target_os = "macos")]
 impl Capturer {
     pub fn new() -> Result<Self, &'static str> {
         unsafe {
@@ -125,6 +195,49 @@ impl Capturer {
                 buf: vec![0; bytes_per_row * height],
                 sums: vec![0; BANDS],
             })
+        }
+    }
+
+    /// Make the mapping show what is on screen *now*.
+    ///
+    /// Without this the agent sends exactly one frame per process and then
+    /// nothing: `CGDisplayBaseAddress` hands this process a snapshot, not the
+    /// live scanout, and no amount of re-reading the pointer or the pixels moves
+    /// it. Measured on the G5, with a Dock restart forcing a change in between:
+    ///
+    /// ```text
+    ///   plain re-read     1836836664   <- unchanged
+    ///   re-read base      1836836664   <- unchanged
+    ///   after dcbf        1836836664   <- unchanged, so not a stale cache line
+    ///   while captured    1836836664   <- unchanged
+    ///   after release     3918311278   <- current, and equal to what a freshly
+    ///                                     exec'd process reads
+    /// ```
+    ///
+    /// So a capture/release cycle is what republishes the pixels — releasing the
+    /// display makes the window server repaint, and the snapshot is refreshed
+    /// with it. `kCGCaptureNoFill` keeps the local user's screen intact; the
+    /// display is only held for the length of the cycle.
+    ///
+    /// It costs ~256 ms at 1920x1080, which dominates an idle poll, so call it
+    /// once per capture cycle and not per band.
+    pub fn refresh_framebuffer(&mut self) {
+        unsafe {
+            let cap = CGDisplayCaptureWithOptions(self.display, CAPTURE_NO_FILL);
+            let rel = CGDisplayRelease(self.display);
+            if cap != 0 || rel != 0 {
+                // Not fatal, but the peer will see a still image, so say so
+                // rather than let it look like an idle screen.
+                log::warn!(
+                    "display refresh failed (capture={}, release={}) -- video will be frozen",
+                    cap,
+                    rel
+                );
+            }
+            let b = CGDisplayBaseAddress(self.display);
+            if !b.is_null() {
+                self.base = b;
+            }
         }
     }
 
@@ -175,12 +288,7 @@ impl Capturer {
                 let line = unsafe {
                     std::slice::from_raw_parts(base.add(off), self.bytes_per_row)
                 };
-                // Sample within the row too; the whole point is to touch few bytes.
-                let mut c = 0;
-                while c < line.len() {
-                    sum = sum.wrapping_mul(31).wrapping_add(line[c] as u64);
-                    c += 64;
-                }
+                sum = hash_row(line, sum);
                 row += PROBE_ROW_STEP;
             }
             if sum != self.sums[b] {

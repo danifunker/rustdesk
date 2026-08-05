@@ -1,0 +1,102 @@
+HOW TO RUN THE AGENT ON THE G5
+==============================
+
+The machine:  ssh ppctiger   (admin@192.168.99.116)
+Connect from a RustDesk client by typing  192.168.99.116  into the ID field
+(no port). Password: ppctest123. Sessions in direct-IP mode are UNENCRYPTED,
+which is also upstream's behaviour for direct connections.
+
+
+THE NORMAL WAY: as a LaunchAgent
+--------------------------------
+
+Run this ONCE, in Terminal.app ON THE G5 ITSELF -- not over ssh:
+
+    launchctl load -w ~/Library/LaunchAgents/com.rustdesk.ppc-agent.plist
+
+After that the agent starts automatically at every login, and launchd restarts
+it if it dies. To stop it:
+
+    launchctl unload -w ~/Library/LaunchAgents/com.rustdesk.ppc-agent.plist
+
+The plist lives in deploy/com.rustdesk.ppc-agent.plist in this repo; install it
+with
+
+    scp deploy/com.rustdesk.ppc-agent.plist \
+        ppctiger:~/Library/LaunchAgents/com.rustdesk.ppc-agent.plist
+
+
+WHY IT HAS TO BE THE GUI SESSION
+--------------------------------
+
+Not a style preference -- the agent crashes without one.
+
+Capturing a frame needs CGDisplayCaptureWithOptions (see capture.rs for why),
+and CoreGraphics registers the process with LaunchServices on the way through:
+
+    CGDisplayCaptureWithOptions -> CGSRegisterProcessAsApp -> _RegisterApplication
+      -> LSClientSideSharedMemory::GetClientSideSharedMemory -> abort()
+
+A process with no session aborts at that last step. An agent started over ssh
+inherits the ssh login's session and works only until that connection closes --
+after which it dies on its next frame. `launchctl load` from Terminal.app puts
+it in the console ("Aqua") session, which lasts as long as the login does.
+
+ssh cannot do this itself: `launchctl bsexec` needs root, and `launchctl load`
+over ssh talks to the ssh session's launchd, not the GUI one.
+
+
+TEMPORARY: attached to an ssh session
+-------------------------------------
+
+Useful while iterating, and it does not survive the ssh connection closing:
+
+    ssh ppctiger '~/rustdesk-agent --port 21118 -vv > ~/agent.log 2>&1'
+
+Leave that command running. Do NOT background it with nohup or `&`: Darwin's
+nohup fails over a non-tty ssh session ("can't migrate to background session"),
+and a detached agent has no session, so it hits the abort above.
+
+
+BUILD AND DEPLOY
+----------------
+
+The key is passphrase-protected, so an ssh-agent has to hold it (once per
+reboot of the Linux box):
+
+    ssh-agent -a /tmp/ssh-agent-ppc.sock >/dev/null 2>&1
+    SSH_AUTH_SOCK=/tmp/ssh-agent-ppc.sock ssh-add ~/.ssh/id_rsa
+
+Then:
+
+    ./build-ppc.sh            # build only      (~90 s incremental, ~14 min clean)
+    ./build-ppc.sh deploy     # build, install and restart on the G5
+
+Note that `deploy` restarts the agent the detached way, so use it with the
+LaunchAgent (which owns the process) or restart by hand afterwards. The C parts
+are compiled on the G5 itself by the ppc-cc-remote.py wrapper, so the machine
+must be reachable to build at all.
+
+
+CHECKING IT WORKS
+-----------------
+
+    ssh ppctiger '~/rustdesk-agent --probe-display'   # geometry and per-stage timings
+    ssh ppctiger '~/rustdesk-agent --probe-live'      # capture liveness + mouse self-test
+    ssh ppctiger '~/rustdesk-agent --probe-keys'      # types into a window, writes ~/keys.ppm
+    ssh ppctiger 'tail -f ~/agent.log'                # protocol trace, with -vv
+    cargo test                                        # 32 host tests
+    cargo run --example probe_client -- 192.168.99.116:21118 ppctest123
+
+The agent serves ONE peer at a time, so probe_client fails while a real client
+is connected. `--probe-live` and `--probe-keys` inject real events: they move
+the cursor and type into whatever has focus on the G5.
+
+The C probes under probes/ are for questions about the machine rather than the
+agent (framebuffer behaviour, keyboard layout mapping):
+
+    PPC_HOST=ppctiger probes/run.sh display-info
+
+Logs: ~/agent.log on the G5. Crash reports, which are worth reading when the
+agent vanishes without a message, are in
+~/Library/Logs/CrashReporter/rustdesk-agent_*.crash.

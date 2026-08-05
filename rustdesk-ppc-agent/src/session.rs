@@ -353,8 +353,14 @@ impl Video {
     }
 
     /// Probe, and if anything moved, capture/convert/encode one frame.
-    /// Returns None when the screen is unchanged -- the cheap path, ~6 ms.
+    /// Returns None when the screen is unchanged.
+    ///
+    /// The refresh has to come first and unconditionally: without it the probe
+    /// re-reads the same snapshot forever, reports nothing dirty, and the peer
+    /// sees a single frame frozen at connect time. It sets the floor for an
+    /// idle poll at ~256 ms rather than the ~6 ms the probe alone costs.
     fn next_frame(&mut self) -> Option<(Vec<u8>, bool, i64)> {
+        self.cap.refresh_framebuffer();
         let dirty = self.cap.dirty_bands();
         if !dirty.iter().any(|d| *d) {
             return None;
@@ -415,38 +421,46 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
             }
         }
 
-        let msg = match peer.recv() {
-            Err(ref e) if is_timeout(e) => continue,
-            Ok(m) => m,
-            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
-                log::info!("peer {} disconnected", peer.name);
-                return Ok(());
-            }
-            Err(e) => return Err(e),
-        };
-        match msg.union {
-            Some(message::Union::mouse_event(me)) => {
-                #[cfg(target_os = "macos")]
-                injector.mouse(&me);
-                let _ = &me;
-            }
-            Some(message::Union::key_event(ke)) => {
-                #[cfg(target_os = "macos")]
-                injector.key(&ke);
-                let _ = &ke;
-            }
-            Some(message::Union::test_delay(t)) => {
-                if t.from_client {
-                    let mut m = Message::new();
-                    m.set_test_delay(t);
-                    peer.send(&m)?;
+        // Drain everything already queued before spending another ~250 ms on a
+        // frame. Handling one message per iteration was survivable when an idle
+        // poll cost 6 ms; now that a capture cycle sets the floor, a client
+        // sending 20-100 mouse events a second would outrun the loop and the
+        // backlog would grow without bound -- the cursor would lag further
+        // behind for as long as the session lasted.
+        loop {
+            let msg = match peer.recv() {
+                Err(ref e) if is_timeout(e) => break,
+                Ok(m) => m,
+                Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                    log::info!("peer {} disconnected", peer.name);
+                    return Ok(());
                 }
+                Err(e) => return Err(e),
+            };
+            match msg.union {
+                Some(message::Union::mouse_event(me)) => {
+                    #[cfg(target_os = "macos")]
+                    injector.mouse(&me);
+                    let _ = &me;
+                }
+                Some(message::Union::key_event(ke)) => {
+                    #[cfg(target_os = "macos")]
+                    injector.key(&ke);
+                    let _ = &ke;
+                }
+                Some(message::Union::test_delay(t)) => {
+                    if t.from_client {
+                        let mut m = Message::new();
+                        m.set_test_delay(t);
+                        peer.send(&m)?;
+                    }
+                }
+                Some(message::Union::misc(_)) => {}
+                other => log::debug!(
+                    "   (no handler for {})",
+                    msg_name(&Message { union: other, ..Default::default() })
+                ),
             }
-            Some(message::Union::misc(_)) => {}
-            other => log::debug!(
-                "   (no handler for {})",
-                msg_name(&Message { union: other, ..Default::default() })
-            ),
         }
     }
 }

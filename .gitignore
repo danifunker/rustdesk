@@ -13,3 +13,5 @@ sciter.dll
 rustdesk-ppc/vendor/
 rustdesk-ppc-agent/target/
 rustdesk-ppc-agent/vendor/
+# dropped in the crate root by the remote C compiler wrapper during a build
+rustdesk-ppc-agent/.temp.txt
