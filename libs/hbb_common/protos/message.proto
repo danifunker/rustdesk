@@ -169,6 +169,18 @@ enum ControlKey {
   LockScreen = 101;
 }
 
+// Backported from modern RustDesk, where the client picks a mode and says
+// which it used. It matters because `chr` means different things in each:
+// a *character* in Legacy, a *keycode already translated to this platform* in
+// Map. Field 9 and the enum are copied verbatim; 0 is Legacy, so a client that
+// never sets it is read exactly as before.
+enum KeyboardMode {
+  Legacy = 0;
+  Map = 1;
+  Translate = 2;
+  Auto = 3;
+}
+
 message KeyEvent {
   bool down = 1;
   bool press = 2;
@@ -179,6 +191,7 @@ message KeyEvent {
     string seq = 6;
   }
   repeated ControlKey modifiers = 8;
+  KeyboardMode mode = 9;
 }
 
 message CursorData {
