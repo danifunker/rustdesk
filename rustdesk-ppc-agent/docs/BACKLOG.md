@@ -247,10 +247,11 @@ Still unproven: **no `Misc` message from a real client has ever been logged**, s
 the peer-options branch -- the one that starts sending cursor shapes when "show
 remote cursor" is switched on -- has never actually fired.
 
-## 11b. The next rung, 1.4.5, now that it has been scoped
+## ~~11b. What the 1.4.5 rung turned out to be~~ (done)
 
-The remaining gate. Reading the client turned "medium, unscoped" into three
-pieces, of which the middle one is the surprise.
+Reading the client turned "medium, unscoped" into three pieces, of which the
+middle one was the surprise. All three are now implemented; kept because the
+mechanism is worth not re-deriving, and because §11c depends on the table.
 
 **What relative mouse mode actually is.** `MouseEvent` has not changed: no new
 field, no option message. The mode is signalled entirely in `mask`, whose low
@@ -270,17 +271,25 @@ further details that matter here:
   lock, for games and 3D apps) and Flutter-only, so it is off unless someone
   turns it on.
 
-So the injection side is small: a `MouseAction` carrying a delta, the same
-buttons-held check kind 0 already does to make it a drag rather than a move, and
-a shim call that reads the current position and adds. All host-testable.
+The injection side was expected to be small, and mostly was: `MouseAction::MoveBy`
+carrying a delta, the same buttons-held check kind 0 does so a relative drag is
+still a drag, and no C at all -- `rd_cursor_pos` already existed. What was *not*
+in the estimate is that it needs a bounds check. The design read the position
+back from the system on every event on the reasoning that the window server
+clamps the pointer at the edge, which would make it self-correcting; that was
+checked on the machine rather than assumed, and it is false. `CGPostMouseEvent`
+accepts a point off the display and `CGEventGetLocation` reports it back, so one
+hard flick left the pointer at 5700,5320 on a 1920x1080 screen for good. See
+`land_delta` and the standing check in `--probe-live`.
 
-**The surprise: claiming 1.4.5 also unlocks a screenshot button we cannot
-serve.** `is_support_screenshot_num` is `ver >= 1.4.0` and reads nothing else --
-no capability flag, no platform key -- so the menu item appears, and pressing it
-sends `ScreenshotRequest` (`Message` field 29), which this proto does not have.
-Answering is cheap even without implementing it: `ScreenshotResponse` carries an
-error string (`msg`, "empty if success"), so refusing honestly is a backport and
-about twenty lines, against a PNG encoder for doing it properly.
+**The surprise: claiming 1.4.5 also unlocks a screenshot button.**
+`is_support_screenshot_num` is `ver >= 1.4.0` and reads nothing else -- no
+capability flag, no platform key -- so the menu item appears, and pressing it
+sends `ScreenshotRequest` (`Message` field 29), which this proto did not have.
+Refusing honestly would have been about twenty lines, since `ScreenshotResponse`
+carries an error string (`msg`, "empty if success"); serving it properly was
+chosen instead, and `src/png.rs` is the result. Both paths exist now: the refusal
+is what a 16-bit colour mode or a dead capturer gets.
 
 **Everything else between 1.2.4 and 1.4.5 is inert**, and for a consistent
 reason: upstream learned to gate on capability rather than on version, so nearly
@@ -292,8 +301,41 @@ that we do not set. Checked one at a time:
 | 1.2.7 | mobile action menus (Back, Home, recents) | all three sites require `platform == Android`; we say "Mac OS" |
 | 1.3.0 | multi-clipboard (`MultiClipboards`) | no clipboard is implemented at all -- see item 6 |
 | 1.3.0, 1.3.3, 1.3.8, 1.4.2 | file rename, drag-and-drop, copy-paste, transfer resume | all inside a file-transfer session, which this agent does not serve; copy-paste additionally needs `platformAdditions[has_file_clipboard]` |
+| 1.3.8 also | a mobile peer's back gesture switches to `MOUSE_BUTTON_BACK` | needs the peer to be Android, but it found a real defect anyway -- see §11c |
 | 1.3.9 | remote print; view-camera wording | camera needs `PeerInfo.support_view_camera`; the version only chooses which error text appears |
 | 1.4.1 | terminal wording | needs `PeerInfo.support_terminal`; same, only the error text |
+
+## 11c. The top of the ladder
+
+**We now report 1.4.5, and that is the last rung.** Every version gate in the
+client was enumerated rather than sampled -- all of them, from both halves of the
+source, by pulling out the literals:
+
+```bash
+grep -rhoE 'get_version_number\("[0-9.]+"\)' --include=*.rs src/
+grep -rhoE "versionCmp\([^,]+, *['\"][0-9.]+['\"]\)" --include=*.dart flutter/lib/
+grep -rhoE "kMinVersion[A-Za-z]* *= *'[0-9.]+'" --include=*.dart flutter/lib/
+```
+
+which is the whole set: 1.1.9, 1.1.10, 1.2.0, 1.2.2, 1.2.4, 1.2.7, 1.3.0, 1.3.3,
+1.3.8, 1.3.9, 1.4.0, 1.4.1, 1.4.2, 1.4.5, 1.4.8. Only two above 1.2.4 needed
+work -- 1.4.0's screenshot button and 1.4.5's relative mouse, both now
+implemented -- and the rest are in the table in §11b.
+
+**Above 1.4.5 there is exactly one gate, 1.4.8, and it cannot fire here.**
+`allowDisplaySwitchInPrivacyMode` compares against it only on the Windows
+branch; a macOS peer returns true at any version, and it is inside privacy mode,
+which needs `PeerInfo.features`. So there is nothing left to earn, and a test in
+`session.rs` now asserts the constant *equals* 1.4.5 rather than merely being at
+least it -- if a newer client adds a gate, that assertion is the place to notice.
+
+One thing worth keeping from the survey, because it was a real defect rather
+than a gate: from **1.3.8** a mobile peer's back gesture sends `MOUSE_BUTTON_BACK`
+(8) where it used to send right (2), and `decide_mouse` fell through to *left*
+for any button it did not recognise -- a stray click on whatever the pointer was
+over, recorded as held so every later move reported as a drag. Unreachable (every
+route to that gesture needs the peer to be Android), but fixed: the three buttons
+`CGPostMouseEvent` carries are matched and the rest ignored, as upstream does.
 
 ## 12. Rendezvous registration
 
