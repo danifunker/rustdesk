@@ -256,7 +256,9 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
                 let mut vp9s = crate::message_proto::VP9s::new();
                 vp9s.frames.push(vp);
                 let mut vf = crate::message_proto::VideoFrame::new();
-                vf.set_vp9s(vp9s);
+                // Field 12, not 6: we encode VP8, and a modern client feeds
+                // field 6 (`vp9s`) to its VP9 decoder.
+                vf.set_vp8s(vp9s);
                 let mut m = Message::new();
                 m.set_video_frame(vf);
                 peer.send(&m)?;

@@ -22,6 +22,11 @@ message VideoFrame {
     VP9s vp9s = 6;
     RGB rgb = 7;
     YUV yuv = 8;
+    // Field 12 is `vp8s` in modern RustDesk (an EncodedVideoFrames, which is
+    // wire-identical to VP9s). Backported here so a modern client decodes our
+    // VP8 stream as VP8 -- sending it in `vp9s` would have it fed to the VP9
+    // decoder. Nothing else in this file diverges from upstream.
+    VP9s vp8s = 12;
   }
 }
 
