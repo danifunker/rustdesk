@@ -109,6 +109,85 @@ void rd_key_unicode(unsigned int cp, int down)
     CFRelease(e);
 }
 
+/* --- modifiers ------------------------------------------------------------ */
+
+/* Modifier flags and the keycodes that produce them. */
+static const struct { unsigned int flag; int keycode; } MODS[] = {
+    { kCGEventFlagMaskShift,     56 },
+    { kCGEventFlagMaskControl,   59 },
+    { kCGEventFlagMaskAlternate, 58 },
+    { kCGEventFlagMaskCommand,   55 },
+};
+#define NMODS ((int)(sizeof MODS / sizeof MODS[0]))
+
+/* Modifiers this shim pressed itself, and must therefore release. */
+static unsigned int g_held;
+
+static void post_key(int keycode, int down)
+{
+    CGEventRef e = CGEventCreateKeyboardEvent(src(), (CGKeyCode)keycode, down ? true : false);
+    if (e) {
+        CGEventPost(kCGHIDEventTap, e);
+        CFRelease(e);
+    }
+}
+
+/* Hold down the modifiers a keystroke needs.
+ *
+ * Setting CGEventFlags on the keystroke itself looks equivalent and is not: the
+ * window server takes the flags on a posted event as the new modifier state, so
+ * a synthetic ctrl-C leaves Control held **for every event afterwards**, with
+ * nothing to release it. On this platform a Control-click is a right-click, so
+ * the visible symptom is that left-clicking starts opening context menus, with
+ * nothing wrong in the mouse path at all.
+ *
+ * Pressing the real keys keeps the state consistent and self-clearing. Anything
+ * the peer is already holding is left alone, so this composes with the explicit
+ * modifier key events a client also sends.
+ */
+static void mods_down(unsigned int flags)
+{
+    unsigned int cur = (unsigned int)CGEventSourceFlagsState(kCGEventSourceStateHIDSystemState);
+    int i;
+    for (i = 0; i < NMODS; i++) {
+        if ((flags & MODS[i].flag) && !(cur & MODS[i].flag)) {
+            post_key(MODS[i].keycode, 1);
+            g_held |= MODS[i].flag;
+        }
+    }
+}
+
+/* Release only what mods_down pressed. */
+static void mods_up(void)
+{
+    int i;
+    for (i = 0; i < NMODS; i++)
+        if (g_held & MODS[i].flag)
+            post_key(MODS[i].keycode, 0);
+    g_held = 0;
+}
+
+/* Release every modifier, both sides of the keyboard.
+ *
+ * Called when a session starts, so a modifier left stuck by an earlier run --
+ * or by a client that disconnected mid-shortcut -- does not silently corrupt
+ * every click and keystroke that follows.
+ */
+void rd_release_modifiers(void)
+{
+    static const int all[] = { 56, 60, 59, 62, 58, 61, 55, 54 };
+    int i;
+    for (i = 0; i < (int)(sizeof all / sizeof all[0]); i++) {
+        CGEventRef e = CGEventCreateKeyboardEvent(src(), (CGKeyCode)all[i], false);
+        if (e) {
+            CGEventSetFlags(e, 0);
+            CGEventPost(kCGHIDEventTap, e);
+            CFRelease(e);
+        }
+    }
+    g_held = 0;
+}
+
 /* --- typing a character -------------------------------------------------- */
 
 /* Reverse map of the *current* keyboard layout: character -> virtual keycode.
@@ -205,12 +284,15 @@ void rd_key_char(unsigned int cp, int down, unsigned int flags)
             f |= kCGEventFlagMaskShift;
         }
         if (kc >= 0) {
-            CGEventRef e = CGEventCreateKeyboardEvent(src(), (CGKeyCode)kc, down ? true : false);
-            if (e) {
+            /* Hold the modifiers as keys rather than stamping flags on this
+             * event; see mods_down. The event inherits the resulting state. */
+            if (down) {
                 if (f)
-                    CGEventSetFlags(e, (CGEventFlags)f);
-                CGEventPost(kCGHIDEventTap, e);
-                CFRelease(e);
+                    mods_down(f);
+                post_key(kc, 1);
+            } else {
+                post_key(kc, 0);
+                mods_up();
             }
             return;
         }
@@ -223,13 +305,14 @@ void rd_key_char(unsigned int cp, int down, unsigned int flags)
 /* Modifier flags applied to subsequent synthetic events. */
 void rd_key_with_flags(int keycode, int down, unsigned int flags)
 {
-    CGEventRef e = CGEventCreateKeyboardEvent(src(), (CGKeyCode)keycode, down ? true : false);
-    if (!e)
-        return;
-    if (flags)
-        CGEventSetFlags(e, (CGEventFlags)flags);
-    CGEventPost(kCGHIDEventTap, e);
-    CFRelease(e);
+    if (down) {
+        if (flags)
+            mods_down(flags);
+        post_key(keycode, 1);
+    } else {
+        post_key(keycode, 0);
+        mods_up();
+    }
 }
 
 /* Out-params rather than a returned struct, for the same ABI reason. */

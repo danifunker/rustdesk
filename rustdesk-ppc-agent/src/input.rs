@@ -34,11 +34,24 @@ extern "C" {
     fn rd_mouse_here(ty: c_int, button: c_int);
     fn rd_key_char(cp: c_uint, down: c_int, flags: c_uint);
     fn rd_keycode_for_char(cp: c_uint, needs_shift: *mut c_int) -> c_int;
+    fn rd_release_modifiers();
     fn rd_scroll(dy: c_int);
     fn rd_key(keycode: c_int, down: c_int);
     fn rd_key_unicode(cp: c_uint, down: c_int);
     fn rd_key_with_flags(keycode: c_int, down: c_int, flags: c_uint);
     fn rd_cursor_pos(x: *mut c_double, y: *mut c_double);
+}
+
+/// Let go of every modifier key.
+///
+/// Worth doing when a session starts: a modifier left held -- by a client that
+/// disconnected mid-shortcut, or by an earlier build that stamped flags onto
+/// events instead of pressing keys -- corrupts everything afterwards. A stuck
+/// Control is the worst of them, because a Control-click is a right-click here,
+/// so left-clicking silently starts opening context menus.
+#[cfg(target_os = "macos")]
+pub fn release_modifiers() {
+    unsafe { rd_release_modifiers() }
 }
 
 /// Which keycode a character would be typed as under the current layout, and
