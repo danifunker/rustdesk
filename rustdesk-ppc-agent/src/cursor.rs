@@ -17,6 +17,78 @@
 /// cached shapes on this.
 pub const CURSOR_ID: u64 = 1;
 
+#[cfg(target_os = "macos")]
+extern "C" {
+    fn rd_cursor_seed() -> std::os::raw::c_int;
+    fn rd_cursor_image(
+        out: *mut u8,
+        out_len: std::os::raw::c_int,
+        w: *mut std::os::raw::c_int,
+        h: *mut std::os::raw::c_int,
+        hotx: *mut std::os::raw::c_int,
+        hoty: *mut std::os::raw::c_int,
+    ) -> std::os::raw::c_int;
+}
+
+/// Largest cursor accepted, in pixels each way.
+///
+/// Real ones are 24x24 or 32x32; the cap exists so a nonsense size cannot make
+/// the agent allocate for it. Anything bigger is skipped, keeping the shape
+/// already sent.
+const MAX_CURSOR_PX: usize = 128;
+
+/// A number that changes whenever the pointer changes shape.
+///
+/// Cheap enough to poll every pass, which is the whole point: fetching the
+/// image costs an allocation and a copy, and the shape changes a handful of
+/// times a session.
+#[cfg(target_os = "macos")]
+pub fn seed() -> i32 {
+    unsafe { rd_cursor_seed() }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn seed() -> i32 {
+    0
+}
+
+/// The pointer as it looks right now, or `None` if it could not be read.
+///
+/// `None` is not a failure to report to the peer -- the caller keeps sending
+/// whatever it had, or falls back to [`arrow`]. A pointer in the right place
+/// with the wrong picture is much better than no pointer.
+#[cfg(target_os = "macos")]
+pub fn current() -> Option<Cursor> {
+    let mut rgba = vec![0u8; MAX_CURSOR_PX * MAX_CURSOR_PX * 4];
+    let (mut w, mut h, mut hotx, mut hoty) = (0, 0, 0, 0);
+    let n = unsafe {
+        rd_cursor_image(
+            rgba.as_mut_ptr(),
+            rgba.len() as std::os::raw::c_int,
+            &mut w,
+            &mut h,
+            &mut hotx,
+            &mut hoty,
+        )
+    };
+    if n <= 0 || w <= 0 || h <= 0 {
+        return None;
+    }
+    rgba.truncate(n as usize);
+    Some(Cursor {
+        width: w,
+        height: h,
+        hotx,
+        hoty,
+        rgba,
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn current() -> Option<Cursor> {
+    None
+}
+
 /// The classic arrow, as a mask: `#` outline, `.` fill, space transparent.
 ///
 /// Every row must be the same width -- a ragged row would shear the image, and

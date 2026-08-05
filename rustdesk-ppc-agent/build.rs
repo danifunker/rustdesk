@@ -43,6 +43,14 @@ fn main() {
         .compile("convertshim");
     println!("cargo:rerun-if-changed=src/convert_shim.c");
 
+    // The system cursor image, via private CGS calls -- see the shim's header.
+    cc::Build::new()
+        .file("src/cursor_shim.c")
+        .flag(NO_MISCOMPILE)
+        .opt_level(2)
+        .compile("cursorshim");
+    println!("cargo:rerun-if-changed=src/cursor_shim.c");
+
     // Quartz injection. In C because CGPoint crosses the API by value, and a
     // 16-byte two-double struct is where the 32-bit PowerPC calling convention
     // diverges from a naive extern "C" declaration.

@@ -201,6 +201,17 @@ fn main() {
     println!("display   : {}x{}", width, height);
     println!("mode      : {}", if secure { "secure (peer must know our key)" } else { "direct-IP, UNENCRYPTED" });
 
+    // Answer the broadcast that populates a client's local-network list. Its
+    // own thread: see `lan` for why it is not in the session loop.
+    {
+        let me = rustdesk_ppc_agent::lan::Announcement {
+            id: ident.id.clone(),
+            hostname: ident.hostname.clone(),
+            username: std::env::var("USER").unwrap_or_else(|_| "admin".to_owned()),
+        };
+        std::thread::spawn(move || rustdesk_ppc_agent::lan::serve(me));
+    }
+
     if let Err(e) = session::listen(&format!("{}:{}", listen, port), &ident) {
         eprintln!("error: {}", e);
         exit(1);

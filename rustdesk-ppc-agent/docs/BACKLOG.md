@@ -152,28 +152,28 @@ duplicate the scroll path that already works via `mask` kind 4.
 Worth revisiting only if someone wants pinch-to-zoom badly enough to accept a
 synthetic keyboard mapping for it.
 
-## 2. LAN discovery
+## ~~2. LAN discovery~~ (done)
 
-RustDesk clients find machines on the local network by UDP broadcast, so the G5
-will not appear in that list. Implementable and self-contained:
+`src/lan.rs` answers the UDP broadcast on 21119 (`RENDEZVOUS_PORT + 3`) that
+populates a client's local-network list, so the G5 no longer has to be reached
+by typing its IP. `PeerDiscovery` is field 22 of `RendezvousMessage` and is
+backported the same way `vp8s` and `pointer_device_event` were.
 
-- Listen on UDP **21119** (`RENDEZVOUS_PORT + 3`).
-- Parse `RendezvousMessage`; on `PeerDiscovery { cmd: "ping" }` reply with
-  `cmd: "pong"` plus `mac`, `id`, `hostname`, `username`, `platform`.
-- `PeerDiscovery` is **field 22** of `RendezvousMessage` and does not exist in
-  the 1.1.8 proto — backport it the same way `vp8s` was:
+Verified by sending a real ping and decoding the reply:
 
-```protobuf
-message PeerDiscovery {
-  string cmd = 1;  string mac = 2;      string id = 3;
-  string username = 4;  string hostname = 5;
-  string platform = 6;  string misc = 7;
-}
+```text
+-> PeerDiscovery { cmd: "ping", id: "probe-client" }
+<- cmd pong | id 4iv3930za | username admin | hostname PowerMacG5 | platform Mac OS
 ```
 
-We already generate `rendezvous.proto`, so this is a proto addition plus a small
-blocking UDP responder — no async needed. Until it exists, connect by typing the
-IP into the client's ID field (see `../README.md`).
+Its own thread, sharing three strings and nothing else: the session loop is a
+tight millisecond budget and a socket that is silent for hours does not belong
+in it.
+
+`mac` is deliberately left empty. Upstream fills it so a client can wake the
+machine over the network, which this agent cannot support in any case -- waking
+it means it was off, and an agent that is off did not answer the broadcast.
+Discovery itself does not read the field.
 
 ## 3. Audio
 
@@ -197,18 +197,35 @@ without guessing — needs "Enable access for assistive devices" in Universal
 Access, which is off. `--probe-keys` prints the character→keycode table as the
 part that *can* be checked unattended.
 
-## ~~5. Cursor shape~~ (position done, shape approximated)
+## ~~5. Cursor shape~~ (done)
 
-Confirmed: the pointer is a hardware overlay and is **not** in the framebuffer —
-a 100x100 patch of a captured frame centred on it holds exactly one colour. So
-the messages really are the only way a viewer gets a pointer.
+Confirmed early on: the pointer is a hardware overlay and is **not** in the
+framebuffer -- a 100x100 patch of a captured frame centred on it holds exactly
+one colour. So the messages really are the only way a viewer gets a pointer.
 
-`CursorData` is now sent once at login and `CursorPosition` whenever it moves
-(`src/cursor.rs`). The shape is a built-in arrow rather than the real one: on
-10.5 the system-wide cursor image is only reachable through private CGS calls,
-and `NSCursor` knows only the calling application's own cursor. So the pointer
-is in the right place but keeps its arrow over text fields and resize edges.
-Reading the true shape is the remaining work.
+The real shape now comes from the window server through the private CGS calls
+in `src/cursor_shim.c`, the same ones every pre-10.6 VNC server used. The
+earlier note here said this was out of reach; it is not, it is merely
+undocumented, and it works on 10.5.8:
+
+```text
+seed 1442 | 24x24 | hotspot (4,4) | depth 32, components 4, bits/component 8
+```
+
+Two things that had to be established rather than assumed:
+
+* **Byte order is A,R,G,B**, like the framebuffer. Found by dumping a real
+  cursor and counting: byte 0 was non-zero across 281 of 576 pixels -- the
+  whole arrow silhouette -- while bytes 1 to 3 were non-zero on 76, the white
+  interior alone. `CursorData` wants RGBA, so the channels rotate on the way
+  out, and the result was rendered and looked at before it shipped.
+* **`CGSCurrentCursorSeed` is what makes polling affordable.** It is one call
+  and changes only when the shape does, so the session loop polls it every pass
+  and fetches the image only when it has actually moved on. The seed doubles as
+  the `CursorData` id, which is exactly what the client caches shapes by.
+
+A shape that cannot be read falls back to the built-in arrow rather than to no
+pointer at all.
 
 ## 6. Clipboard
 

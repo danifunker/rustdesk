@@ -25,6 +25,7 @@ pub mod encode;
 // Always compiled, like `capture`: the FFI half is gated inside so the protocol
 // decisions stay reachable from host tests.
 pub mod input;
+pub mod lan;
 pub mod crypto;
 pub mod frame;
 pub mod session;
