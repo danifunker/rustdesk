@@ -7,10 +7,38 @@ Connect from a RustDesk client by typing  192.168.99.116  into the ID field
 which is also upstream's behaviour for direct connections.
 
 
-THE NORMAL WAY: as a LaunchAgent
+THE SIMPLE WAY: over ssh
+------------------------
+
+    ./build-ppc.sh deploy
+
+Builds, installs, and starts the agent inside a detached `screen` session, which
+keeps running after the ssh connection closes.
+
+The screen matters. A *fully* detached agent -- backgrounded with `&`, or with
+nohup -- cannot reach the window server at all:
+
+    kCGErrorRangeCheck : On-demand launch of the Window Server is allowed for
+                         root user only
+    Window Server is not available.
+
+It then reports a 0x0 display and quietly serves an input-only session: mouse
+and keyboard work, no video ever arrives. Started under screen it keeps enough
+of the login session to read the framebuffer, verified by streaming frames after
+the ssh connection was closed.
+
+To look at it, or stop it:
+
+    ssh ppctiger 'screen -r rdagent'      # detach again with ctrl-a d
+    ssh ppctiger 'screen -S rdagent -X quit'
+
+
+AFTER A REBOOT: as a LaunchAgent
 --------------------------------
 
-Run this ONCE, in Terminal.app ON THE G5 ITSELF -- not over ssh:
+A screen session does not survive a reboot. For the agent to come back by
+itself, load it into the GUI session once -- in Terminal.app ON THE G5 ITSELF,
+not over ssh, which reaches a different launchd:
 
     launchctl load -w ~/Library/LaunchAgents/com.rustdesk.ppc-agent.plist
 
@@ -26,36 +54,35 @@ with
         ppctiger:~/Library/LaunchAgents/com.rustdesk.ppc-agent.plist
 
 
-WHY IT HAS TO BE THE GUI SESSION
---------------------------------
+NEVER CAPTURE THE DISPLAY
+-------------------------
 
-Not a style preference -- the agent crashes without one.
-
-Capturing a frame needs CGDisplayCaptureWithOptions (see capture.rs for why),
-and CoreGraphics registers the process with LaunchServices on the way through:
+Reading the framebuffer needs no CGDisplayCapture, and adding one does real
+damage. It takes exclusive control of the display and registers the caller as an
+application:
 
     CGDisplayCaptureWithOptions -> CGSRegisterProcessAsApp -> _RegisterApplication
       -> LSClientSideSharedMemory::GetClientSideSharedMemory -> abort()
 
-A process with no session aborts at that last step. An agent started over ssh
-inherits the ssh login's session and works only until that connection closes --
-after which it dies on its next frame. `launchctl load` from Terminal.app puts
-it in the console ("Aqua") session, which lasts as long as the login does.
+Run a few times a second, that steals focus and dismisses any menu open on the
+G5 -- the machine becomes unusable to whoever is sitting at it. In a process
+with no GUI session it aborts at that last frame instead, which is why an agent
+started over ssh used to die the moment the connection closed.
 
-ssh cannot do this itself: `launchctl bsexec` needs root, and `launchctl load`
-over ssh talks to the ssh session's launchd, not the GUI one.
+It was added in the belief that the framebuffer mapping went stale. It does not:
+measured over 140 s with nothing forced, six distinct screens, and every
+in-process read matched a freshly exec'd one. See capture.rs.
 
 
-TEMPORARY: attached to an ssh session
--------------------------------------
+RUNNING IT BY HAND
+------------------
 
-Useful while iterating, and it does not survive the ssh connection closing:
+    ssh ppctiger '( ~/rustdesk-agent --port 21118 -vv > ~/agent.log 2>&1 < /dev/null & )'
 
-    ssh ppctiger '~/rustdesk-agent --port 21118 -vv > ~/agent.log 2>&1'
-
-Leave that command running. Do NOT background it with nohup or `&`: Darwin's
-nohup fails over a non-tty ssh session ("can't migrate to background session"),
-and a detached agent has no session, so it hits the abort above.
+Do NOT use nohup: over a non-tty ssh session Darwin's nohup dies with "can't
+migrate to background session" and the agent never starts. The subshell above
+exits immediately, which reparents the agent to init and survives the
+disconnect.
 
 
 BUILD AND DEPLOY
@@ -72,10 +99,10 @@ Then:
     ./build-ppc.sh            # build only      (~90 s incremental, ~14 min clean)
     ./build-ppc.sh deploy     # build, install and restart on the G5
 
-Note that `deploy` restarts the agent the detached way, so use it with the
-LaunchAgent (which owns the process) or restart by hand afterwards. The C parts
-are compiled on the G5 itself by the ppc-cc-remote.py wrapper, so the machine
-must be reachable to build at all.
+If the LaunchAgent is loaded it owns the process, so let launchd restart it
+rather than starting a second copy by hand -- the agent binds a fixed port and
+the loser just fails. The C parts are compiled on the G5 itself by the
+ppc-cc-remote.py wrapper, so the machine must be reachable to build at all.
 
 
 CHECKING IT WORKS
@@ -83,7 +110,7 @@ CHECKING IT WORKS
 
     ssh ppctiger '~/rustdesk-agent --probe-display'   # geometry and per-stage timings
     ssh ppctiger '~/rustdesk-agent --probe-live'      # capture liveness + mouse self-test
-    ssh ppctiger '~/rustdesk-agent --probe-keys'      # types into a window, writes ~/keys.ppm
+    ssh ppctiger '~/rustdesk-agent --probe-keys'      # types into the focused window -> ~/keys.ppm
     ssh ppctiger 'tail -f ~/agent.log'                # protocol trace, with -vv
     cargo test                                        # 32 host tests
     cargo run --example probe_client -- 192.168.99.116:21118 ppctest123

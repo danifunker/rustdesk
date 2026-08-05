@@ -14,13 +14,31 @@
 //!
 //! Two things that matter and were verified rather than assumed:
 //!
-//! * **The mapping is a snapshot until the display is captured and released.**
-//!   See [`Capturer::refresh_framebuffer`]. Reading without that gives one
-//!   plausible frame and then the same bytes forever, which looks exactly like a
-//!   frozen screen and is not one.
+//! * **No `CGDisplayCapture` is required, and it must not be used.** Capturing
+//!   the display takes exclusive control of it and registers the caller as an
+//!   application (`CGSRegisterProcessAsApp`), which steals focus and dismisses
+//!   any menu the person at the machine has open. Run a few times a second it
+//!   makes the console unusable. It also aborts outright in a process with no
+//!   GUI session. Reading the framebuffer directly needs none of it.
 //! * **Byte order is A,R,G,B in memory** — the natural big-endian ARGB32. Note
 //!   libyuv's `ARGB` means the little-endian layout, i.e. B,G,R,A in memory, so
 //!   its `ARGBToI420` is *not* the right entry point here. See `crate::convert`.
+//!
+//! # The mapping is live; a "frozen" screen is a bug in the probe
+//!
+//! It is worth being explicit, because this was got wrong at length. The pointer
+//! from `CGDisplayBaseAddress` tracks the screen in a long-lived process.
+//! Measured over 140 s with nothing forced, sampling the menu-bar clock: six
+//! distinct images, and every in-process read agreed with a freshly exec'd
+//! process, which is known to see current pixels.
+//!
+//! What looked like a frozen framebuffer was [`hash_row`] sampling only alpha
+//! bytes, so *every* screen compared equal to every other. A capture/release
+//! cycle was added to "republish" the mapping and appeared to work, because
+//! `killall Dock` was being used to force a change and launchd throttles
+//! respawns to ten seconds -- the repaint landed next to the call being
+//! credited for it. If capture ever looks stale again, suspect the comparison
+//! before reaching for CoreGraphics.
 //!
 //! # Never read the framebuffer per-pixel
 //!
@@ -69,13 +87,7 @@ extern "C" {
     fn CGDisplayBaseAddress(d: CGDirectDisplayID) -> *mut c_void;
     fn CGDisplayHideCursor(d: CGDirectDisplayID) -> c_int;
     fn CGDisplayShowCursor(d: CGDirectDisplayID) -> c_int;
-    fn CGDisplayCaptureWithOptions(d: CGDirectDisplayID, options: u32) -> c_int;
-    fn CGDisplayRelease(d: CGDirectDisplayID) -> c_int;
 }
-
-/// `kCGCaptureNoFill` — capture without blanking the display, so the pixels the
-/// local user is looking at stay on screen throughout.
-const CAPTURE_NO_FILL: u32 = 1 << 0;
 
 #[cfg(target_os = "macos")]
 /// Re-read the framebuffer address every time rather than caching it.
@@ -195,49 +207,6 @@ impl Capturer {
                 buf: vec![0; bytes_per_row * height],
                 sums: vec![0; BANDS],
             })
-        }
-    }
-
-    /// Make the mapping show what is on screen *now*.
-    ///
-    /// Without this the agent sends exactly one frame per process and then
-    /// nothing: `CGDisplayBaseAddress` hands this process a snapshot, not the
-    /// live scanout, and no amount of re-reading the pointer or the pixels moves
-    /// it. Measured on the G5, with a Dock restart forcing a change in between:
-    ///
-    /// ```text
-    ///   plain re-read     1836836664   <- unchanged
-    ///   re-read base      1836836664   <- unchanged
-    ///   after dcbf        1836836664   <- unchanged, so not a stale cache line
-    ///   while captured    1836836664   <- unchanged
-    ///   after release     3918311278   <- current, and equal to what a freshly
-    ///                                     exec'd process reads
-    /// ```
-    ///
-    /// So a capture/release cycle is what republishes the pixels — releasing the
-    /// display makes the window server repaint, and the snapshot is refreshed
-    /// with it. `kCGCaptureNoFill` keeps the local user's screen intact; the
-    /// display is only held for the length of the cycle.
-    ///
-    /// It costs ~256 ms at 1920x1080, which dominates an idle poll, so call it
-    /// once per capture cycle and not per band.
-    pub fn refresh_framebuffer(&mut self) {
-        unsafe {
-            let cap = CGDisplayCaptureWithOptions(self.display, CAPTURE_NO_FILL);
-            let rel = CGDisplayRelease(self.display);
-            if cap != 0 || rel != 0 {
-                // Not fatal, but the peer will see a still image, so say so
-                // rather than let it look like an idle screen.
-                log::warn!(
-                    "display refresh failed (capture={}, release={}) -- video will be frozen",
-                    cap,
-                    rel
-                );
-            }
-            let b = CGDisplayBaseAddress(self.display);
-            if !b.is_null() {
-                self.base = b;
-            }
         }
     }
 
