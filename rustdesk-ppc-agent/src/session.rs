@@ -112,22 +112,28 @@ const MAX_LOGIN_ATTEMPTS: u32 = 10;
 /// The version reported to the peer, and **not** the crate's own.
 ///
 /// A modern client changes what it *sends* based on what we claim to be, so
-/// this string is load-bearing rather than cosmetic. Two gates in the current
-/// client (`src/common.rs`) read it:
+/// this is a capability declaration rather than a label. **Raise it only for
+/// behaviour that is implemented and has been tried against a real client.**
+/// The gates, from the current client's `src/common.rs`:
 ///
-/// * **1.2.4** -- at or above it, the refresh button sends
-///   `Misc::refresh_video_display` (field 31) instead of `refresh_video`
-///   (field 10). We only know field 10, so the button would stop working.
-/// * **1.4.5** -- at or above it, the client may use *relative* mouse mode and
-///   send deltas rather than absolute coordinates. `decide_mouse` takes
-///   absolutes, so the pointer would come apart entirely.
+/// * **1.2.0** -- at or above it the client's default keyboard mode becomes
+///   `Map`, where `chr` carries a keycode already translated for this platform
+///   instead of a character. *Implemented and verified*: `decide_key` reads
+///   `KeyEvent.mode`, and typing was confirmed in both modes against a real
+///   client. Hence the value below.
+/// * **1.2.4** -- the refresh button switches to `Misc::refresh_video_display`
+///   (field 31) from `refresh_video` (field 10). Not backported, so the button
+///   would silently stop working. **Not yet.**
+/// * **1.4.5** -- the client may use *relative* mouse mode and send deltas
+///   rather than absolute coordinates. `decide_mouse` takes absolutes, so the
+///   pointer would come apart entirely. **Not yet.**
 ///
-/// It was `env!("CARGO_PKG_VERSION")`, which happened to be 0.1.0 and happened
-/// to be safe. Bumping the crate version to anything past 1.2.4 -- an ordinary
-/// thing to do to a maturing project -- would silently have moved the client
-/// onto paths this agent does not implement, with no error anywhere. Pinned
-/// here so that cannot happen by accident, and guarded by a test.
-const REPORTED_VERSION: &str = "0.1.0";
+/// It used to be `env!("CARGO_PKG_VERSION")`, which happened to be 0.1.0 and
+/// happened to be safe. Bumping a crate version is an ordinary thing to do and
+/// would silently have moved the client onto paths this agent does not
+/// implement, with no error anywhere. Pinned here, and guarded by a test that
+/// encodes exactly which gates have been earned.
+const REPORTED_VERSION: &str = "1.2.0";
 
 /// Is there anything to read without waiting?
 ///
@@ -1132,23 +1138,34 @@ fn version_number(v: &str) -> i64 {
 mod version_tests {
     use super::*;
 
-    /// The reported version must stay below every gate a modern client applies
-    /// to it, or the client starts sending things this agent cannot answer.
-    /// See `REPORTED_VERSION` for what each one costs.
+    /// The reported version must claim exactly the gates that are implemented:
+    /// no less, or the client keeps to paths we have outgrown, and no more, or
+    /// it starts sending things this agent cannot answer. Raising the constant
+    /// without doing the work fails here rather than in someone's session.
     #[test]
-    fn we_stay_on_the_legacy_side_of_every_client_gate() {
+    fn the_reported_version_claims_what_is_implemented_and_no_more() {
         let ours = version_number(REPORTED_VERSION);
-        // Above this the refresh button switches to a field we do not know.
+
+        // Earned: `decide_key` reads KeyEvent.mode, so Map is handled.
         assert!(
-            ours < version_number("1.2.4"),
-            "{} is at or above the multi-UI-session gate",
+            ours >= version_number("1.2.0"),
+            "{} is below the keyboard-mode gate, which is implemented",
             REPORTED_VERSION
         );
-        // Above this the client may send relative mouse deltas instead of
-        // absolute coordinates, which `decide_mouse` does not handle.
+
+        // Not earned: Misc::refresh_video_display (field 31) is not backported,
+        // so the peer's refresh button would stop working.
+        assert!(
+            ours < version_number("1.2.4"),
+            "{} claims the multi-UI-session gate; backport field 31 first",
+            REPORTED_VERSION
+        );
+
+        // Not earned: `decide_mouse` takes absolute coordinates and would be
+        // handed deltas.
         assert!(
             ours < version_number("1.4.5"),
-            "{} is at or above the relative-mouse gate",
+            "{} claims the relative-mouse gate; handle deltas first",
             REPORTED_VERSION
         );
     }
