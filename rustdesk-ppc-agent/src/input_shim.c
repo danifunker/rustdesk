@@ -27,32 +27,50 @@ static CGEventSourceRef src(void)
     return s;
 }
 
+/* Which buttons are down. CGPostMouseEvent takes the whole picture each time
+ * rather than one transition, so the state has to be kept here.
+ * Index order is CGMouseButton's: 0 left, 1 right, 2 centre — which is also the
+ * order CGPostMouseEvent wants its button arguments in. */
+static int g_btn[3];
+
 /* type: 0 move, 1 down, 2 up, 3 dragged-left, 4 dragged-right
- * button: 0 left, 1 right, 2 centre */
+ * button: 0 left, 1 right, 2 centre
+ *
+ * **CGPostMouseEvent, not CGEventCreateMouseEvent + CGEventPost.** The modern
+ * pair looks like the right answer and is wrong here in one specific way: while
+ * the Dock has a stack open — and presumably in any other tracking loop — a
+ * click it posts onto the icon is silently ignored, so the stack opens and then
+ * cannot be collapsed. Measured on the G5, with the stack open and the click at
+ * the same coordinate that opened it:
+ *
+ *     CGEventPost, HID tap        : no change
+ *     CGEventPost, session tap    : no change
+ *     ... with a real timestamp   : no change
+ *     ... after warping the cursor: no change
+ *     CGPostMouseEvent            : collapses, every time
+ *
+ * A click on empty desktop dismisses the stack through either API, so the
+ * events are being delivered; it is the hit-test inside the tracking loop that
+ * refuses them. The old call is deprecated from 10.6 and this target stops at
+ * 10.5, so the deprecation costs nothing.
+ *
+ * Passing the full button state also makes dragging fall out for free: a move
+ * posted while a button is held *is* a drag, so types 3 and 4 need no special
+ * case and cannot disagree with what the window server thinks is pressed.
+ */
 static void post_mouse(int type, CGPoint pt, int button)
 {
-    CGEventType et;
-    CGMouseButton b = (CGMouseButton)button;
+    int b = (button >= 0 && button < 3) ? button : 0;
 
-    switch (type) {
-    case 1:
-        et = (button == 1) ? kCGEventRightMouseDown
-           : (button == 2) ? kCGEventOtherMouseDown : kCGEventLeftMouseDown;
-        break;
-    case 2:
-        et = (button == 1) ? kCGEventRightMouseUp
-           : (button == 2) ? kCGEventOtherMouseUp : kCGEventLeftMouseUp;
-        break;
-    case 3: et = kCGEventLeftMouseDragged;  break;
-    case 4: et = kCGEventRightMouseDragged; break;
-    default: et = kCGEventMouseMoved;       break;
-    }
+    if (type == 1)
+        g_btn[b] = 1;
+    else if (type == 2)
+        g_btn[b] = 0;
 
-    CGEventRef e = CGEventCreateMouseEvent(src(), et, pt, b);
-    if (e) {
-        CGEventPost(kCGHIDEventTap, e);
-        CFRelease(e);
-    }
+    CGPostMouseEvent(pt, TRUE, 3,
+                     g_btn[0] ? TRUE : FALSE,
+                     g_btn[1] ? TRUE : FALSE,
+                     g_btn[2] ? TRUE : FALSE);
 }
 
 void rd_mouse(int type, double x, double y, int button)
