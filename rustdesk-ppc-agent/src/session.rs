@@ -318,8 +318,14 @@ pub fn serve(stream: TcpStream, ident: &Identity) -> io::Result<()> {
     pi.platform = "Mac OS".to_owned();
     pi.version = env!("CARGO_PKG_VERSION").to_owned();
     let mut d = DisplayInfo::new();
-    d.width = ident.width;
-    d.height = ident.height;
+    // The size now, not the size when the process started -- the resolution may
+    // have been changed since, and this is what sizes the peer's canvas.
+    #[cfg(target_os = "macos")]
+    let (dw, dh) = crate::capture::display_size().unwrap_or((ident.width, ident.height));
+    #[cfg(not(target_os = "macos"))]
+    let (dw, dh) = (ident.width, ident.height);
+    d.width = dw;
+    d.height = dh;
     d.name = "Display".to_owned();
     d.online = true;
     pi.displays.push(d);
@@ -342,6 +348,8 @@ struct Video {
     start: std::time::Instant,
     /// Kept so the encoder can be rebuilt if the resolution changes.
     bitrate_kbps: u32,
+    /// Set when the colour depth left 32, so the warning is logged once.
+    bpp_warned: bool,
     /// Set when the encoder could not be rebuilt; the session carries on with
     /// input only rather than dropping the peer.
     broken: bool,
@@ -360,6 +368,7 @@ impl Video {
             img,
             start: std::time::Instant::now(),
             bitrate_kbps,
+            bpp_warned: false,
             broken: false,
         })
     }
@@ -372,21 +381,45 @@ impl Video {
         Ok(())
     }
 
+    /// Re-read the geometry, rebuilding around it if it moved.
+    ///
+    /// Must run before anything reads the framebuffer: the copy length comes
+    /// from the cached geometry, so a resolution change that goes unnoticed
+    /// reads past the end of the mapping. Returns the new size when it changed,
+    /// so the caller can tell the peer *before* sending a frame in it.
+    fn poll_geometry(&mut self) -> Option<(i32, i32)> {
+        if !self.cap.refresh() {
+            return None;
+        }
+        log::info!("display is now {}x{}; rebuilding the encoder", self.cap.width, self.cap.height);
+        if let Err(e) = self.resize() {
+            log::error!("could not restart the encoder at the new size: {}", e);
+            self.broken = true;
+        }
+        Some((self.cap.width as i32, self.cap.height as i32))
+    }
+
     /// Probe, and if anything moved, capture/convert/encode one frame.
     /// Returns None when the screen is unchanged -- the cheap path, ~15 ms.
     fn next_frame(&mut self) -> Option<(Vec<u8>, bool, i64)> {
-        // Before anything reads the framebuffer: the copy length is derived from
-        // the cached geometry, so a resolution change that goes unnoticed reads
-        // past the end of the mapping.
-        if self.cap.refresh() {
-            log::info!("display is now {}x{}; rebuilding the encoder", self.cap.width, self.cap.height);
-            if let Err(e) = self.resize() {
-                log::error!("could not restart the encoder at the new size: {}", e);
-                self.broken = true;
-            }
-        }
         if self.broken {
             return None;
+        }
+        // A 16-bit mode is reachable from the Displays pane, and the converter
+        // assumes 32. Pause rather than send garbage, and pick up again by
+        // itself if the depth comes back.
+        let bpp = self.cap.bits_per_pixel();
+        if bpp != 32 {
+            if !self.bpp_warned {
+                log::warn!("display is {} bits per pixel, not 32; video paused", bpp);
+                self.bpp_warned = true;
+            }
+            return None;
+        }
+        if self.bpp_warned {
+            log::info!("display is 32 bits per pixel again; resuming video");
+            self.bpp_warned = false;
+            self.cap.invalidate();
         }
         let dirty = self.cap.dirty_bands();
         if !dirty.iter().any(|d| *d) {
@@ -501,6 +534,22 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
         // Pump one video frame, if the screen moved.
         #[cfg(all(target_os = "macos", not(no_vpx)))]
         if let Some(v) = video.as_mut() {
+            // Announce a new size before sending a frame in it: the peer sizes
+            // its canvas from what it was last told, so a frame that arrives
+            // first is rendered into the wrong geometry.
+            if let Some((w, h)) = v.poll_geometry() {
+                let mut sd = SwitchDisplay::new();
+                sd.display = 0;
+                sd.x = 0;
+                sd.y = 0;
+                sd.width = w;
+                sd.height = h;
+                let mut mi = Misc::new();
+                mi.set_switch_display(sd);
+                let mut m = Message::new();
+                m.set_misc(mi);
+                peer.send(&m)?;
+            }
             if let Some((data, key, pts)) = v.next_frame() {
                 let mut vp = crate::message_proto::VP9::new();
                 vp.data = data;

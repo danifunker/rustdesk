@@ -169,6 +169,23 @@ mod tests {
     }
 }
 
+/// The main display's size right now, without building a `Capturer`.
+///
+/// Used when a peer logs in: the size the agent saw at startup may be minutes
+/// or hours stale by then, and `PeerInfo` is what sizes the peer's canvas.
+#[cfg(target_os = "macos")]
+pub fn display_size() -> Option<(i32, i32)> {
+    unsafe {
+        let d = CGMainDisplayID();
+        let (w, h) = (CGDisplayPixelsWide(d), CGDisplayPixelsHigh(d));
+        if w == 0 || h == 0 {
+            None
+        } else {
+            Some((w as i32, h as i32))
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
 pub struct Capturer {
     display: CGDirectDisplayID,
@@ -344,6 +361,12 @@ impl Capturer {
             }
             changed
         }
+    }
+
+    /// Colour depth right now. The converter assumes 32, and this vintage can
+    /// be switched to 16 from the Displays preference pane.
+    pub fn bits_per_pixel(&self) -> usize {
+        unsafe { CGDisplayBitsPerPixel(self.display) }
     }
 
     pub fn hide_cursor(&self, hide: bool) {
