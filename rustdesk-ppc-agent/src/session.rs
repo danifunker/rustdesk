@@ -127,9 +127,18 @@ const MAX_LOGIN_ATTEMPTS: u32 = 10;
 ///   things are gated on this same version and were checked one at a time
 ///   before claiming it; all of them turn out to need something else we do not
 ///   send, and the survey is in `docs/BACKLOG.md` so it is not repeated.
+/// * **1.4.0**, crossed on the way to 1.4.5 -- a screenshot button appears, and
+///   this gate reads the version and nothing else, so unlike almost everything
+///   added since 1.2.4 there is no capability flag to leave unset.
+///   *Implemented*: `ScreenshotRequest` is backported and served, and refused
+///   with a message rather than silence when it cannot be.
 /// * **1.4.5** -- the client may use *relative* mouse mode and send deltas
-///   rather than absolute coordinates. `decide_mouse` takes absolutes, so the
-///   pointer would come apart entirely. **Not yet.**
+///   rather than absolute coordinates. *Implemented and measured on the machine*:
+///   `decide_mouse` handles `mask` kind 5 and `land_delta` bounds where it puts
+///   the pointer. See `MouseAction::MoveBy` for what the bound is for.
+///
+/// This is the last gate. There is nothing above 1.4.5 that changes what the
+/// client sends to a peer like this one -- see `docs/BACKLOG.md` §11c.
 ///
 /// It used to be `env!("CARGO_PKG_VERSION")`, which happened to be 0.1.0 and
 /// happened to be safe. Bumping a crate version is an ordinary thing to do and
