@@ -27,6 +27,7 @@ OPTIONS:
     --show-id        print this machine's agent ID and exit
     --show-key       print the public key a peer needs, and exit
     --probe-display  report what the framebuffer looks like, and exit
+    --probe-live     watch the framebuffer for change and self-test the mouse
     --config PATH    config file (default ~/.rustdesk-ppc-agent.conf)
     --secure         require the signed_id/public_key exchange. OFF by default:
                      a client connecting by IP does not take part, and enabling
@@ -50,6 +51,7 @@ fn main() {
     let mut cfg_path = Config::default_path();
     let mut set_password: Option<String> = None;
     let (mut show_id, mut show_key, mut probe) = (false, false, false);
+    let mut probe_live = false;
     let mut level = log::LevelFilter::Info;
     let mut secure = false;
 
@@ -83,6 +85,10 @@ fn main() {
             }
             "--probe-display" => {
                 probe = true;
+                i += 1;
+            }
+            "--probe-live" => {
+                probe_live = true;
                 i += 1;
             }
             "--log" => {
@@ -144,6 +150,10 @@ fn main() {
     }
     if probe {
         probe_display();
+        return;
+    }
+    if probe_live {
+        probe_live_fn();
         return;
     }
 
@@ -257,6 +267,62 @@ fn probe_display() {
 #[cfg(not(target_os = "macos"))]
 fn probe_display() {
     println!("--probe-display is only meaningful on macOS");
+}
+
+/// Answers the two open questions at once: does the framebuffer reflect changes,
+/// and does injected input reach the window server?
+#[cfg(target_os = "macos")]
+fn probe_live_fn() {
+    use rustdesk_ppc_agent::input::{cursor_position, Injector};
+    use rustdesk_ppc_agent::message_proto::MouseEvent;
+
+    let mut c = match rustdesk_ppc_agent::capture::Capturer::new() {
+        Ok(c) => c,
+        Err(e) => {
+            println!("capture unavailable: {}", e);
+            return;
+        }
+    };
+    println!("display {}x{}", c.width, c.height);
+
+    println!("\n--- mouse injection ---");
+    let before = cursor_position();
+    println!("  cursor before : {:.0},{:.0}", before.0, before.1);
+    let mut inj = Injector::new();
+    let (tx, ty) = ((c.width / 3) as i32, (c.height / 3) as i32);
+    let mut ev = MouseEvent::new();
+    ev.mask = 0;
+    ev.x = tx;
+    ev.y = ty;
+    inj.mouse(&ev);
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    let after = cursor_position();
+    println!("  asked for     : {},{}", tx, ty);
+    println!("  cursor after  : {:.0},{:.0}", after.0, after.1);
+    let moved = (after.0 - tx as f64).abs() < 4.0 && (after.1 - ty as f64).abs() < 4.0;
+    println!("  => injection {}", if moved { "WORKS" } else { "did NOT move the cursor" });
+
+    println!("\n--- framebuffer liveness (10s) ---");
+    println!("  move a window or type on the G5 now, if you can");
+    c.invalidate();
+    let mut seen_change = false;
+    for i in 0..10 {
+        let d = c.dirty_bands();
+        let n = d.iter().filter(|x| **x).count();
+        if i > 0 && n > 0 {
+            seen_change = true;
+        }
+        println!("  t={:2}s  dirty bands: {}", i, n);
+        std::thread::sleep(std::time::Duration::from_millis(1000));
+    }
+    println!(
+        "  => framebuffer {}",
+        if seen_change { "IS live" } else { "appears FROZEN (nothing changed after the first probe)" }
+    );
+}
+#[cfg(not(target_os = "macos"))]
+fn probe_live_fn() {
+    println!("--probe-live is only meaningful on macOS");
 }
 
 fn hostname() -> String {

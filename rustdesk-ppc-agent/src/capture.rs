@@ -69,6 +69,17 @@ extern "C" {
     fn CGDisplayShowCursor(d: CGDirectDisplayID) -> c_int;
 }
 
+/// Re-read the framebuffer address every time rather than caching it.
+///
+/// The WindowServer may page-flip between buffers, in which case a pointer
+/// captured once goes stale and every later read returns the same frozen image.
+/// The call is cheap next to the copy that follows it.
+#[inline]
+fn current_base(d: CGDirectDisplayID, fallback: *mut c_void) -> *const u8 {
+    let b = unsafe { CGDisplayBaseAddress(d) };
+    if b.is_null() { fallback as *const u8 } else { b as *const u8 }
+}
+
 /// Horizontal bands the screen is divided into for change detection. 16 keeps
 /// the probe cheap while still isolating a typical window or menu to a couple of
 /// bands.
@@ -128,8 +139,9 @@ impl Capturer {
         if self.buf.len() != n {
             self.buf.resize(n, 0);
         }
+        let base = current_base(self.display, self.base);
         unsafe {
-            std::ptr::copy_nonoverlapping(self.base as *const u8, self.buf.as_mut_ptr(), n);
+            std::ptr::copy_nonoverlapping(base, self.buf.as_mut_ptr(), n);
         }
         &self.buf
     }
@@ -152,6 +164,7 @@ impl Capturer {
     pub fn dirty_bands(&mut self) -> [bool; BANDS] {
         let mut dirty = [false; BANDS];
         let rows_per = self.band_rows();
+        let base = current_base(self.display, self.base);
         for b in 0..BANDS {
             let start = b * rows_per;
             let end = ((b + 1) * rows_per).min(self.height);
@@ -160,10 +173,7 @@ impl Capturer {
             while row < end {
                 let off = row * self.bytes_per_row;
                 let line = unsafe {
-                    std::slice::from_raw_parts(
-                        (self.base as *const u8).add(off),
-                        self.bytes_per_row,
-                    )
+                    std::slice::from_raw_parts(base.add(off), self.bytes_per_row)
                 };
                 // Sample within the row too; the whole point is to touch few bytes.
                 let mut c = 0;
@@ -189,6 +199,7 @@ impl Capturer {
             self.buf.resize(n, 0);
         }
         let rows_per = self.band_rows();
+        let base = current_base(self.display, self.base);
         for b in 0..BANDS {
             if !dirty[b] {
                 continue;
@@ -202,7 +213,7 @@ impl Capturer {
             let len = (end - start) * self.bytes_per_row;
             unsafe {
                 std::ptr::copy_nonoverlapping(
-                    (self.base as *const u8).add(off),
+                    base.add(off),
                     self.buf.as_mut_ptr().add(off),
                     len,
                 );
