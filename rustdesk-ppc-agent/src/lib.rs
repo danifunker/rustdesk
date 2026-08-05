@@ -21,7 +21,8 @@ pub mod config;
 pub mod convert;
 #[cfg(all(target_os = "macos", not(no_vpx)))]
 pub mod encode;
-#[cfg(target_os = "macos")]
+// Always compiled, like `capture`: the FFI half is gated inside so the protocol
+// decisions stay reachable from host tests.
 pub mod input;
 pub mod crypto;
 pub mod frame;
