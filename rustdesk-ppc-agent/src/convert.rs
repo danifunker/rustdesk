@@ -75,6 +75,56 @@ pub fn argb_to_i420(src: &[u8], stride: usize, dst: &mut I420) {
 /// the mouse. Bounds are snapped outward to even rows because 4:2:0 chroma is
 /// shared by each 2x2 block, so a band boundary cannot fall inside one.
 pub fn argb_to_i420_rows(src: &[u8], stride: usize, dst: &mut I420, y0: usize, y1: usize) {
+    #[cfg(target_os = "macos")]
+    {
+        // The C shim, for the optimiser -- see `convert_shim.c`. Byte-for-byte
+        // identical to the Rust below, which `--probe-display` checks against a
+        // real frame on the machine itself.
+        let cs = dst.chroma_stride() as std::os::raw::c_int;
+        let (w, h) = (dst.width as std::os::raw::c_int, dst.height as std::os::raw::c_int);
+        unsafe {
+            rd_argb_to_i420_rows(
+                src.as_ptr(),
+                src.len(),
+                stride as std::os::raw::c_int,
+                dst.y.as_mut_ptr(),
+                dst.u.as_mut_ptr(),
+                dst.v.as_mut_ptr(),
+                w,
+                h,
+                cs,
+                y0 as std::os::raw::c_int,
+                y1 as std::os::raw::c_int,
+            );
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    argb_to_i420_rows_rust(src, stride, dst, y0, y1);
+}
+
+#[cfg(target_os = "macos")]
+extern "C" {
+    fn rd_argb_to_i420_rows(
+        src: *const u8,
+        src_len: usize,
+        stride: std::os::raw::c_int,
+        y: *mut u8,
+        u: *mut u8,
+        v: *mut u8,
+        width: std::os::raw::c_int,
+        height: std::os::raw::c_int,
+        chroma_stride: std::os::raw::c_int,
+        y0: std::os::raw::c_int,
+        y1: std::os::raw::c_int,
+    );
+}
+
+/// The reference implementation, and what the host tests exercise.
+///
+/// Kept even where the C shim is used: it is the definition of what the shim
+/// must produce, and `--probe-display` compares the two on the target rather
+/// than taking the port on trust.
+pub fn argb_to_i420_rows_rust(src: &[u8], stride: usize, dst: &mut I420, y0: usize, y1: usize) {
     let (w, h) = (dst.width, dst.height);
     let cs = dst.chroma_stride();
     debug_assert!(stride >= w * 4);
