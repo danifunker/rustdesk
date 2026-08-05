@@ -67,15 +67,37 @@ them makes it survive, which is the signature of a codegen bug rather than
 anything in the source. `build.rs` compiles all three shims with
 `.opt_level(2)`.
 
+Bisected to a single pass. Of the obvious candidates, only one avoids it:
+
+```text
+-O2                        Bus error
+-O2 -fno-store-merging     Bus error
+-O2 -fno-strict-aliasing   Bus error
+-O2 -fno-schedule-insns2   Bus error
+-O2 -fno-tree-slp-vectorize Bus error
+-O2 -fno-gcse              survives
+```
+
+So there *is* a narrower flag than dropping the file to `-O1`. What has not
+been established is the mechanism -- GCSE moves and combines loads, and
+PowerPC faults on a misaligned wide access where x86 would not care, but that
+is a plausible story rather than a disassembled one. Two guesses at the
+mechanism have already been wrong (a missing prototype, then store merging),
+so treat the pass name as the finding and the explanation as unfinished.
+
 Nothing currently shipping is known to be affected -- `convert_shim.c` is
 checked byte-for-byte against the Rust reference on a real frame by
 `--probe-display`, and the vpx and input shims have run for hours -- but the
 next arithmetic-heavy shim is a coin toss. Worth doing:
 
-- Reduce it properly and see whether `-fno-strict-aliasing` or a narrower
-  `-fno-` flag avoids it, rather than dropping the whole file to `-O1`.
+- Decide whether to add `-fno-gcse` to `build.rs` for the shims. It is not
+  free: GCSE is a real optimisation and `convert_shim.c` is the hottest code
+  in the agent at 20 ms a frame, so measure that number both ways before
+  spending it. Insurance against a fault nobody has hit again may cost more
+  than it saves.
 - Whatever the outcome, **verify C shims against a reference on the target**,
-  the way the converter is. That check is what makes a miscompile survivable.
+  the way the converter is. That check is what makes a miscompile survivable,
+  and it is cheaper than understanding the compiler.
 
 ## 1d. Video is given up on for the whole session if it fails once
 
