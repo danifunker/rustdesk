@@ -4,6 +4,19 @@
 // The vpx headers are vendored under vpx-include/ rather than referenced on the
 // Mac: ppc-cc-remote.py mirrors a local -I directory to the target, but passes
 // paths under a *system* prefix through untouched -- and ~/ppc-libs is neither.
+/// The one -O2 pass that miscompiles on this toolchain.
+///
+/// `gcc10-bootstrap` for `powerpc-apple-darwin` generates a faulting access for
+/// ordinary double arithmetic over file-scope statics at -O2, and only at -O2:
+/// -O0, -O1 and -Os are all fine, and of the passes -O2 adds, disabling global
+/// common subexpression elimination is the one that avoids it. It cost a live
+/// agent, on the first click a user made after a deploy -- see
+/// docs/BACKLOG.md.
+///
+/// Narrower than dropping the shims to -O1, which is what the alternative was.
+/// Everything else -O2 offers is kept.
+const NO_MISCOMPILE: &str = "-fno-gcse";
+
 fn main() {
     // Only the target build links libvpx; host `cargo test` skips the shim so
     // the pure-Rust modules stay testable without a PowerPC libvpx present.
@@ -13,6 +26,7 @@ fn main() {
     }
     cc::Build::new()
         .file("src/vpx_shim.c")
+        .flag(NO_MISCOMPILE)
         .include("vpx-include")
         .opt_level(2)
         .compile("vpxshim");
@@ -24,6 +38,7 @@ fn main() {
     // the agent. src/convert.rs keeps the reference implementation.
     cc::Build::new()
         .file("src/convert_shim.c")
+        .flag(NO_MISCOMPILE)
         .opt_level(2)
         .compile("convertshim");
     println!("cargo:rerun-if-changed=src/convert_shim.c");
@@ -33,6 +48,7 @@ fn main() {
     // diverges from a naive extern "C" declaration.
     cc::Build::new()
         .file("src/input_shim.c")
+        .flag(NO_MISCOMPILE)
         .opt_level(2)
         .compile("inputshim");
     println!("cargo:rerun-if-changed=src/input_shim.c");

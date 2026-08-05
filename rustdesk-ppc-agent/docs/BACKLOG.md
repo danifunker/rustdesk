@@ -90,12 +90,15 @@ checked byte-for-byte against the Rust reference on a real frame by
 `--probe-display`, and the vpx and input shims have run for hours -- but the
 next arithmetic-heavy shim is a coin toss. Worth doing:
 
-- Decide whether to add `-fno-gcse` to `build.rs` for the shims. It is not
-  free: GCSE is a real optimisation and `convert_shim.c` is the hottest code
-  in the agent at 20 ms a frame, so measure that number both ways before
-  spending it. Insurance against a fault nobody has hit again may cost more
-  than it saves.
-- Whatever the outcome, **verify C shims against a reference on the target**,
+- ~~Decide whether to add `-fno-gcse`~~ **Done, and it is free.** The
+  converter measures 21 ms with it against 20 ms without, which is noise, so
+  all three shims now carry it (`NO_MISCOMPILE` in `build.rs`). The worry that
+  GCSE was worth keeping did not survive measuring it.
+- Still open: **why**. The pass name is empirical; nobody has disassembled the
+  faulting instruction. Worth doing only if a second miscompile appears, since
+  the flag costs nothing and the check below catches the class rather than the
+  instance.
+- **Verify C shims against a reference on the target**,
   the way the converter is. That check is what makes a miscompile survivable,
   and it is cheaper than understanding the compiler.
 
@@ -123,14 +126,31 @@ Two things to do, in order:
 Worth knowing that this is invisible to `--probe-display`, which is a fresh
 process every time and so always gets a good mapping.
 
-## 1c. An unknown message from modern clients
+## ~~1c. An unknown message from modern clients~~ (identified)
 
-A real client sends `d2 01 04 0a 02 0a 00` -- **field 26** of `Message`, which
-does not exist in the 1.1.8 proto (the oneof stops at 19). The payload is a
-nested empty message. It arrives in bursts during interaction rather than
-periodically, so it is a UI action rather than a keepalive, and ignoring it does
-no visible harm. Identify it against a modern `message.proto` before adding
-anything for it.
+`d2 01 04 0a 02 0a 00` is **field 26, `PointerDeviceEvent`**, which the 1.1.8
+oneof does not have -- it stops at 19, and current master runs to 32. Decoded
+against `github.com/rustdesk/hbb_common`:
+
+```text
+field 26  PointerDeviceEvent
+  field 1   TouchEvent
+    field 1   TouchScaleUpdate {}      // scale defaults to 0
+```
+
+and the proto's own comment on that field says `0 means scale end`. So they are
+**pinch-to-zoom gestures ending**, which is why they arrive in bursts while
+someone is using the trackpad rather than on a timer. `PointerDeviceEvent` also
+carries two-finger pan (`TouchPanStart` / `Update` / `End`).
+
+Ignoring them is currently right, and not only out of laziness: **Leopard has no
+pinch-zoom event to post.** Magnification gestures are 10.6+, so honouring a
+scale update would mean inventing a mapping -- Cmd-plus and Cmd-minus, say --
+which is application-specific and guesses at intent. The pan messages would
+duplicate the scroll path that already works via `mask` kind 4.
+
+Worth revisiting only if someone wants pinch-to-zoom badly enough to accept a
+synthetic keyboard mapping for it.
 
 ## 2. LAN discovery
 
