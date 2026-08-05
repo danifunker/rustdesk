@@ -20,8 +20,15 @@ use std::os::raw::{c_double, c_int, c_uint};
 
 use crate::message_proto::{key_event, ControlKey, KeyEvent, MouseEvent};
 
+// The shim reverse-maps characters to keycodes with UCKeyTranslate, which lives
+// in Carbon; CoreGraphics alone cannot do it on this OS (see `rd_key_char`).
+#[link(name = "Carbon", kind = "framework")]
+extern "C" {}
+
 extern "C" {
     fn rd_mouse(ty: c_int, x: c_double, y: c_double, button: c_int);
+    fn rd_mouse_here(ty: c_int, button: c_int);
+    fn rd_key_char(cp: c_uint, down: c_int, flags: c_uint);
     fn rd_scroll(dy: c_int);
     fn rd_key(keycode: c_int, down: c_int);
     fn rd_key_unicode(cp: c_uint, down: c_int);
@@ -116,6 +123,12 @@ impl Injector {
             4 => 2, // middle
             _ => 0, // left
         };
+        log::debug!("mouse mask={:#x} kind={} button={} x={} y={}", ev.mask, kind, button, ev.x, ev.y);
+        // A press or release arrives with no coordinates at all — proto3 drops
+        // zero-valued fields, so the whole message is `mask`. Clicking at the
+        // (0, 0) that implies lands every click in the top-left corner; the
+        // position has to come from the system, as it does upstream.
+        let positionless = ev.x == 0 && ev.y == 0;
         unsafe {
             match kind {
                 0 => {
@@ -130,11 +143,19 @@ impl Injector {
                 }
                 1 => {
                     self.buttons_down |= button as u8;
-                    rd_mouse(1, x, y, btn_idx);
+                    if positionless {
+                        rd_mouse_here(1, btn_idx);
+                    } else {
+                        rd_mouse(1, x, y, btn_idx);
+                    }
                 }
                 2 => {
                     self.buttons_down &= !(button as u8);
-                    rd_mouse(2, x, y, btn_idx);
+                    if positionless {
+                        rd_mouse_here(2, btn_idx);
+                    } else {
+                        rd_mouse(2, x, y, btn_idx);
+                    }
                 }
                 3 => rd_scroll(ev.y),
                 _ => {}
@@ -145,6 +166,19 @@ impl Injector {
     pub fn key(&mut self, ev: &KeyEvent) {
         let flags = modifier_flags(&ev.modifiers);
         let down = if ev.down { 1 } else { 0 };
+        log::debug!(
+            "key down={} press={} flags={:#x} union={}",
+            ev.down,
+            ev.press,
+            flags,
+            match &ev.union {
+                Some(key_event::Union::control_key(c)) => format!("control_key({:?})", c),
+                Some(key_event::Union::chr(c)) => format!("chr({})", c),
+                Some(key_event::Union::unicode(u)) => format!("unicode({})", u),
+                Some(key_event::Union::seq(s)) => format!("seq({:?})", s),
+                None => "none".to_string(),
+            }
+        );
         unsafe {
             match &ev.union {
                 Some(key_event::Union::control_key(ck)) => {
@@ -163,15 +197,16 @@ impl Injector {
                         None => log::debug!("unmapped control key {:?}", ck),
                     }
                 }
-                // A raw Mac virtual keycode.
+                // A character, *not* a keycode: typing "test" arrives as
+                // chr(116) chr(101) chr(115) chr(116). Treating those as Mac
+                // virtual keycodes typed PageUp/F9/Home/PageUp, which looked
+                // exactly like keyboard input not arriving at all. The shim maps
+                // the character back to a keycode through the current layout so
+                // that modifiers still compose into shortcuts.
                 Some(key_event::Union::chr(c)) => {
-                    if flags != 0 {
-                        rd_key_with_flags(*c as c_int, down, flags);
-                    } else {
-                        rd_key(*c as c_int, down);
-                    }
+                    rd_key_char(*c, down, flags);
                     if ev.press {
-                        rd_key(*c as c_int, 0);
+                        rd_key_char(*c, 0, flags);
                     }
                 }
                 // A character, with no keycode implied. Typed via the event's

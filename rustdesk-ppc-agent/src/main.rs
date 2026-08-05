@@ -28,6 +28,7 @@ OPTIONS:
     --show-key       print the public key a peer needs, and exit
     --probe-display  report what the framebuffer looks like, and exit
     --probe-live     watch the framebuffer for change and self-test the mouse
+    --probe-keys     type into Spotlight and photograph the result (~/keys.ppm)
     --config PATH    config file (default ~/.rustdesk-ppc-agent.conf)
     --secure         require the signed_id/public_key exchange. OFF by default:
                      a client connecting by IP does not take part, and enabling
@@ -52,6 +53,7 @@ fn main() {
     let mut set_password: Option<String> = None;
     let (mut show_id, mut show_key, mut probe) = (false, false, false);
     let mut probe_live = false;
+    let mut probe_keys = false;
     let mut level = log::LevelFilter::Info;
     let mut secure = false;
 
@@ -89,6 +91,10 @@ fn main() {
             }
             "--probe-live" => {
                 probe_live = true;
+                i += 1;
+            }
+            "--probe-keys" => {
+                probe_keys = true;
                 i += 1;
             }
             "--log" => {
@@ -154,6 +160,10 @@ fn main() {
     }
     if probe_live {
         probe_live_fn();
+        return;
+    }
+    if probe_keys {
+        probe_keys_fn();
         return;
     }
 
@@ -271,6 +281,99 @@ fn probe_display() {
 
 /// Answers the two open questions at once: does the framebuffer reflect changes,
 /// and does injected input reach the window server?
+/// Type a string the way a client does and photograph the result.
+///
+/// Keyboard injection is otherwise unverifiable from here: unlike the mouse,
+/// which reports its position back, a keystroke leaves no trace unless something
+/// focused renders it. Spotlight is always available and always shows what it
+/// was given, so Cmd+Space then a known word makes the result readable off the
+/// screen. Goes through `Injector` deliberately -- this exercises the same path
+/// the session loop uses, `chr` values and all.
+#[cfg(target_os = "macos")]
+fn probe_keys_fn() {
+    use protobuf::ProtobufEnumOrUnknown;
+    use rustdesk_ppc_agent::input::Injector;
+    use rustdesk_ppc_agent::message_proto::{key_event, ControlKey, KeyEvent};
+
+    let mut c = match rustdesk_ppc_agent::capture::Capturer::new() {
+        Ok(c) => c,
+        Err(e) => {
+            println!("capture unavailable: {}", e);
+            return;
+        }
+    };
+    let mut inj = Injector::new();
+
+    let sleep = |ms| std::thread::sleep(std::time::Duration::from_millis(ms));
+    let mut send = |inj: &mut Injector, u: key_event::Union, down: bool, mods: &[ControlKey]| {
+        let mut k = KeyEvent::new();
+        k.down = down;
+        k.union = Some(u);
+        for m in mods {
+            k.modifiers.push(ProtobufEnumOrUnknown::new(*m));
+        }
+        inj.key(&k);
+    };
+
+    // Finder's Go-to-Folder sheet, not Spotlight: the Spotlight panel and open
+    // menus are drawn in overlay layers that the framebuffer read does not pick
+    // up (Cmd+Space visibly highlights the menu-bar icon, yet no panel appears
+    // in the capture). A sheet belongs to an ordinary window, so it is captured
+    // and the typed text can actually be read back.
+    println!("opening Finder's Go to Folder (Cmd+Shift+G)");
+    send(&mut inj, key_event::Union::chr('g' as u32), true, &[ControlKey::Meta, ControlKey::Shift]);
+    sleep(60);
+    send(&mut inj, key_event::Union::chr('g' as u32), false, &[ControlKey::Meta, ControlKey::Shift]);
+    sleep(1500);
+
+    let word = "hello";
+    println!("typing {:?} as chr() codepoints, exactly as a client sends them", word);
+    for ch in word.chars() {
+        send(&mut inj, key_event::Union::chr(ch as u32), true, &[]);
+        sleep(40);
+        send(&mut inj, key_event::Union::chr(ch as u32), false, &[]);
+        sleep(120);
+    }
+    sleep(1500);
+
+    c.refresh_framebuffer();
+    let (w, h, stride) = (c.width, c.height, c.stride());
+    let frame = c.frame();
+    let path = format!("{}/keys.ppm", std::env::var("HOME").unwrap_or_else(|_| ".".into()));
+    match write_ppm(&path, frame, w, h, stride) {
+        Ok(()) => println!("wrote {} -- look for {:?} in the Spotlight field", path, word),
+        Err(e) => println!("could not write {}: {}", path, e),
+    }
+
+    println!("closing Spotlight (Escape)");
+    let esc = || key_event::Union::control_key(ProtobufEnumOrUnknown::new(ControlKey::Escape));
+    send(&mut inj, esc(), true, &[]);
+    sleep(60);
+    send(&mut inj, esc(), false, &[]);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn probe_keys_fn() {
+    println!("--probe-keys is only meaningful on macOS");
+}
+
+/// Dump an ARGB frame as a binary PPM. Memory order is A,R,G,B, so RGB is at +1.
+#[cfg(target_os = "macos")]
+fn write_ppm(path: &str, frame: &[u8], w: usize, h: usize, stride: usize) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut f = std::io::BufWriter::new(std::fs::File::create(path)?);
+    write!(f, "P6\n{} {}\n255\n", w, h)?;
+    for y in 0..h {
+        let row = &frame[y * stride..y * stride + w * 4];
+        let mut out = Vec::with_capacity(w * 3);
+        for p in row.chunks(4) {
+            out.extend_from_slice(&p[1..4]);
+        }
+        f.write_all(&out)?;
+    }
+    f.flush()
+}
+
 #[cfg(target_os = "macos")]
 fn probe_live_fn() {
     use rustdesk_ppc_agent::input::{cursor_position, Injector};
@@ -302,15 +405,55 @@ fn probe_live_fn() {
     let moved = (after.0 - tx as f64).abs() < 4.0 && (after.1 - ty as f64).abs() < 4.0;
     println!("  => injection {}", if moved { "WORKS" } else { "did NOT move the cursor" });
 
+    // Cause the change we are looking for, rather than asking someone to stand
+    // at the machine and wiggle a window. Opening the Apple menu repaints a
+    // large, unmistakable region; Escape closes it again, which doubles as an
+    // objective test that key injection reaches the window server -- there is no
+    // other way to check keys without a focused text field to type into.
     println!("\n--- framebuffer liveness (10s) ---");
-    println!("  move a window or type on the G5 now, if you can");
+    println!("  opening the Apple menu at t=2s, closing it with Escape at t=6s");
     c.invalidate();
-    let mut seen_change = false;
+    let (mut seen_change, mut dirty_after_menu, mut dirty_after_escape) = (false, false, false);
     for i in 0..10 {
+        match i {
+            2 => {
+                let mut m = MouseEvent::new();
+                m.mask = 0;
+                m.x = 20;
+                m.y = 10;
+                inj.mouse(&m);              // move onto the Apple menu
+                m.mask = (1 << 3) | 1;      // left button, down
+                inj.mouse(&m);
+                m.mask = (1 << 3) | 2;      // left button, up
+                inj.mouse(&m);
+            }
+            6 => {
+                use rustdesk_ppc_agent::message_proto::{key_event, ControlKey, KeyEvent};
+                let mut k = KeyEvent::new();
+                k.down = true;
+                k.press = true;
+                k.union = Some(key_event::Union::control_key(
+                    protobuf::ProtobufEnumOrUnknown::new(ControlKey::Escape),
+                ));
+                inj.key(&k);
+            }
+            _ => {}
+        }
+
+        // Same order the session loop uses: the mapping is a snapshot until a
+        // capture/release cycle republishes it, so probing without this only
+        // ever reports the frame we started with.
+        c.refresh_framebuffer();
         let d = c.dirty_bands();
         let n = d.iter().filter(|x| **x).count();
         if i > 0 && n > 0 {
             seen_change = true;
+        }
+        if (i == 3 || i == 4) && n > 0 {
+            dirty_after_menu = true;
+        }
+        if (i == 7 || i == 8) && n > 0 {
+            dirty_after_escape = true;
         }
         println!("  t={:2}s  dirty bands: {}", i, n);
         std::thread::sleep(std::time::Duration::from_millis(1000));
@@ -318,6 +461,14 @@ fn probe_live_fn() {
     println!(
         "  => framebuffer {}",
         if seen_change { "IS live" } else { "appears FROZEN (nothing changed after the first probe)" }
+    );
+    println!(
+        "  => mouse click {}",
+        if dirty_after_menu { "repainted the screen (menu opened)" } else { "changed nothing" }
+    );
+    println!(
+        "  => key injection {}",
+        if dirty_after_escape { "repainted the screen (menu closed)" } else { "changed nothing" }
     );
 }
 #[cfg(not(target_os = "macos"))]

@@ -14,7 +14,8 @@ pub mod message_proto;
 #[allow(renamed_and_removed_lints, clippy::all)]
 pub mod rendezvous_proto;
 
-#[cfg(target_os = "macos")]
+// Always compiled: the platform half is gated inside, so the pure change-detection
+// logic stays reachable from host tests.
 pub mod capture;
 pub mod config;
 pub mod convert;

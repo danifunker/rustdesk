@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Run the agent inside the logged-in user's GUI ("Aqua") session.
+
+  This is not just convenience. Refreshing the framebuffer calls
+  CGDisplayCaptureWithOptions, and CoreGraphics registers the process with
+  LaunchServices on the way through:
+
+      CGDisplayCaptureWithOptions -> CGSRegisterProcessAsApp -> _RegisterApplication
+        -> LSClientSideSharedMemory::GetClientSideSharedMemory -> abort()
+
+  A process with no session -- which is what an agent started over ssh becomes as
+  soon as the ssh connection closes -- aborts there. Started as a LaunchAgent it
+  belongs to the console session for as long as the user is logged in, and it
+  comes back automatically after a crash or a login.
+
+  Install:
+      scp deploy/com.rustdesk.ppc-agent.plist \
+          ppctiger:~/Library/LaunchAgents/com.rustdesk.ppc-agent.plist
+
+  Then, *in Terminal.app on the G5 itself* (an ssh session cannot reach the Aqua
+  session's launchd):
+      launchctl load -w ~/Library/LaunchAgents/com.rustdesk.ppc-agent.plist
+
+  It also loads by itself at every login, so that command is only needed to start
+  it without logging out first.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.rustdesk.ppc-agent</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/admin/rustdesk-agent</string>
+        <string>--port</string>
+        <string>21118</string>
+        <string>-vv</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Only ever in the GUI session; a background session cannot capture. -->
+    <key>LimitLoadToSessionType</key>
+    <string>Aqua</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/admin/agent.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/admin/agent.log</string>
+</dict>
+</plist>
