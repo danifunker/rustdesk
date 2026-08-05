@@ -22,15 +22,15 @@ per-band work of 2026-08-05:
 | dirty-band probe | 29 ms | pixels sampled |
 | capture (VRAM → RAM) | 350 ms | **bytes read** |
 | ARGB → I420 | 175 ms | rows converted |
-| VP8 encode | 92 ms | frame size |
-| **full-screen change** | **617 ms** | |
+| VP8 encode | 65 ms | frame size, threads |
+| **full-screen change** | **591 ms** | |
 | **idle poll** | **29 ms** | |
 
 Capture and conversion are now per-band, so a typical small update — a few lines
 of text, a menu, a cursor-sized region — costs roughly:
 
 ```
-probe 29 + read 22 + convert 11 + encode 92  ≈  154 ms       (estimate,
+probe 29 + read 22 + convert 11 + encode 65  ≈  127 ms       (estimate,
                                                               band costs derived
                                                               from the measured
                                                               per-row scaling)
@@ -62,34 +62,41 @@ Anything that closes the gap has to either make those two cheaper or use the
 second processor. Switching to raw rectangles is not available without breaking
 protocol compatibility.
 
-## 3. The second CPU is idle
+## 3. The second CPU, where there is one
 
-The clearest opportunity, and the first thing to try.
+**Ask, do not assume.** Single-processor G4s and G5s are as much a target as the
+dual G5 this is developed on, so anything that spends another core has to check
+at runtime. `sys::cpu_count` reads `sysconf(_SC_NPROCESSORS_ONLN)` and
+`sys::threads_for(cap)` never returns more than the processors present; a
+single-processor machine always gets 1.
 
-The machine has two cores. The agent is single-threaded end to end, and
-`vpx_shim.c` sets `cfg.g_threads = 1`. So one core does capture, conversion and
-encoding in series while the other does nothing.
+**Done: threaded encode.** `vpxenc_new` takes a thread count, and VP8 needs
+token partitions to match or `g_threads` has nothing to divide along.
+*Measured* on the dual G5: **92 ms → 65 ms**, −29%. The agent logs what it chose:
 
-Three ways to spend it, in increasing order of effort:
+```text
+encoder: 1920x1080, 1500 kbps, 2 thread(s) of 2 processor(s)
+```
 
-1. **`g_threads = 2` in the encoder.** One line. libvpx's VP8 encoder threads
-   across token partitions, so this may or may not help at this resolution --
-   *estimate*: somewhere between nothing and a 40% cut in the 92 ms. Measure
-   with `--probe-display` before and after; it is the cheapest experiment here.
-2. **Split the conversion across both cores.** `argb_to_i420_rows` already takes
+Two more ways to spend a second core, in increasing order of effort:
+
+1. **Split the conversion across both cores.** `argb_to_i420_rows` already takes
    a row range, so two threads converting half the rows each is a small change
-   with no shared state. *Estimate*: 175 ms → ~95 ms full-frame.
-3. **Pipeline capture against encode.** Capture is a VRAM read that barely
+   with no shared state. *Estimate*: 176 ms → ~95 ms full-frame. Must go through
+   `sys::threads_for`, and must stay correct on one core.
+2. **Pipeline capture against encode.** Capture is a VRAM read that barely
    touches the CPU (~23 MB/s, bus-bound); encode is pure CPU. Reading frame N+1
    while encoding frame N should hide most of one behind the other. This is the
    biggest win available and the largest change -- it needs a second thread and
-   a buffer handoff, and the input loop must keep being serviced throughout.
+   a buffer handoff, and the input loop must keep being serviced throughout. On
+   a single-processor machine it should degrade to the current serial path
+   rather than thrash.
 
 ## 4. Ranked options
 
 | # | change | expected | effort | risk |
 |---|---|---|---|---|
-| 1 | `g_threads = 2` | *est.* up to −40% encode | trivial | none |
+| ~~1~~ | ~~Threaded encode~~ | **done: −29% encode, measured** | trivial | none |
 | 2 | Threaded ARGB → I420 | *est.* −80 ms full-frame | small | low |
 | 3 | Lower the resolution | capture ∝ pixels: 1024x768 is ~126 ms *measured* | none, it is a setting | changes what the user sees |
 | 4 | Pipeline capture against encode | *est.* −40% wall clock | large | needs care around input latency |
@@ -118,6 +125,9 @@ Do not re-litigate these; each cost real time to establish.
   swap red and blue.
 * **A faster `cpu_used`.** Already at the fastest the codec accepts, with the
   realtime deadline and no lookahead.
+* **Assuming two processors.** The target family includes single-processor
+  machines; use `sys::threads_for` and check what it returns on the machine in
+  front of you.
 
 ## 6. How to measure
 

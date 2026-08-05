@@ -28,8 +28,13 @@ struct vpxenc {
 };
 
 /* cpu_used: VP8 speed/quality dial. Negative is faster; -16 is the fastest the
- * encoder accepts and is what this hardware needs. */
-struct vpxenc *vpxenc_new(int width, int height, int bitrate_kbps, int cpu_used)
+ * encoder accepts and is what this hardware needs.
+ *
+ * threads: decided by the caller from the processors actually online, never
+ * assumed -- a single-processor G4 or G5 is as much a target as the dual G5
+ * this was developed on. VP8 only threads across token partitions, so asking
+ * for more than one thread means asking for partitions to match. */
+struct vpxenc *vpxenc_new(int width, int height, int bitrate_kbps, int cpu_used, int threads)
 {
     struct vpxenc *e;
     vpx_codec_enc_cfg_t cfg;
@@ -53,7 +58,11 @@ struct vpxenc *vpxenc_new(int width, int height, int bitrate_kbps, int cpu_used)
     cfg.g_timebase.den = 1000;          /* pts in milliseconds */
     cfg.g_error_resilient = 1;          /* survive a dropped packet */
     cfg.g_lag_in_frames = 0;            /* no lookahead: latency matters here */
-    cfg.g_threads = 1;                  /* one session, one encode thread */
+    if (threads < 1)
+        threads = 1;
+    if (threads > 4)
+        threads = 4;
+    cfg.g_threads = threads;
     cfg.rc_end_usage = VPX_CBR;
     cfg.kf_mode = VPX_KF_AUTO;
     cfg.rc_min_quantizer = 8;
@@ -69,7 +78,9 @@ struct vpxenc *vpxenc_new(int width, int height, int bitrate_kbps, int cpu_used)
     }
     vpx_codec_control_(&e->codec, VP8E_SET_CPUUSED, cpu_used);
     vpx_codec_control_(&e->codec, VP8E_SET_STATIC_THRESHOLD, 1000);
-    vpx_codec_control_(&e->codec, VP8E_SET_TOKEN_PARTITIONS, 0);
+    /* One partition per thread, rounded down to the power of two VP8 wants:
+     * without this g_threads has nothing to divide the work along. */
+    vpx_codec_control_(&e->codec, VP8E_SET_TOKEN_PARTITIONS, threads >= 4 ? 2 : (threads >= 2 ? 1 : 0));
 
     /* Wrap caller-supplied planes rather than allocating: vpx_img_wrap with a
      * NULL data pointer sets up the descriptor only, and encode() fills in the
