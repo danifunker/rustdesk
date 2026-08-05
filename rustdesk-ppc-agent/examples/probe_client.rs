@@ -213,6 +213,8 @@ fn main() {
 
     let mut poked = false;
     let (mut control_at, mut refresh_at) = (None, None);
+    let mut shot_at: Option<f64> = None;
+    let mut shot: Option<(f64, String, Vec<u8>)> = None;
     while start.elapsed() < Duration::from_secs(15) {
         match recv(&mut s, &mut ch) {
             Ok(msg) => match msg.union {
@@ -232,6 +234,10 @@ fn main() {
                     }
                     _ => other += 1,
                 },
+                Some(message::Union::screenshot_response(r)) => {
+                    let at = shot_at.map(|t| start.elapsed().as_secs_f64() - t).unwrap_or(0.0);
+                    shot = Some((at, r.msg, r.data.to_vec()));
+                }
                 _ => other += 1,
             },
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut => {}
@@ -272,6 +278,16 @@ fn main() {
             refresh_at = Some(start.elapsed().as_secs_f64());
             println!("  sent Misc::refresh_video_display(0)  <- the refresh button at 1.2.4+");
         }
+        if shot_at.is_none() && start.elapsed() > Duration::from_secs(11) {
+            let mut req = ScreenshotRequest::new();
+            req.display = 0;
+            req.sid = "probe".into();
+            let mut m = Message::new();
+            m.set_screenshot_request(req);
+            send(&mut s, &mut ch, &m).ok();
+            shot_at = Some(start.elapsed().as_secs_f64());
+            println!("  sent ScreenshotRequest(display 0)    <- the button at 1.4.0+");
+        }
         io::stdout().flush().ok();
     }
 
@@ -303,5 +319,26 @@ fn main() {
             Some(d) if d <= WINDOW => println!("  {} -> keyframe after {:.2}s", what, d),
             _ => println!("  {} -> no keyframe within {:.1}s", what, WINDOW),
         }
+    }
+
+    // The screenshot is written out rather than merely counted: whether the
+    // bytes are a PNG a real decoder accepts is the whole question, and it
+    // cannot be answered from this side of the wire.
+    match shot {
+        Some((at, msg, data)) if msg.is_empty() => {
+            let path = std::env::var("PROBE_SHOT").unwrap_or_else(|_| "/tmp/probe-shot.png".into());
+            match std::fs::write(&path, &data) {
+                Ok(()) => println!(
+                    "  screenshot   -> {} bytes after {:.2}s, written to {}",
+                    data.len(),
+                    at,
+                    path
+                ),
+                Err(e) => println!("  screenshot   -> {} bytes, could not write: {}", data.len(), e),
+            }
+        }
+        Some((at, msg, _)) => println!("  screenshot   -> refused after {:.2}s: \"{}\"", at, msg),
+        None if shot_at.is_some() => println!("  screenshot   -> NO REPLY  <-- the request was dropped"),
+        None => {}
     }
 }
