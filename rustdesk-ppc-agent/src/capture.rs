@@ -106,9 +106,16 @@ fn current_base(d: CGDirectDisplayID, fallback: *mut c_void) -> *const u8 {
 /// bands.
 pub const BANDS: usize = 16;
 
-/// Rows sampled per band when probing. Every 16th row over the whole screen
-/// costs ~21 ms at 1920x1080 versus ~348 ms for the full frame.
-const PROBE_ROW_STEP: usize = 16;
+/// Rows sampled per band when probing.
+///
+/// Every 8th row, not every 16th. A line of terminal text is about 12 pixels
+/// tall, so at a 16-row stride a redrawn line can sit entirely between sampled
+/// rows: the band is then declared clean and the old contents stay on the
+/// peer's screen. Running `vi` over a previous `ls -l` showed exactly that --
+/// some lines repainted, others still showing the old output. Halving the
+/// stride roughly doubles the probe, ~15 ms to ~30 ms, which is worth it.
+/// `session` also repairs anything still missed once the screen goes quiet.
+const PROBE_ROW_STEP: usize = 8;
 
 /// Pixels stepped over between samples within a row.
 const PROBE_PIXEL_STEP: usize = 16;

@@ -35,7 +35,7 @@ extern "C" {
     fn rd_key_char(cp: c_uint, down: c_int, flags: c_uint);
     fn rd_keycode_for_char(cp: c_uint, needs_shift: *mut c_int) -> c_int;
     fn rd_release_modifiers();
-    fn rd_scroll(dy: c_int);
+    fn rd_scroll(dy: c_int, dx: c_int);
     fn rd_key(keycode: c_int, down: c_int);
     fn rd_key_unicode(cp: c_uint, down: c_int);
     fn rd_key_with_flags(keycode: c_int, down: c_int, flags: c_uint);
@@ -154,7 +154,8 @@ pub enum MouseAction {
     /// A press or release. `at_cursor` means the event carried no coordinates,
     /// so the position must come from the system rather than from the message.
     Button { down: bool, button: i32, at_cursor: bool, x: f64, y: f64 },
-    Scroll { dy: i32 },
+    /// Wheel movement, already in the sense CoreGraphics wants.
+    Scroll { dx: i32, dy: i32 },
     /// A `mask` whose low bits name no event we handle.
     Ignore,
 }
@@ -226,7 +227,12 @@ impl Injector {
                 self.buttons_down &= !(button as u8);
                 MouseAction::Button { down: false, button: btn_idx, at_cursor, x, y }
             }
-            3 => MouseAction::Scroll { dy: ev.y },
+            // Both axes, both negated -- `input_service.rs` does exactly this
+            // for every platform except Windows. Using only `y` dropped
+            // sideways swipes entirely, and not negating scrolled the wrong
+            // way, which together is most of what "gestures" means on a
+            // trackpad.
+            3 => MouseAction::Scroll { dx: -ev.x, dy: -ev.y },
             _ => MouseAction::Ignore,
         }
     }
@@ -269,7 +275,7 @@ impl Injector {
                         rd_mouse(ty, x, y, button);
                     }
                 }
-                MouseAction::Scroll { dy } => rd_scroll(dy),
+                MouseAction::Scroll { dx, dy } => rd_scroll(dy, dx),
                 MouseAction::Ignore => {}
             }
         }
@@ -404,10 +410,18 @@ mod tests {
         assert_eq!(idx(&mut inj, MIDDLE | DOWN), 2);
     }
 
+    /// Wheel events carry both axes and are inverted relative to the wire,
+    /// matching upstream's non-Windows path.
     #[test]
-    fn a_wheel_event_scrolls_by_y_and_is_not_a_move() {
+    fn a_wheel_event_carries_both_axes_negated() {
         let mut inj = Injector::new();
-        assert_eq!(inj.decide_mouse(&mouse(WHEEL, 0, -3)), MouseAction::Scroll { dy: -3 });
+        assert_eq!(inj.decide_mouse(&mouse(WHEEL, 0, -3)), MouseAction::Scroll { dx: 0, dy: 3 });
+        assert_eq!(
+            inj.decide_mouse(&mouse(WHEEL, 5, 0)),
+            MouseAction::Scroll { dx: -5, dy: 0 },
+            "a sideways swipe must not be dropped"
+        );
+        assert_eq!(inj.decide_mouse(&mouse(WHEEL, -2, 4)), MouseAction::Scroll { dx: 2, dy: -4 });
     }
 
     #[test]
