@@ -182,29 +182,70 @@ looking for things a modern client sends that we drop, or expects that we never
 say. Recorded so the survey is not repeated.
 
 **The version we report is load-bearing.** A modern client changes what it
-sends based on it, and two gates in `src/common.rs` read it: at 1.2.4 the
-refresh button switches to `Misc::refresh_video_display` (field 31, which we do
-not know), and at 1.4.5 the client may switch to *relative* mouse mode and send
-deltas instead of absolute coordinates, which `decide_mouse` cannot handle. It
-used to come from `CARGO_PKG_VERSION`; it is now pinned in `session.rs` with a
-test, because bumping a crate version is an ordinary thing to do and would have
-broken the mouse silently.
+sends based on it, and the gates in `src/common.rs` read it: at 1.2.4 the
+refresh button switches to `Misc::refresh_video_display` (field 31), and at
+1.4.5 the client may switch to *relative* mouse mode and send deltas instead of
+absolute coordinates, which `decide_mouse` cannot handle. It used to come from
+`CARGO_PKG_VERSION`; it is now pinned in `session.rs` with a test, because
+bumping a crate version is an ordinary thing to do and would have broken the
+mouse silently.
 
 Checked and needing nothing:
 
 * **`video_ack_required`** (LoginRequest field 9) -- the client never sets it,
   so there is no ack-based flow control to honour.
-* **`Misc::refresh_video_display`** -- only sent to peers claiming 1.2.4+, so
-  unreachable while we report 0.1.0. Handling it would be dead code.
 * **`VideoFrame.display`** and **`SwitchDisplay.cursor_embedded`** -- both
   default to what is already true here (display 0, cursor not drawn into the
   frame, since it is a hardware overlay).
 * **`PeerInfo.features` / `encoding` / `resolutions`** -- unset, and the client
   copes: it decodes our VP8 without being told we can produce it.
 
-Worth knowing: **no `Misc` message has ever arrived** in any logged session, so
-the peer-options logging and the refresh handling have never actually fired.
-They are plumbed, not proven.
+## 11a. What claiming 1.2.4 turns on, one gate at a time
+
+`Misc::refresh_video_display` is the gate everyone notices, but it is not the
+only thing keyed to 1.2.4, and the version could not be raised until each of the
+others had been looked at. Recorded so the next rung does not repeat it. Sources
+are the client's `src/common.rs`, `src/ui_session_interface.rs`, `src/flutter.rs`
+and `flutter/lib/common/widgets/toolbar.dart` at `ef3a575`.
+
+**Implemented:** the refresh button (`refresh_video_display`, field 31, an int32
+display index) and the per-display refresh the client sends when switching
+displays. Both land in the same handler; the index is logged and ignored,
+because there is one display. `refresh_video` (field 10) is still handled too --
+a sciter build sends it at every version.
+
+**Inert, each for its own reason** -- none of these can fire against this agent:
+
+| what 1.2.4 unlocks | why nothing happens |
+|---|---|
+| `change_resolution` (24) becomes `change_display_resolution` (36) | we handle neither, and the menu needs `PeerInfo.resolutions`, which we do not send |
+| renderer keys frames by `VideoFrame.display` instead of taking the first session | 1.1.8 has no such field, so it arrives as 0, and the client registers display 0 |
+| "follow remote cursor" and "follow remote window focus" toggles | both also require `pi.displays.length > 1` |
+| file copy and paste | requires `platformAdditions[has_file_clipboard]`, which we do not set |
+| "true color (4:4:4)" toggle | requires the codec to be AV1 or VP9; we send VP8 |
+| `toggle_privacy_mode` (33) | needs the user's `privacy-mode` toggle, which needs `PeerInfo.features.privacy_mode`, which we do not set |
+| 1.2.2, crossed on the way: the custom-quality slider's maximum widens | we read our bitrate from config and only log the peer's quality options |
+
+One upstream oddity found on the way and worth not being confused by:
+`is_support_screenshot(&str)` in the client's `common.rs` delegates to
+`is_support_multi_ui_session_num`, i.e. to the 1.2.4 gate rather than the 1.4.0
+one its `_num` twin uses. It has no callers, so it is dead rather than dangerous.
+
+**The refresh path is now measured, not merely plumbed.** `probe_client` sends
+the field a 1.2.4+ client sends and times the keyframe that follows, with
+`Misc::refresh_video(false)` first as a control -- because the agent already
+emits a keyframe every `KEYFRAME_INTERVAL` while the settle repaint finishes a
+lap, so "a keyframe arrived afterwards" proves nothing without it:
+
+```text
+keyframes at : [0.81, 9.73] s
+refresh_video(false)     -> no keyframe within 2.0s     (control: nothing arrives unasked)
+refresh_video_display(0) -> keyframe after 0.77s        (and the agent logged the request)
+```
+
+Still unproven: **no `Misc` message from a real client has ever been logged**, so
+the peer-options branch -- the one that starts sending cursor shapes when "show
+remote cursor" is switched on -- has never actually fired.
 
 ## 12. Rendezvous registration
 
