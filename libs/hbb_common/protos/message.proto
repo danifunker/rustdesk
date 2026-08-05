@@ -395,6 +395,15 @@ message Misc {
     AudioFormat audio_format = 8;
     string close_reason = 9;
     bool refresh_video = 10;
+    // Field 31 in modern RustDesk, absent from 1.1.8. Backported because a
+    // client that believes the peer is 1.2.4 or newer sends its refresh button
+    // here instead of in `refresh_video` (10) -- see
+    // `is_support_multi_ui_session` in the client's `src/common.rs` -- so
+    // without the field the button would silently stop working. The int32 is
+    // which display to refresh; this agent serves one, so it is logged and
+    // otherwise ignored. Copied from github.com/rustdesk/hbb_common, which
+    // also has fields 12-30 and 32-38 that nothing here needs.
+    int32 refresh_video_display = 31;
   }
 }
 

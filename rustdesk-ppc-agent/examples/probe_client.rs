@@ -197,13 +197,22 @@ fn main() {
         }
     }
 
-    // 6. Watch the video stream, and poke the mouse to exercise injection.
+    // 6. Watch the video stream, poke the mouse, and press the refresh button.
+    //
+    // The refresh test carries a control, because the obvious version of it
+    // always passes: the agent sends a keyframe every `KEYFRAME_INTERVAL` while
+    // the settle repaint finishes a lap, so "a keyframe arrived after we asked"
+    // is not on its own evidence that the asking caused it.
+    // `Misc::refresh_video(false)` is a field the agent deliberately ignores --
+    // it matches only on `true` -- so it measures what shows up anyway.
     println!("\nwatching for video frames (15s)...");
     let start = Instant::now();
     let (mut frames, mut bytes, mut keys, mut other) = (0u32, 0usize, 0u32, 0u32);
     let mut first_frame_at: Option<Duration> = None;
+    let mut key_times: Vec<f64> = Vec::new();
 
     let mut poked = false;
+    let (mut control_at, mut refresh_at) = (None, None);
     while start.elapsed() < Duration::from_secs(15) {
         match recv(&mut s, &mut ch) {
             Ok(msg) => match msg.union {
@@ -214,6 +223,7 @@ fn main() {
                             bytes += f.data.len();
                             if f.key {
                                 keys += 1;
+                                key_times.push(start.elapsed().as_secs_f64());
                             }
                             if first_frame_at.is_none() {
                                 first_frame_at = Some(start.elapsed());
@@ -243,6 +253,25 @@ fn main() {
                 println!("  sent a mouse-move to (400,300)");
             }
         }
+        // The control first, then the real thing, each with room after it.
+        if control_at.is_none() && start.elapsed() > Duration::from_secs(5) {
+            let mut mi = Misc::new();
+            mi.set_refresh_video(false);
+            let mut m = Message::new();
+            m.set_misc(mi);
+            send(&mut s, &mut ch, &m).ok();
+            control_at = Some(start.elapsed().as_secs_f64());
+            println!("  sent Misc::refresh_video(false)      <- control, nothing should follow");
+        }
+        if refresh_at.is_none() && start.elapsed() > Duration::from_secs(8) {
+            let mut mi = Misc::new();
+            mi.set_refresh_video_display(0);
+            let mut m = Message::new();
+            m.set_misc(mi);
+            send(&mut s, &mut ch, &m).ok();
+            refresh_at = Some(start.elapsed().as_secs_f64());
+            println!("  sent Misc::refresh_video_display(0)  <- the refresh button at 1.2.4+");
+        }
         io::stdout().flush().ok();
     }
 
@@ -256,4 +285,23 @@ fn main() {
         None => println!("  first frame  : NEVER  <-- no video was received"),
     }
     println!("  other msgs   : {}", other);
+
+    // A keyframe that arrives promptly after a request is the request being
+    // honoured; one that arrives promptly after the control is the settle
+    // repaint's own cadence, and means this window is too coarse to conclude
+    // anything from.
+    const WINDOW: f64 = 2.0;
+    let key_after = |t: f64| key_times.iter().find(|k| **k > t).map(|k| k - t);
+    let timeline: Vec<String> = key_times.iter().map(|k| format!("{:.2}", k)).collect();
+    println!("  keyframes at : [{}] s", timeline.join(", "));
+    for (what, sent) in [
+        ("refresh_video(false)    ", control_at),
+        ("refresh_video_display(0)", refresh_at),
+    ] {
+        let Some(t) = sent else { continue };
+        match key_after(t) {
+            Some(d) if d <= WINDOW => println!("  {} -> keyframe after {:.2}s", what, d),
+            _ => println!("  {} -> no keyframe within {:.1}s", what, WINDOW),
+        }
+    }
 }
