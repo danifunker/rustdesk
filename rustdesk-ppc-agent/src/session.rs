@@ -353,14 +353,8 @@ impl Video {
     }
 
     /// Probe, and if anything moved, capture/convert/encode one frame.
-    /// Returns None when the screen is unchanged.
-    ///
-    /// The refresh has to come first and unconditionally: without it the probe
-    /// re-reads the same snapshot forever, reports nothing dirty, and the peer
-    /// sees a single frame frozen at connect time. It sets the floor for an
-    /// idle poll at ~256 ms rather than the ~6 ms the probe alone costs.
+    /// Returns None when the screen is unchanged -- the cheap path, ~21 ms.
     fn next_frame(&mut self) -> Option<(Vec<u8>, bool, i64)> {
-        self.cap.refresh_framebuffer();
         let dirty = self.cap.dirty_bands();
         if !dirty.iter().any(|d| *d) {
             return None;
@@ -391,7 +385,17 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
     let mut video = match Video::new(DEFAULT_BITRATE_KBPS) {
         Ok(v) => Some(v),
         Err(e) => {
-            log::warn!("video unavailable: {} (input-only session)", e);
+            // Worth spelling out: the usual cause is not the display at all but
+            // a missing session. A fully detached agent cannot reach the window
+            // server ("On-demand launch of the Window Server is allowed for root
+            // user only"), and every display query then returns nonsense. The
+            // session still runs, with input but no picture, which is a
+            // confusing thing to debug from the client end.
+            log::warn!("video unavailable: {} -- serving input only", e);
+            log::warn!(
+                "if the display reads 0x0, the agent has no window server: start it \
+                 under `screen` or as the LaunchAgent, not with `&` or nohup"
+            );
             None
         }
     };

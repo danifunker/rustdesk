@@ -3,17 +3,9 @@
 <!--
   Run the agent inside the logged-in user's GUI ("Aqua") session.
 
-  This is not just convenience. Refreshing the framebuffer calls
-  CGDisplayCaptureWithOptions, and CoreGraphics registers the process with
-  LaunchServices on the way through:
-
-      CGDisplayCaptureWithOptions -> CGSRegisterProcessAsApp -> _RegisterApplication
-        -> LSClientSideSharedMemory::GetClientSideSharedMemory -> abort()
-
-  A process with no session -- which is what an agent started over ssh becomes as
-  soon as the ssh connection closes -- aborts there. Started as a LaunchAgent it
-  belongs to the console session for as long as the user is logged in, and it
-  comes back automatically after a crash or a login.
+  Convenience rather than necessity: capture works fine from an ordinary ssh
+  login, so this exists to start the agent at every login and restart it if it
+  dies, without anyone having to ssh in.
 
   Install:
       scp deploy/com.rustdesk.ppc-agent.plist \

@@ -28,7 +28,7 @@ OPTIONS:
     --show-key       print the public key a peer needs, and exit
     --probe-display  report what the framebuffer looks like, and exit
     --probe-live     watch the framebuffer for change and self-test the mouse
-    --probe-keys     type into Spotlight and photograph the result (~/keys.ppm)
+    --probe-keys     type into the focused window, photograph it (~/keys.ppm)
     --config PATH    config file (default ~/.rustdesk-ppc-agent.conf)
     --secure         require the signed_id/public_key exchange. OFF by default:
                      a client connecting by IP does not take part, and enabling
@@ -336,7 +336,6 @@ fn probe_keys_fn() {
     }
     sleep(1500);
 
-    c.refresh_framebuffer();
     let (w, h, stride) = (c.width, c.height, c.stride());
     let frame = c.frame();
     let path = format!("{}/keys.ppm", std::env::var("HOME").unwrap_or_else(|_| ".".into()));
@@ -440,10 +439,6 @@ fn probe_live_fn() {
             _ => {}
         }
 
-        // Same order the session loop uses: the mapping is a snapshot until a
-        // capture/release cycle republishes it, so probing without this only
-        // ever reports the frame we started with.
-        c.refresh_framebuffer();
         let d = c.dirty_bands();
         let n = d.iter().filter(|x| **x).count();
         if i > 0 && n > 0 {

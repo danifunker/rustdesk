@@ -67,10 +67,18 @@ echo "built: $OUT/rustdesk-agent"
 ssh "$HOST" 'ps -axo pid,comm | awk "\$2 ~ /rustdesk-agent/ {print \$1}" \
   | while read p; do kill -9 $p; done; sleep 2'
 scp -q "$OUT/rustdesk-agent" "$HOST:~/rustdesk-agent"
-# Not `nohup`: over a non-tty ssh session Darwin's nohup dies with "can't
-# migrate to background session" and the agent never starts. A subshell that
-# exits immediately reparents the agent to init, which survives the disconnect.
-ssh "$HOST" 'rm -f ~/agent.log; ( ~/rustdesk-agent --port 21118 -vv > ~/agent.log 2>&1 < /dev/null & )'
+# Start it under `screen`, which is not cosmetic.
+#
+# A fully detached agent cannot reach the window server at all -- it fails with
+# "On-demand launch of the Window Server is allowed for root user only" and then
+# reports a 0x0 display and serves an input-only session. Backgrounding with
+# `&` or nohup lands exactly there (and Darwin's nohup additionally dies with
+# "can't migrate to background session" over a non-tty ssh). A detached screen
+# keeps enough of the login session alive that capture still works once this
+# connection closes -- verified by streaming frames afterwards.
+ssh "$HOST" 'screen -S rdagent -X quit >/dev/null 2>&1; sleep 1
+  rm -f ~/agent.log
+  screen -dmS rdagent bash -c "~/rustdesk-agent --port 21118 -vv > ~/agent.log 2>&1"'
 sleep 2
 ssh "$HOST" 'ps -axo pid,comm | grep rustdesk-agent; head -5 ~/agent.log'
 echo "deployed to $HOST"
