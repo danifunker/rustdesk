@@ -5,9 +5,12 @@ Blocking I/O, no async runtime, 5 direct dependencies. Built with mrustc; see
 [`../docs/powerpc-mrustc-scope.md`](../docs/powerpc-mrustc-scope.md) for why this
 exists rather than a port of `src/server/`.
 
-Status: connects, authenticates and streams VP8 to a real client. See
-[`docs/BACKLOG.md`](docs/BACKLOG.md) for what is missing — notably change
-detection, LAN discovery, and audio.
+Status: connects, authenticates and streams VP8 to a real client, with keyboard,
+mouse, trackpad scrolling, the real pointer shape, LAN discovery and screenshots.
+It reports itself as **1.4.5**, which is a capability declaration rather than a
+label — see `REPORTED_VERSION` in `src/session.rs`. See
+[`docs/BACKLOG.md`](docs/BACKLOG.md) for what is missing — notably audio,
+clipboard and multi-monitor.
 
 ## Connecting to it
 
@@ -33,8 +36,8 @@ Nothing needs enabling client-side: typing an IP triggers a direct connection.
 (RustDesk's "Direct IP Access" *setting* is for the machine being controlled —
 here that is this agent, which always listens.)
 
-**The G5 will not appear in the client's discovered-machines list** — that uses a
-UDP broadcast protocol we do not implement yet (backlog item 2).
+The G5 also answers the UDP broadcast on 21119 that populates a client's
+local-network list, so it can be picked from there instead of typed (`src/lan.rs`).
 
 ### Other commands
 
@@ -55,6 +58,34 @@ Host-side checks, which cover everything except the platform layer:
 ```bash
 cargo test
 ```
+
+### Type-checking the platform layer
+
+**mrustc does not borrow-check.** The PowerPC build will happily compile code
+real rustc rejects, so the macOS-gated modules need checking against a compiler
+that does. There is no macOS host here, so the cfg is forced instead:
+
+```bash
+rsync -a src examples Cargo.toml Cargo.lock build.rs .cargo vendor /tmp/mac-check/
+cd /tmp/mac-check
+sed -i 's/kind = "framework"/kind = "dylib"/' src/capture.rs src/input.rs
+printf 'fn main() {}\n' > build.rs        # see below -- this line is the point
+RUSTFLAGS='--cfg target_os="macos" -A explicit_builtin_cfgs_in_flags -A unexpected_cfgs' \
+  cargo check --all-targets
+```
+
+**Do not skip the `build.rs` line.** The real `build.rs` reads
+`CARGO_CFG_TARGET_OS`, which is the *actual* target and so is `linux` however the
+RUSTFLAGS are set — so it sets `no_vpx`, and everything behind
+`#[cfg(all(target_os = "macos", not(no_vpx)))]` is quietly excluded. That is
+`src/encode.rs`, `Video`, and the whole video half of the message loop: the check
+passes in seconds and has looked at none of it. The tell is a run full of
+`constant KEYFRAME_INTERVAL is never used` warnings.
+
+Emptying `build.rs` leaves `no_vpx` unset, which is what gets the video path
+compiled; `cargo check` does not link, so the `extern` blocks only need to
+resolve as declarations. Worth confirming the gating actually flipped by breaking
+something inside the region on purpose and watching the error appear.
 
 For PowerPC, see [`../rustdesk-ppc/README.md`](../rustdesk-ppc/README.md) for the
 two-machine model. In short:
@@ -86,8 +117,20 @@ every step, which makes protocol gaps obvious:
 cargo run --example probe_client -- 192.168.99.116:21118 <password> [<pubkey-b64>]
 ```
 
-It reports frame count, byte rate, keyframes and time-to-first-frame, and sends a
-mouse-move partway through to exercise injection.
+It reports frame count, byte rate, keyframes and time-to-first-frame, and sends
+four things partway through to exercise the agent: a mouse-move, a
+`refresh_video(false)` that must produce nothing, the refresh button a 1.2.4+
+client sends, and a screenshot request whose PNG is written to `$PROBE_SHOT`
+(default `/tmp/probe-shot.png`) so a real decoder can be pointed at it.
+
+`examples/png_check.rs` writes PNGs beside the RGB they must decode to, for
+checking the encoder against a library that is not ours:
+
+```bash
+cargo run --example png_check -- /tmp/out
+python3 -c "from PIL import Image; im=Image.open('/tmp/out/display.png'); \
+  print(im.mode, im.size, im.convert('RGB').tobytes()==open('/tmp/out/display.raw','rb').read())"
+```
 
 ## Layout
 
@@ -98,9 +141,11 @@ mouse-move partway through to exercise injection.
 | `src/session.rs` | handshake sequence, message loop, video pump |
 | `src/config.rs` | persistent identity and password |
 | `src/capture.rs` | `CGDisplayBaseAddress` capture + dirty-band detection |
-| `src/convert.rs` | ARGB → I420 |
+| `src/convert.rs`, `src/convert_shim.c` | ARGB → I420, and ARGB → PNG scanlines |
 | `src/encode.rs`, `src/vpx_shim.c` | VP8 via libvpx |
+| `src/png.rs` | PNG for `ScreenshotResponse`, via the system zlib |
 | `src/input.rs` | Quartz Event Services injection |
+| `src/lan.rs` | answers the UDP discovery broadcast |
 | `probes/` | C programs establishing the hardware floor |
 | `docs/videoperformance.md` | what was measured, and why the design follows |
 | `docs/BACKLOG.md` | what is missing |
