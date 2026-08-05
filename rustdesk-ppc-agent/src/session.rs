@@ -171,6 +171,7 @@ fn msg_name(m: &Message) -> &'static str {
         Some(message::Union::file_action(_)) => "file_action",
         Some(message::Union::file_response(_)) => "file_response",
         Some(message::Union::misc(_)) => "misc",
+        Some(message::Union::pointer_device_event(_)) => "pointer_device_event",
         None => "<empty or unknown field>",
     }
 }
@@ -977,6 +978,13 @@ fn drain_input(
                     *last_peer_input = std::time::Instant::now();
                 }
                 let _ = &ke;
+            }
+            // Touch gestures. Field 26, backported -- see `Injector::touch`,
+            // which drops them on anything older than 10.6.
+            #[cfg(target_os = "macos")]
+            Some(message::Union::pointer_device_event(pd)) => {
+                injector.touch(&pd);
+                *last_peer_input = std::time::Instant::now();
             }
             Some(message::Union::test_delay(t)) => {
                 if t.from_client {

@@ -9813,6 +9813,55 @@ impl Message {
         }
     }
 
+    // .hbb.PointerDeviceEvent pointer_device_event = 26;
+
+    pub fn get_pointer_device_event(&self) -> &PointerDeviceEvent {
+        match self.union {
+            ::std::option::Option::Some(message::Union::pointer_device_event(ref v)) => v,
+            _ => <PointerDeviceEvent as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_pointer_device_event(&mut self) {
+        self.union = ::std::option::Option::None;
+    }
+
+    pub fn has_pointer_device_event(&self) -> bool {
+        match self.union {
+            ::std::option::Option::Some(message::Union::pointer_device_event(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_pointer_device_event(&mut self, v: PointerDeviceEvent) {
+        self.union = ::std::option::Option::Some(message::Union::pointer_device_event(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_pointer_device_event(&mut self) -> &mut PointerDeviceEvent {
+        if let ::std::option::Option::Some(message::Union::pointer_device_event(_)) = self.union {
+        } else {
+            self.union = ::std::option::Option::Some(message::Union::pointer_device_event(PointerDeviceEvent::new()));
+        }
+        match self.union {
+            ::std::option::Option::Some(message::Union::pointer_device_event(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_pointer_device_event(&mut self) -> PointerDeviceEvent {
+        if self.has_pointer_device_event() {
+            match self.union.take() {
+                ::std::option::Option::Some(message::Union::pointer_device_event(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            PointerDeviceEvent::new()
+        }
+    }
+
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
         let mut fields = ::std::vec::Vec::new();
         fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, SignedId>(
@@ -9933,6 +9982,13 @@ impl Message {
             Message::mut_misc,
             Message::set_misc,
         ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, PointerDeviceEvent>(
+            "pointer_device_event",
+            Message::has_pointer_device_event,
+            Message::get_pointer_device_event,
+            Message::mut_pointer_device_event,
+            Message::set_pointer_device_event,
+        ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<Message>(
             "Message",
             42,
@@ -10019,6 +10075,11 @@ impl ::protobuf::Message for Message {
             }
         }
         if let Some(message::Union::misc(ref v)) = self.union {
+            if !v.is_initialized() {
+                return false;
+            }
+        }
+        if let Some(message::Union::pointer_device_event(ref v)) = self.union {
             if !v.is_initialized() {
                 return false;
             }
@@ -10132,6 +10193,12 @@ impl ::protobuf::Message for Message {
                     }
                     self.union = ::std::option::Option::Some(message::Union::misc(is.read_message()?));
                 },
+                26 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeLengthDelimited {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    self.union = ::std::option::Option::Some(message::Union::pointer_device_event(is.read_message()?));
+                },
                 _ => {
                     ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
                 },
@@ -10213,6 +10280,10 @@ impl ::protobuf::Message for Message {
                     let len = v.compute_size();
                     my_size += 2 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
                 },
+                &message::Union::pointer_device_event(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 2 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
+                },
             };
         }
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
@@ -10274,6 +10345,9 @@ impl ::protobuf::Message for Message {
                 &message::Union::misc(ref v) => {
                     ::protobuf::rt::write_message_field_with_cached_size(19, v, os)?;
                 },
+                &message::Union::pointer_device_event(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(26, v, os)?;
+                },
             };
         }
         os.write_unknown_fields(self.get_unknown_fields())?;
@@ -10329,6 +10403,7 @@ impl ::protobuf::Clear for Message {
         self.union = ::std::option::Option::None;
         self.union = ::std::option::Option::None;
         self.union = ::std::option::Option::None;
+        self.union = ::std::option::Option::None;
         self.unknown_fields.clear();
     }
 }
@@ -10365,10 +10440,1221 @@ pub mod message {
         file_action(super::FileAction),
         file_response(super::FileResponse),
         misc(super::Misc),
+        pointer_device_event(super::PointerDeviceEvent),
     }
 
     impl ::protobuf::Oneof for Union {
     }
+}
+
+#[derive(PartialEq,Clone,Default)]
+pub struct PointerDeviceEvent {
+    // message fields
+    pub modifiers: ::std::vec::Vec<::protobuf::ProtobufEnumOrUnknown<ControlKey>>,
+    // message oneof groups
+    pub union: ::std::option::Option<pointer_device_event::Union>,
+    // special fields
+    pub unknown_fields: ::protobuf::UnknownFields,
+    pub cached_size: ::protobuf::rt::CachedSize,
+}
+
+impl<'a> ::std::default::Default for &'a PointerDeviceEvent {
+    fn default() -> &'a PointerDeviceEvent {
+        <PointerDeviceEvent as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl PointerDeviceEvent {
+    pub fn new() -> PointerDeviceEvent {
+        ::std::default::Default::default()
+    }
+
+    // .hbb.TouchEvent touch_event = 1;
+
+    pub fn get_touch_event(&self) -> &TouchEvent {
+        match self.union {
+            ::std::option::Option::Some(pointer_device_event::Union::touch_event(ref v)) => v,
+            _ => <TouchEvent as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_touch_event(&mut self) {
+        self.union = ::std::option::Option::None;
+    }
+
+    pub fn has_touch_event(&self) -> bool {
+        match self.union {
+            ::std::option::Option::Some(pointer_device_event::Union::touch_event(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_touch_event(&mut self, v: TouchEvent) {
+        self.union = ::std::option::Option::Some(pointer_device_event::Union::touch_event(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_touch_event(&mut self) -> &mut TouchEvent {
+        if let ::std::option::Option::Some(pointer_device_event::Union::touch_event(_)) = self.union {
+        } else {
+            self.union = ::std::option::Option::Some(pointer_device_event::Union::touch_event(TouchEvent::new()));
+        }
+        match self.union {
+            ::std::option::Option::Some(pointer_device_event::Union::touch_event(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_touch_event(&mut self) -> TouchEvent {
+        if self.has_touch_event() {
+            match self.union.take() {
+                ::std::option::Option::Some(pointer_device_event::Union::touch_event(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            TouchEvent::new()
+        }
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::new();
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, TouchEvent>(
+            "touch_event",
+            PointerDeviceEvent::has_touch_event,
+            PointerDeviceEvent::get_touch_event,
+            PointerDeviceEvent::mut_touch_event,
+            PointerDeviceEvent::set_touch_event,
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
+            "modifiers",
+            |m: &PointerDeviceEvent| { &m.modifiers },
+            |m: &mut PointerDeviceEvent| { &mut m.modifiers },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<PointerDeviceEvent>(
+            "PointerDeviceEvent",
+            43,
+            fields,
+        )
+    }
+}
+
+impl ::protobuf::Message for PointerDeviceEvent {
+    fn is_initialized(&self) -> bool {
+        if let Some(pointer_device_event::Union::touch_event(ref v)) = self.union {
+            if !v.is_initialized() {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::ProtobufResult<()> {
+        while !is.eof()? {
+            let (field_number, wire_type) = is.read_tag_unpack()?;
+            match field_number {
+                1 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeLengthDelimited {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    self.union = ::std::option::Option::Some(pointer_device_event::Union::touch_event(is.read_message()?));
+                },
+                2 => {
+                    ::protobuf::rt::read_repeated_enum_or_unknown_into(wire_type, is, &mut self.modifiers)?
+                },
+                _ => {
+                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u32 {
+        let mut my_size = 0;
+        for value in &self.modifiers {
+            my_size += ::protobuf::rt::enum_or_unknown_size(2, *value);
+        };
+        if let ::std::option::Option::Some(ref v) = self.union {
+            match v {
+                &pointer_device_event::Union::touch_event(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
+                },
+            };
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
+        self.cached_size.set(my_size);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::ProtobufResult<()> {
+        for v in &self.modifiers {
+            os.write_enum(2, ::protobuf::ProtobufEnumOrUnknown::value(v))?;
+        };
+        if let ::std::option::Option::Some(ref v) = self.union {
+            match v {
+                &pointer_device_event::Union::touch_event(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
+                },
+            };
+        }
+        os.write_unknown_fields(self.get_unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn get_cached_size(&self) -> u32 {
+        self.cached_size.get()
+    }
+
+    fn get_unknown_fields(&self) -> &::protobuf::UnknownFields {
+        &self.unknown_fields
+    }
+
+    fn mut_unknown_fields(&mut self) -> &mut ::protobuf::UnknownFields {
+        &mut self.unknown_fields
+    }
+
+    fn new() -> PointerDeviceEvent {
+        PointerDeviceEvent::new()
+    }
+
+    fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 43)
+    }
+
+    fn default_instance() -> &'static PointerDeviceEvent {
+        static instance: PointerDeviceEvent = PointerDeviceEvent {
+            modifiers: ::std::vec::Vec::new(),
+            union: ::std::option::Option::None,
+            unknown_fields: ::protobuf::UnknownFields::new(),
+            cached_size: ::protobuf::rt::CachedSize::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::Clear for PointerDeviceEvent {
+    fn clear(&mut self) {
+        self.union = ::std::option::Option::None;
+        self.modifiers.clear();
+        self.unknown_fields.clear();
+    }
+}
+
+impl ::std::fmt::Debug for PointerDeviceEvent {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for PointerDeviceEvent {
+    type RuntimeType = ::protobuf::reflect::runtime_types::RuntimeTypeMessage<Self>;
+}
+
+/// Nested message and enums of message `PointerDeviceEvent`
+pub mod pointer_device_event {
+
+    #[derive(Clone,PartialEq,Debug)]
+    pub enum Union {
+        touch_event(super::TouchEvent),
+    }
+
+    impl ::protobuf::Oneof for Union {
+    }
+}
+
+#[derive(PartialEq,Clone,Default)]
+pub struct TouchEvent {
+    // message oneof groups
+    pub union: ::std::option::Option<touch_event::Union>,
+    // special fields
+    pub unknown_fields: ::protobuf::UnknownFields,
+    pub cached_size: ::protobuf::rt::CachedSize,
+}
+
+impl<'a> ::std::default::Default for &'a TouchEvent {
+    fn default() -> &'a TouchEvent {
+        <TouchEvent as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl TouchEvent {
+    pub fn new() -> TouchEvent {
+        ::std::default::Default::default()
+    }
+
+    // .hbb.TouchScaleUpdate scale_update = 1;
+
+    pub fn get_scale_update(&self) -> &TouchScaleUpdate {
+        match self.union {
+            ::std::option::Option::Some(touch_event::Union::scale_update(ref v)) => v,
+            _ => <TouchScaleUpdate as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_scale_update(&mut self) {
+        self.union = ::std::option::Option::None;
+    }
+
+    pub fn has_scale_update(&self) -> bool {
+        match self.union {
+            ::std::option::Option::Some(touch_event::Union::scale_update(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_scale_update(&mut self, v: TouchScaleUpdate) {
+        self.union = ::std::option::Option::Some(touch_event::Union::scale_update(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_scale_update(&mut self) -> &mut TouchScaleUpdate {
+        if let ::std::option::Option::Some(touch_event::Union::scale_update(_)) = self.union {
+        } else {
+            self.union = ::std::option::Option::Some(touch_event::Union::scale_update(TouchScaleUpdate::new()));
+        }
+        match self.union {
+            ::std::option::Option::Some(touch_event::Union::scale_update(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_scale_update(&mut self) -> TouchScaleUpdate {
+        if self.has_scale_update() {
+            match self.union.take() {
+                ::std::option::Option::Some(touch_event::Union::scale_update(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            TouchScaleUpdate::new()
+        }
+    }
+
+    // .hbb.TouchPanStart pan_start = 2;
+
+    pub fn get_pan_start(&self) -> &TouchPanStart {
+        match self.union {
+            ::std::option::Option::Some(touch_event::Union::pan_start(ref v)) => v,
+            _ => <TouchPanStart as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_pan_start(&mut self) {
+        self.union = ::std::option::Option::None;
+    }
+
+    pub fn has_pan_start(&self) -> bool {
+        match self.union {
+            ::std::option::Option::Some(touch_event::Union::pan_start(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_pan_start(&mut self, v: TouchPanStart) {
+        self.union = ::std::option::Option::Some(touch_event::Union::pan_start(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_pan_start(&mut self) -> &mut TouchPanStart {
+        if let ::std::option::Option::Some(touch_event::Union::pan_start(_)) = self.union {
+        } else {
+            self.union = ::std::option::Option::Some(touch_event::Union::pan_start(TouchPanStart::new()));
+        }
+        match self.union {
+            ::std::option::Option::Some(touch_event::Union::pan_start(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_pan_start(&mut self) -> TouchPanStart {
+        if self.has_pan_start() {
+            match self.union.take() {
+                ::std::option::Option::Some(touch_event::Union::pan_start(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            TouchPanStart::new()
+        }
+    }
+
+    // .hbb.TouchPanUpdate pan_update = 3;
+
+    pub fn get_pan_update(&self) -> &TouchPanUpdate {
+        match self.union {
+            ::std::option::Option::Some(touch_event::Union::pan_update(ref v)) => v,
+            _ => <TouchPanUpdate as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_pan_update(&mut self) {
+        self.union = ::std::option::Option::None;
+    }
+
+    pub fn has_pan_update(&self) -> bool {
+        match self.union {
+            ::std::option::Option::Some(touch_event::Union::pan_update(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_pan_update(&mut self, v: TouchPanUpdate) {
+        self.union = ::std::option::Option::Some(touch_event::Union::pan_update(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_pan_update(&mut self) -> &mut TouchPanUpdate {
+        if let ::std::option::Option::Some(touch_event::Union::pan_update(_)) = self.union {
+        } else {
+            self.union = ::std::option::Option::Some(touch_event::Union::pan_update(TouchPanUpdate::new()));
+        }
+        match self.union {
+            ::std::option::Option::Some(touch_event::Union::pan_update(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_pan_update(&mut self) -> TouchPanUpdate {
+        if self.has_pan_update() {
+            match self.union.take() {
+                ::std::option::Option::Some(touch_event::Union::pan_update(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            TouchPanUpdate::new()
+        }
+    }
+
+    // .hbb.TouchPanEnd pan_end = 4;
+
+    pub fn get_pan_end(&self) -> &TouchPanEnd {
+        match self.union {
+            ::std::option::Option::Some(touch_event::Union::pan_end(ref v)) => v,
+            _ => <TouchPanEnd as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_pan_end(&mut self) {
+        self.union = ::std::option::Option::None;
+    }
+
+    pub fn has_pan_end(&self) -> bool {
+        match self.union {
+            ::std::option::Option::Some(touch_event::Union::pan_end(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_pan_end(&mut self, v: TouchPanEnd) {
+        self.union = ::std::option::Option::Some(touch_event::Union::pan_end(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_pan_end(&mut self) -> &mut TouchPanEnd {
+        if let ::std::option::Option::Some(touch_event::Union::pan_end(_)) = self.union {
+        } else {
+            self.union = ::std::option::Option::Some(touch_event::Union::pan_end(TouchPanEnd::new()));
+        }
+        match self.union {
+            ::std::option::Option::Some(touch_event::Union::pan_end(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_pan_end(&mut self) -> TouchPanEnd {
+        if self.has_pan_end() {
+            match self.union.take() {
+                ::std::option::Option::Some(touch_event::Union::pan_end(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            TouchPanEnd::new()
+        }
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::new();
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, TouchScaleUpdate>(
+            "scale_update",
+            TouchEvent::has_scale_update,
+            TouchEvent::get_scale_update,
+            TouchEvent::mut_scale_update,
+            TouchEvent::set_scale_update,
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, TouchPanStart>(
+            "pan_start",
+            TouchEvent::has_pan_start,
+            TouchEvent::get_pan_start,
+            TouchEvent::mut_pan_start,
+            TouchEvent::set_pan_start,
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, TouchPanUpdate>(
+            "pan_update",
+            TouchEvent::has_pan_update,
+            TouchEvent::get_pan_update,
+            TouchEvent::mut_pan_update,
+            TouchEvent::set_pan_update,
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, TouchPanEnd>(
+            "pan_end",
+            TouchEvent::has_pan_end,
+            TouchEvent::get_pan_end,
+            TouchEvent::mut_pan_end,
+            TouchEvent::set_pan_end,
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TouchEvent>(
+            "TouchEvent",
+            44,
+            fields,
+        )
+    }
+}
+
+impl ::protobuf::Message for TouchEvent {
+    fn is_initialized(&self) -> bool {
+        if let Some(touch_event::Union::scale_update(ref v)) = self.union {
+            if !v.is_initialized() {
+                return false;
+            }
+        }
+        if let Some(touch_event::Union::pan_start(ref v)) = self.union {
+            if !v.is_initialized() {
+                return false;
+            }
+        }
+        if let Some(touch_event::Union::pan_update(ref v)) = self.union {
+            if !v.is_initialized() {
+                return false;
+            }
+        }
+        if let Some(touch_event::Union::pan_end(ref v)) = self.union {
+            if !v.is_initialized() {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::ProtobufResult<()> {
+        while !is.eof()? {
+            let (field_number, wire_type) = is.read_tag_unpack()?;
+            match field_number {
+                1 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeLengthDelimited {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    self.union = ::std::option::Option::Some(touch_event::Union::scale_update(is.read_message()?));
+                },
+                2 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeLengthDelimited {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    self.union = ::std::option::Option::Some(touch_event::Union::pan_start(is.read_message()?));
+                },
+                3 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeLengthDelimited {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    self.union = ::std::option::Option::Some(touch_event::Union::pan_update(is.read_message()?));
+                },
+                4 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeLengthDelimited {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    self.union = ::std::option::Option::Some(touch_event::Union::pan_end(is.read_message()?));
+                },
+                _ => {
+                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u32 {
+        let mut my_size = 0;
+        if let ::std::option::Option::Some(ref v) = self.union {
+            match v {
+                &touch_event::Union::scale_update(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
+                },
+                &touch_event::Union::pan_start(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
+                },
+                &touch_event::Union::pan_update(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
+                },
+                &touch_event::Union::pan_end(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
+                },
+            };
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
+        self.cached_size.set(my_size);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::ProtobufResult<()> {
+        if let ::std::option::Option::Some(ref v) = self.union {
+            match v {
+                &touch_event::Union::scale_update(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
+                },
+                &touch_event::Union::pan_start(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(2, v, os)?;
+                },
+                &touch_event::Union::pan_update(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(3, v, os)?;
+                },
+                &touch_event::Union::pan_end(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(4, v, os)?;
+                },
+            };
+        }
+        os.write_unknown_fields(self.get_unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn get_cached_size(&self) -> u32 {
+        self.cached_size.get()
+    }
+
+    fn get_unknown_fields(&self) -> &::protobuf::UnknownFields {
+        &self.unknown_fields
+    }
+
+    fn mut_unknown_fields(&mut self) -> &mut ::protobuf::UnknownFields {
+        &mut self.unknown_fields
+    }
+
+    fn new() -> TouchEvent {
+        TouchEvent::new()
+    }
+
+    fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 44)
+    }
+
+    fn default_instance() -> &'static TouchEvent {
+        static instance: TouchEvent = TouchEvent {
+            union: ::std::option::Option::None,
+            unknown_fields: ::protobuf::UnknownFields::new(),
+            cached_size: ::protobuf::rt::CachedSize::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::Clear for TouchEvent {
+    fn clear(&mut self) {
+        self.union = ::std::option::Option::None;
+        self.union = ::std::option::Option::None;
+        self.union = ::std::option::Option::None;
+        self.union = ::std::option::Option::None;
+        self.unknown_fields.clear();
+    }
+}
+
+impl ::std::fmt::Debug for TouchEvent {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for TouchEvent {
+    type RuntimeType = ::protobuf::reflect::runtime_types::RuntimeTypeMessage<Self>;
+}
+
+/// Nested message and enums of message `TouchEvent`
+pub mod touch_event {
+
+    #[derive(Clone,PartialEq,Debug)]
+    pub enum Union {
+        scale_update(super::TouchScaleUpdate),
+        pan_start(super::TouchPanStart),
+        pan_update(super::TouchPanUpdate),
+        pan_end(super::TouchPanEnd),
+    }
+
+    impl ::protobuf::Oneof for Union {
+    }
+}
+
+#[derive(PartialEq,Clone,Default)]
+pub struct TouchScaleUpdate {
+    // message fields
+    pub scale: i32,
+    // special fields
+    pub unknown_fields: ::protobuf::UnknownFields,
+    pub cached_size: ::protobuf::rt::CachedSize,
+}
+
+impl<'a> ::std::default::Default for &'a TouchScaleUpdate {
+    fn default() -> &'a TouchScaleUpdate {
+        <TouchScaleUpdate as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl TouchScaleUpdate {
+    pub fn new() -> TouchScaleUpdate {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::new();
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "scale",
+            |m: &TouchScaleUpdate| { &m.scale },
+            |m: &mut TouchScaleUpdate| { &mut m.scale },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TouchScaleUpdate>(
+            "TouchScaleUpdate",
+            45,
+            fields,
+        )
+    }
+}
+
+impl ::protobuf::Message for TouchScaleUpdate {
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::ProtobufResult<()> {
+        while !is.eof()? {
+            let (field_number, wire_type) = is.read_tag_unpack()?;
+            match field_number {
+                1 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    self.scale = is.read_int32()?;
+                },
+                _ => {
+                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u32 {
+        let mut my_size = 0;
+        if self.scale != 0 {
+            my_size += ::protobuf::rt::value_size(1, self.scale, ::protobuf::wire_format::WireTypeVarint);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
+        self.cached_size.set(my_size);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::ProtobufResult<()> {
+        if self.scale != 0 {
+            os.write_int32(1, self.scale)?;
+        }
+        os.write_unknown_fields(self.get_unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn get_cached_size(&self) -> u32 {
+        self.cached_size.get()
+    }
+
+    fn get_unknown_fields(&self) -> &::protobuf::UnknownFields {
+        &self.unknown_fields
+    }
+
+    fn mut_unknown_fields(&mut self) -> &mut ::protobuf::UnknownFields {
+        &mut self.unknown_fields
+    }
+
+    fn new() -> TouchScaleUpdate {
+        TouchScaleUpdate::new()
+    }
+
+    fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 45)
+    }
+
+    fn default_instance() -> &'static TouchScaleUpdate {
+        static instance: TouchScaleUpdate = TouchScaleUpdate {
+            scale: 0,
+            unknown_fields: ::protobuf::UnknownFields::new(),
+            cached_size: ::protobuf::rt::CachedSize::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::Clear for TouchScaleUpdate {
+    fn clear(&mut self) {
+        self.scale = 0;
+        self.unknown_fields.clear();
+    }
+}
+
+impl ::std::fmt::Debug for TouchScaleUpdate {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for TouchScaleUpdate {
+    type RuntimeType = ::protobuf::reflect::runtime_types::RuntimeTypeMessage<Self>;
+}
+
+#[derive(PartialEq,Clone,Default)]
+pub struct TouchPanStart {
+    // message fields
+    pub x: i32,
+    pub y: i32,
+    // special fields
+    pub unknown_fields: ::protobuf::UnknownFields,
+    pub cached_size: ::protobuf::rt::CachedSize,
+}
+
+impl<'a> ::std::default::Default for &'a TouchPanStart {
+    fn default() -> &'a TouchPanStart {
+        <TouchPanStart as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl TouchPanStart {
+    pub fn new() -> TouchPanStart {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::new();
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "x",
+            |m: &TouchPanStart| { &m.x },
+            |m: &mut TouchPanStart| { &mut m.x },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "y",
+            |m: &TouchPanStart| { &m.y },
+            |m: &mut TouchPanStart| { &mut m.y },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TouchPanStart>(
+            "TouchPanStart",
+            46,
+            fields,
+        )
+    }
+}
+
+impl ::protobuf::Message for TouchPanStart {
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::ProtobufResult<()> {
+        while !is.eof()? {
+            let (field_number, wire_type) = is.read_tag_unpack()?;
+            match field_number {
+                1 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    self.x = is.read_int32()?;
+                },
+                2 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    self.y = is.read_int32()?;
+                },
+                _ => {
+                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u32 {
+        let mut my_size = 0;
+        if self.x != 0 {
+            my_size += ::protobuf::rt::value_size(1, self.x, ::protobuf::wire_format::WireTypeVarint);
+        }
+        if self.y != 0 {
+            my_size += ::protobuf::rt::value_size(2, self.y, ::protobuf::wire_format::WireTypeVarint);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
+        self.cached_size.set(my_size);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::ProtobufResult<()> {
+        if self.x != 0 {
+            os.write_int32(1, self.x)?;
+        }
+        if self.y != 0 {
+            os.write_int32(2, self.y)?;
+        }
+        os.write_unknown_fields(self.get_unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn get_cached_size(&self) -> u32 {
+        self.cached_size.get()
+    }
+
+    fn get_unknown_fields(&self) -> &::protobuf::UnknownFields {
+        &self.unknown_fields
+    }
+
+    fn mut_unknown_fields(&mut self) -> &mut ::protobuf::UnknownFields {
+        &mut self.unknown_fields
+    }
+
+    fn new() -> TouchPanStart {
+        TouchPanStart::new()
+    }
+
+    fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 46)
+    }
+
+    fn default_instance() -> &'static TouchPanStart {
+        static instance: TouchPanStart = TouchPanStart {
+            x: 0,
+            y: 0,
+            unknown_fields: ::protobuf::UnknownFields::new(),
+            cached_size: ::protobuf::rt::CachedSize::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::Clear for TouchPanStart {
+    fn clear(&mut self) {
+        self.x = 0;
+        self.y = 0;
+        self.unknown_fields.clear();
+    }
+}
+
+impl ::std::fmt::Debug for TouchPanStart {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for TouchPanStart {
+    type RuntimeType = ::protobuf::reflect::runtime_types::RuntimeTypeMessage<Self>;
+}
+
+#[derive(PartialEq,Clone,Default)]
+pub struct TouchPanUpdate {
+    // message fields
+    pub x: i32,
+    pub y: i32,
+    // special fields
+    pub unknown_fields: ::protobuf::UnknownFields,
+    pub cached_size: ::protobuf::rt::CachedSize,
+}
+
+impl<'a> ::std::default::Default for &'a TouchPanUpdate {
+    fn default() -> &'a TouchPanUpdate {
+        <TouchPanUpdate as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl TouchPanUpdate {
+    pub fn new() -> TouchPanUpdate {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::new();
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "x",
+            |m: &TouchPanUpdate| { &m.x },
+            |m: &mut TouchPanUpdate| { &mut m.x },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "y",
+            |m: &TouchPanUpdate| { &m.y },
+            |m: &mut TouchPanUpdate| { &mut m.y },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TouchPanUpdate>(
+            "TouchPanUpdate",
+            47,
+            fields,
+        )
+    }
+}
+
+impl ::protobuf::Message for TouchPanUpdate {
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::ProtobufResult<()> {
+        while !is.eof()? {
+            let (field_number, wire_type) = is.read_tag_unpack()?;
+            match field_number {
+                1 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    self.x = is.read_int32()?;
+                },
+                2 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    self.y = is.read_int32()?;
+                },
+                _ => {
+                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u32 {
+        let mut my_size = 0;
+        if self.x != 0 {
+            my_size += ::protobuf::rt::value_size(1, self.x, ::protobuf::wire_format::WireTypeVarint);
+        }
+        if self.y != 0 {
+            my_size += ::protobuf::rt::value_size(2, self.y, ::protobuf::wire_format::WireTypeVarint);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
+        self.cached_size.set(my_size);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::ProtobufResult<()> {
+        if self.x != 0 {
+            os.write_int32(1, self.x)?;
+        }
+        if self.y != 0 {
+            os.write_int32(2, self.y)?;
+        }
+        os.write_unknown_fields(self.get_unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn get_cached_size(&self) -> u32 {
+        self.cached_size.get()
+    }
+
+    fn get_unknown_fields(&self) -> &::protobuf::UnknownFields {
+        &self.unknown_fields
+    }
+
+    fn mut_unknown_fields(&mut self) -> &mut ::protobuf::UnknownFields {
+        &mut self.unknown_fields
+    }
+
+    fn new() -> TouchPanUpdate {
+        TouchPanUpdate::new()
+    }
+
+    fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 47)
+    }
+
+    fn default_instance() -> &'static TouchPanUpdate {
+        static instance: TouchPanUpdate = TouchPanUpdate {
+            x: 0,
+            y: 0,
+            unknown_fields: ::protobuf::UnknownFields::new(),
+            cached_size: ::protobuf::rt::CachedSize::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::Clear for TouchPanUpdate {
+    fn clear(&mut self) {
+        self.x = 0;
+        self.y = 0;
+        self.unknown_fields.clear();
+    }
+}
+
+impl ::std::fmt::Debug for TouchPanUpdate {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for TouchPanUpdate {
+    type RuntimeType = ::protobuf::reflect::runtime_types::RuntimeTypeMessage<Self>;
+}
+
+#[derive(PartialEq,Clone,Default)]
+pub struct TouchPanEnd {
+    // message fields
+    pub x: i32,
+    pub y: i32,
+    // special fields
+    pub unknown_fields: ::protobuf::UnknownFields,
+    pub cached_size: ::protobuf::rt::CachedSize,
+}
+
+impl<'a> ::std::default::Default for &'a TouchPanEnd {
+    fn default() -> &'a TouchPanEnd {
+        <TouchPanEnd as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl TouchPanEnd {
+    pub fn new() -> TouchPanEnd {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::new();
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "x",
+            |m: &TouchPanEnd| { &m.x },
+            |m: &mut TouchPanEnd| { &mut m.x },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "y",
+            |m: &TouchPanEnd| { &m.y },
+            |m: &mut TouchPanEnd| { &mut m.y },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TouchPanEnd>(
+            "TouchPanEnd",
+            48,
+            fields,
+        )
+    }
+}
+
+impl ::protobuf::Message for TouchPanEnd {
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::ProtobufResult<()> {
+        while !is.eof()? {
+            let (field_number, wire_type) = is.read_tag_unpack()?;
+            match field_number {
+                1 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    self.x = is.read_int32()?;
+                },
+                2 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    self.y = is.read_int32()?;
+                },
+                _ => {
+                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u32 {
+        let mut my_size = 0;
+        if self.x != 0 {
+            my_size += ::protobuf::rt::value_size(1, self.x, ::protobuf::wire_format::WireTypeVarint);
+        }
+        if self.y != 0 {
+            my_size += ::protobuf::rt::value_size(2, self.y, ::protobuf::wire_format::WireTypeVarint);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
+        self.cached_size.set(my_size);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::ProtobufResult<()> {
+        if self.x != 0 {
+            os.write_int32(1, self.x)?;
+        }
+        if self.y != 0 {
+            os.write_int32(2, self.y)?;
+        }
+        os.write_unknown_fields(self.get_unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn get_cached_size(&self) -> u32 {
+        self.cached_size.get()
+    }
+
+    fn get_unknown_fields(&self) -> &::protobuf::UnknownFields {
+        &self.unknown_fields
+    }
+
+    fn mut_unknown_fields(&mut self) -> &mut ::protobuf::UnknownFields {
+        &mut self.unknown_fields
+    }
+
+    fn new() -> TouchPanEnd {
+        TouchPanEnd::new()
+    }
+
+    fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 48)
+    }
+
+    fn default_instance() -> &'static TouchPanEnd {
+        static instance: TouchPanEnd = TouchPanEnd {
+            x: 0,
+            y: 0,
+            unknown_fields: ::protobuf::UnknownFields::new(),
+            cached_size: ::protobuf::rt::CachedSize::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::Clear for TouchPanEnd {
+    fn clear(&mut self) {
+        self.x = 0;
+        self.y = 0;
+        self.unknown_fields.clear();
+    }
+}
+
+impl ::std::fmt::Debug for TouchPanEnd {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for TouchPanEnd {
+    type RuntimeType = ::protobuf::reflect::runtime_types::RuntimeTypeMessage<Self>;
 }
 
 #[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
@@ -10998,7 +12284,7 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     o_format\x18\x08\x20\x01(\x0b2\x10.hbb.AudioFormatH\0R\x0baudioFormatB\0\
     \x12%\n\x0cclose_reason\x18\t\x20\x01(\tH\0R\x0bcloseReasonB\0\x12'\n\rr\
     efresh_video\x18\n\x20\x01(\x08H\0R\x0crefreshVideoB\0B\t\n\x05union\x12\
-    \0:\0\"\xfc\x06\n\x07Message\x12.\n\tsigned_id\x18\x03\x20\x01(\x0b2\r.h\
+    \0:\0\"\xcb\x07\n\x07Message\x12.\n\tsigned_id\x18\x03\x20\x01(\x0b2\r.h\
     bb.SignedIdH\0R\x08signedIdB\0\x121\n\npublic_key\x18\x04\x20\x01(\x0b2\
     \x0e.hbb.PublicKeyH\0R\tpublicKeyB\0\x121\n\ntest_delay\x18\x05\x20\x01(\
     \x0b2\x0e.hbb.TestDelayH\0R\ttestDelayB\0\x124\n\x0bvideo_frame\x18\x06\
@@ -11017,49 +12303,65 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     tion\x18\x11\x20\x01(\x0b2\x0f.hbb.FileActionH\0R\nfileActionB\0\x12:\n\
     \rfile_response\x18\x12\x20\x01(\x0b2\x11.hbb.FileResponseH\0R\x0cfileRe\
     sponseB\0\x12!\n\x04misc\x18\x13\x20\x01(\x0b2\t.hbb.MiscH\0R\x04miscB\0\
-    B\t\n\x05union\x12\0:\0*\xaa\x08\n\nControlKey\x12\t\n\x03Alt\x10\x01\
-    \x1a\0\x12\x0f\n\tBackspace\x10\x02\x1a\0\x12\x0e\n\x08CapsLock\x10\x03\
-    \x1a\0\x12\r\n\x07Control\x10\x04\x1a\0\x12\x0c\n\x06Delete\x10\x05\x1a\
-    \0\x12\x0f\n\tDownArrow\x10\x06\x1a\0\x12\t\n\x03End\x10\x07\x1a\0\x12\
-    \x0c\n\x06Escape\x10\x08\x1a\0\x12\x08\n\x02F1\x10\t\x1a\0\x12\t\n\x03F1\
-    0\x10\n\x1a\0\x12\t\n\x03F11\x10\x0b\x1a\0\x12\t\n\x03F12\x10\x0c\x1a\0\
-    \x12\x08\n\x02F2\x10\r\x1a\0\x12\x08\n\x02F3\x10\x0e\x1a\0\x12\x08\n\x02\
-    F4\x10\x0f\x1a\0\x12\x08\n\x02F5\x10\x10\x1a\0\x12\x08\n\x02F6\x10\x11\
-    \x1a\0\x12\x08\n\x02F7\x10\x12\x1a\0\x12\x08\n\x02F8\x10\x13\x1a\0\x12\
-    \x08\n\x02F9\x10\x14\x1a\0\x12\n\n\x04Home\x10\x15\x1a\0\x12\x0f\n\tLeft\
-    Arrow\x10\x16\x1a\0\x12\n\n\x04Meta\x10\x17\x1a\0\x12\x0c\n\x06Option\
-    \x10\x18\x1a\0\x12\x0e\n\x08PageDown\x10\x19\x1a\0\x12\x0c\n\x06PageUp\
-    \x10\x1a\x1a\0\x12\x0c\n\x06Return\x10\x1b\x1a\0\x12\x10\n\nRightArrow\
-    \x10\x1c\x1a\0\x12\x0b\n\x05Shift\x10\x1d\x1a\0\x12\x0b\n\x05Space\x10\
-    \x1e\x1a\0\x12\t\n\x03Tab\x10\x1f\x1a\0\x12\r\n\x07UpArrow\x10\x20\x1a\0\
-    \x12\r\n\x07Numpad0\x10!\x1a\0\x12\r\n\x07Numpad1\x10\"\x1a\0\x12\r\n\
-    \x07Numpad2\x10#\x1a\0\x12\r\n\x07Numpad3\x10$\x1a\0\x12\r\n\x07Numpad4\
-    \x10%\x1a\0\x12\r\n\x07Numpad5\x10&\x1a\0\x12\r\n\x07Numpad6\x10'\x1a\0\
-    \x12\r\n\x07Numpad7\x10(\x1a\0\x12\r\n\x07Numpad8\x10)\x1a\0\x12\r\n\x07\
-    Numpad9\x10*\x1a\0\x12\x0c\n\x06Cancel\x10+\x1a\0\x12\x0b\n\x05Clear\x10\
-    ,\x1a\0\x12\n\n\x04Menu\x10-\x1a\0\x12\x0b\n\x05Pause\x10.\x1a\0\x12\n\n\
-    \x04Kana\x10/\x1a\0\x12\x0c\n\x06Hangul\x100\x1a\0\x12\x0b\n\x05Junja\
-    \x101\x1a\0\x12\x0b\n\x05Final\x102\x1a\0\x12\x0b\n\x05Hanja\x103\x1a\0\
-    \x12\x0b\n\x05Kanji\x104\x1a\0\x12\r\n\x07Convert\x105\x1a\0\x12\x0c\n\
-    \x06Select\x106\x1a\0\x12\x0b\n\x05Print\x107\x1a\0\x12\r\n\x07Execute\
-    \x108\x1a\0\x12\x0e\n\x08Snapshot\x109\x1a\0\x12\x0c\n\x06Insert\x10:\
-    \x1a\0\x12\n\n\x04Help\x10;\x1a\0\x12\x0b\n\x05Sleep\x10<\x1a\0\x12\x0f\
-    \n\tSeparator\x10=\x1a\0\x12\x0c\n\x06Scroll\x10>\x1a\0\x12\r\n\x07NumLo\
-    ck\x10?\x1a\0\x12\n\n\x04RWin\x10@\x1a\0\x12\n\n\x04Apps\x10A\x1a\0\x12\
-    \x0e\n\x08Multiply\x10B\x1a\0\x12\t\n\x03Add\x10C\x1a\0\x12\x0e\n\x08Sub\
-    tract\x10D\x1a\0\x12\r\n\x07Decimal\x10E\x1a\0\x12\x0c\n\x06Divide\x10F\
-    \x1a\0\x12\x0c\n\x06Equals\x10G\x1a\0\x12\x11\n\x0bNumpadEnter\x10H\x1a\
-    \0\x12\x0c\n\x06RShift\x10I\x1a\0\x12\x0e\n\x08RControl\x10J\x1a\0\x12\n\
-    \n\x04RAlt\x10K\x1a\0\x12\x10\n\nCtrlAltDel\x10d\x1a\0\x12\x10\n\nLockSc\
-    reen\x10e\x1a\0\x1a\0*R\n\x08FileType\x12\t\n\x03Dir\x10\x01\x1a\0\x12\r\
-    \n\x07DirLink\x10\x02\x1a\0\x12\x0e\n\x08DirDrive\x10\x03\x1a\0\x12\n\n\
-    \x04File\x10\x04\x1a\0\x12\x0e\n\x08FileLink\x10\x05\x1a\0\x1a\0*<\n\nPe\
-    rmission\x12\x0e\n\x08Keyboard\x10\x01\x1a\0\x12\x0f\n\tClipboard\x10\
-    \x02\x1a\0\x12\x0b\n\x05Audio\x10\x03\x1a\0\x1a\0*E\n\x0cImageQuality\
-    \x12\x0c\n\x06NotSet\x10\0\x1a\0\x12\t\n\x03Low\x10\x02\x1a\0\x12\x0e\n\
-    \x08Balanced\x10\x03\x1a\0\x12\n\n\x04Best\x10\x04\x1a\0\x1a\0*1\n\nBool\
-    Option\x12\x0c\n\x06NotSet\x10\0\x1a\0\x12\x08\n\x02No\x10\x01\x1a\0\x12\
-    \t\n\x03Yes\x10\x02\x1a\0\x1a\0B\0b\x06proto3\
+    \x12M\n\x14pointer_device_event\x18\x1a\x20\x01(\x0b2\x17.hbb.PointerDev\
+    iceEventH\0R\x12pointerDeviceEventB\0B\t\n\x05union\x12\0:\0\"\x88\x01\n\
+    \x12PointerDeviceEvent\x124\n\x0btouch_event\x18\x01\x20\x01(\x0b2\x0f.h\
+    bb.TouchEventH\0R\ntouchEventB\0\x12/\n\tmodifiers\x18\x02\x20\x03(\x0e2\
+    \x0f.hbb.ControlKeyR\tmodifiersB\0B\t\n\x05union\x12\0:\0\"\xf3\x01\n\nT\
+    ouchEvent\x12<\n\x0cscale_update\x18\x01\x20\x01(\x0b2\x15.hbb.TouchScal\
+    eUpdateH\0R\x0bscaleUpdateB\0\x123\n\tpan_start\x18\x02\x20\x01(\x0b2\
+    \x12.hbb.TouchPanStartH\0R\x08panStartB\0\x126\n\npan_update\x18\x03\x20\
+    \x01(\x0b2\x13.hbb.TouchPanUpdateH\0R\tpanUpdateB\0\x12-\n\x07pan_end\
+    \x18\x04\x20\x01(\x0b2\x10.hbb.TouchPanEndH\0R\x06panEndB\0B\t\n\x05unio\
+    n\x12\0:\0\",\n\x10TouchScaleUpdate\x12\x16\n\x05scale\x18\x01\x20\x01(\
+    \x05R\x05scaleB\0:\0\"1\n\rTouchPanStart\x12\x0e\n\x01x\x18\x01\x20\x01(\
+    \x05R\x01xB\0\x12\x0e\n\x01y\x18\x02\x20\x01(\x05R\x01yB\0:\0\"2\n\x0eTo\
+    uchPanUpdate\x12\x0e\n\x01x\x18\x01\x20\x01(\x05R\x01xB\0\x12\x0e\n\x01y\
+    \x18\x02\x20\x01(\x05R\x01yB\0:\0\"/\n\x0bTouchPanEnd\x12\x0e\n\x01x\x18\
+    \x01\x20\x01(\x05R\x01xB\0\x12\x0e\n\x01y\x18\x02\x20\x01(\x05R\x01yB\0:\
+    \0*\xaa\x08\n\nControlKey\x12\t\n\x03Alt\x10\x01\x1a\0\x12\x0f\n\tBacksp\
+    ace\x10\x02\x1a\0\x12\x0e\n\x08CapsLock\x10\x03\x1a\0\x12\r\n\x07Control\
+    \x10\x04\x1a\0\x12\x0c\n\x06Delete\x10\x05\x1a\0\x12\x0f\n\tDownArrow\
+    \x10\x06\x1a\0\x12\t\n\x03End\x10\x07\x1a\0\x12\x0c\n\x06Escape\x10\x08\
+    \x1a\0\x12\x08\n\x02F1\x10\t\x1a\0\x12\t\n\x03F10\x10\n\x1a\0\x12\t\n\
+    \x03F11\x10\x0b\x1a\0\x12\t\n\x03F12\x10\x0c\x1a\0\x12\x08\n\x02F2\x10\r\
+    \x1a\0\x12\x08\n\x02F3\x10\x0e\x1a\0\x12\x08\n\x02F4\x10\x0f\x1a\0\x12\
+    \x08\n\x02F5\x10\x10\x1a\0\x12\x08\n\x02F6\x10\x11\x1a\0\x12\x08\n\x02F7\
+    \x10\x12\x1a\0\x12\x08\n\x02F8\x10\x13\x1a\0\x12\x08\n\x02F9\x10\x14\x1a\
+    \0\x12\n\n\x04Home\x10\x15\x1a\0\x12\x0f\n\tLeftArrow\x10\x16\x1a\0\x12\
+    \n\n\x04Meta\x10\x17\x1a\0\x12\x0c\n\x06Option\x10\x18\x1a\0\x12\x0e\n\
+    \x08PageDown\x10\x19\x1a\0\x12\x0c\n\x06PageUp\x10\x1a\x1a\0\x12\x0c\n\
+    \x06Return\x10\x1b\x1a\0\x12\x10\n\nRightArrow\x10\x1c\x1a\0\x12\x0b\n\
+    \x05Shift\x10\x1d\x1a\0\x12\x0b\n\x05Space\x10\x1e\x1a\0\x12\t\n\x03Tab\
+    \x10\x1f\x1a\0\x12\r\n\x07UpArrow\x10\x20\x1a\0\x12\r\n\x07Numpad0\x10!\
+    \x1a\0\x12\r\n\x07Numpad1\x10\"\x1a\0\x12\r\n\x07Numpad2\x10#\x1a\0\x12\
+    \r\n\x07Numpad3\x10$\x1a\0\x12\r\n\x07Numpad4\x10%\x1a\0\x12\r\n\x07Nump\
+    ad5\x10&\x1a\0\x12\r\n\x07Numpad6\x10'\x1a\0\x12\r\n\x07Numpad7\x10(\x1a\
+    \0\x12\r\n\x07Numpad8\x10)\x1a\0\x12\r\n\x07Numpad9\x10*\x1a\0\x12\x0c\n\
+    \x06Cancel\x10+\x1a\0\x12\x0b\n\x05Clear\x10,\x1a\0\x12\n\n\x04Menu\x10-\
+    \x1a\0\x12\x0b\n\x05Pause\x10.\x1a\0\x12\n\n\x04Kana\x10/\x1a\0\x12\x0c\
+    \n\x06Hangul\x100\x1a\0\x12\x0b\n\x05Junja\x101\x1a\0\x12\x0b\n\x05Final\
+    \x102\x1a\0\x12\x0b\n\x05Hanja\x103\x1a\0\x12\x0b\n\x05Kanji\x104\x1a\0\
+    \x12\r\n\x07Convert\x105\x1a\0\x12\x0c\n\x06Select\x106\x1a\0\x12\x0b\n\
+    \x05Print\x107\x1a\0\x12\r\n\x07Execute\x108\x1a\0\x12\x0e\n\x08Snapshot\
+    \x109\x1a\0\x12\x0c\n\x06Insert\x10:\x1a\0\x12\n\n\x04Help\x10;\x1a\0\
+    \x12\x0b\n\x05Sleep\x10<\x1a\0\x12\x0f\n\tSeparator\x10=\x1a\0\x12\x0c\n\
+    \x06Scroll\x10>\x1a\0\x12\r\n\x07NumLock\x10?\x1a\0\x12\n\n\x04RWin\x10@\
+    \x1a\0\x12\n\n\x04Apps\x10A\x1a\0\x12\x0e\n\x08Multiply\x10B\x1a\0\x12\t\
+    \n\x03Add\x10C\x1a\0\x12\x0e\n\x08Subtract\x10D\x1a\0\x12\r\n\x07Decimal\
+    \x10E\x1a\0\x12\x0c\n\x06Divide\x10F\x1a\0\x12\x0c\n\x06Equals\x10G\x1a\
+    \0\x12\x11\n\x0bNumpadEnter\x10H\x1a\0\x12\x0c\n\x06RShift\x10I\x1a\0\
+    \x12\x0e\n\x08RControl\x10J\x1a\0\x12\n\n\x04RAlt\x10K\x1a\0\x12\x10\n\n\
+    CtrlAltDel\x10d\x1a\0\x12\x10\n\nLockScreen\x10e\x1a\0\x1a\0*R\n\x08File\
+    Type\x12\t\n\x03Dir\x10\x01\x1a\0\x12\r\n\x07DirLink\x10\x02\x1a\0\x12\
+    \x0e\n\x08DirDrive\x10\x03\x1a\0\x12\n\n\x04File\x10\x04\x1a\0\x12\x0e\n\
+    \x08FileLink\x10\x05\x1a\0\x1a\0*<\n\nPermission\x12\x0e\n\x08Keyboard\
+    \x10\x01\x1a\0\x12\x0f\n\tClipboard\x10\x02\x1a\0\x12\x0b\n\x05Audio\x10\
+    \x03\x1a\0\x1a\0*E\n\x0cImageQuality\x12\x0c\n\x06NotSet\x10\0\x1a\0\x12\
+    \t\n\x03Low\x10\x02\x1a\0\x12\x0e\n\x08Balanced\x10\x03\x1a\0\x12\n\n\
+    \x04Best\x10\x04\x1a\0\x1a\0*1\n\nBoolOption\x12\x0c\n\x06NotSet\x10\0\
+    \x1a\0\x12\x08\n\x02No\x10\x01\x1a\0\x12\t\n\x03Yes\x10\x02\x1a\0\x1a\0B\
+    \0b\x06proto3\
 ";
 
 /// `FileDescriptorProto` object which was a source for this generated file
@@ -11119,6 +12421,12 @@ pub fn file_descriptor() -> ::protobuf::reflect::FileDescriptor {
         messages.push(AudioFrame::generated_message_descriptor_data());
         messages.push(Misc::generated_message_descriptor_data());
         messages.push(Message::generated_message_descriptor_data());
+        messages.push(PointerDeviceEvent::generated_message_descriptor_data());
+        messages.push(TouchEvent::generated_message_descriptor_data());
+        messages.push(TouchScaleUpdate::generated_message_descriptor_data());
+        messages.push(TouchPanStart::generated_message_descriptor_data());
+        messages.push(TouchPanUpdate::generated_message_descriptor_data());
+        messages.push(TouchPanEnd::generated_message_descriptor_data());
         let mut enums = ::std::vec::Vec::new();
         enums.push(ControlKey::generated_enum_descriptor_data());
         enums.push(FileType::generated_enum_descriptor_data());
