@@ -206,6 +206,28 @@ Worth knowing: **no `Misc` message has ever arrived** in any logged session, so
 the peer-options logging and the refresh handling have never actually fired.
 They are plumbed, not proven.
 
+## 12. Rendezvous registration
+
+Planned: a private, self-hosted rendezvous server. Two things in the current
+code are shaped by its absence and should change when it arrives.
+
+**What discovery advertises.** `lan.rs` puts our *IP address* in the
+`PeerDiscovery` id, because the client only connects directly when the id is
+one (`client.rs`: `if is_ip_str(peer)`) and otherwise asks a rendezvous server
+to resolve it. With a server registered, `me.id` becomes the better answer: an
+id survives a DHCP change and works from another subnet. The line is marked.
+
+**The direct-IP handshake.** `session.rs` runs unencrypted by default because a
+client connecting by IP never starts the `signed_id`/`public_key` exchange --
+see the module header. A peer arriving via rendezvous *does*, which is what
+`--secure` already implements, so that path exists and is tested but is not the
+default.
+
+The registration itself is the work: `RegisterPeer` and `RegisterPk` to udp
+21116, a heartbeat to stay listed, and answering `PunchHoleRequest` /
+`FetchLocalAddr` by connecting back. A private server on a LAN can skip most of
+the NAT traversal, which is the bulk of the protocol's complexity.
+
 ## 3. Audio
 
 A phase-1 goal that is not started. `libopus.a` is already built and on the G5;
