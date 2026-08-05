@@ -109,6 +109,26 @@ const TEST_DELAY_STALE: std::time::Duration = std::time::Duration::from_secs(10)
 /// legitimately needs at least two (an empty probe, then the real password).
 const MAX_LOGIN_ATTEMPTS: u32 = 10;
 
+/// The version reported to the peer, and **not** the crate's own.
+///
+/// A modern client changes what it *sends* based on what we claim to be, so
+/// this string is load-bearing rather than cosmetic. Two gates in the current
+/// client (`src/common.rs`) read it:
+///
+/// * **1.2.4** -- at or above it, the refresh button sends
+///   `Misc::refresh_video_display` (field 31) instead of `refresh_video`
+///   (field 10). We only know field 10, so the button would stop working.
+/// * **1.4.5** -- at or above it, the client may use *relative* mouse mode and
+///   send deltas rather than absolute coordinates. `decide_mouse` takes
+///   absolutes, so the pointer would come apart entirely.
+///
+/// It was `env!("CARGO_PKG_VERSION")`, which happened to be 0.1.0 and happened
+/// to be safe. Bumping the crate version to anything past 1.2.4 -- an ordinary
+/// thing to do to a maturing project -- would silently have moved the client
+/// onto paths this agent does not implement, with no error anywhere. Pinned
+/// here so that cannot happen by accident, and guarded by a test.
+const REPORTED_VERSION: &str = "0.1.0";
+
 /// Is there anything to read without waiting?
 ///
 /// `drain_input` blocks for `POLL_MS` whenever the socket is empty. At the top
@@ -403,7 +423,7 @@ pub fn serve(stream: TcpStream, ident: &Identity) -> io::Result<()> {
     let mut pi = PeerInfo::new();
     pi.hostname = ident.hostname.clone();
     pi.platform = "Mac OS".to_owned();
-    pi.version = env!("CARGO_PKG_VERSION").to_owned();
+    pi.version = REPORTED_VERSION.to_owned();
     let mut d = DisplayInfo::new();
     // The size now, not the size when the process started -- the resolution may
     // have been changed since, and this is what sizes the peer's canvas.
@@ -1081,6 +1101,69 @@ pub fn listen(addr: &str, ident: &Identity) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Upstream's version-to-number arithmetic, from `hbb_common::get_version_number`.
+///
+/// Reimplemented rather than imported because the whole point is to check what
+/// *the client* will compute from our string, using the client's own rule.
+#[cfg(test)]
+fn version_number(v: &str) -> i64 {
+    let mut parts = v.split('-');
+    let mut n: i64 = 0;
+    if let Some(head) = parts.next() {
+        let mut last: i64 = 0;
+        for x in head.split('.') {
+            last = x.parse().unwrap_or(0);
+            n = n * 1000 + last;
+        }
+        // The last component is scaled to leave room for a patch level, so
+        // 1.1.10 becomes 1001100 rather than 1001010.
+        n -= last;
+        n += last * 10;
+    }
+    if let Some(pre) = parts.next() {
+        n += pre.parse::<i64>().unwrap_or(0);
+    }
+    n
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::*;
+
+    /// The reported version must stay below every gate a modern client applies
+    /// to it, or the client starts sending things this agent cannot answer.
+    /// See `REPORTED_VERSION` for what each one costs.
+    #[test]
+    fn we_stay_on_the_legacy_side_of_every_client_gate() {
+        let ours = version_number(REPORTED_VERSION);
+        // Above this the refresh button switches to a field we do not know.
+        assert!(
+            ours < version_number("1.2.4"),
+            "{} is at or above the multi-UI-session gate",
+            REPORTED_VERSION
+        );
+        // Above this the client may send relative mouse deltas instead of
+        // absolute coordinates, which `decide_mouse` does not handle.
+        assert!(
+            ours < version_number("1.4.5"),
+            "{} is at or above the relative-mouse gate",
+            REPORTED_VERSION
+        );
+    }
+
+    /// The arithmetic itself, against the worked example in upstream's own
+    /// comment: "1.1.10 -> 1001100". The scaling of the last component is the
+    /// part that is easy to get wrong, and getting it wrong quietly would make
+    /// the gate check above meaningless.
+    #[test]
+    fn the_arithmetic_matches_upstreams_worked_example() {
+        assert_eq!(version_number("1.1.10"), 1001100);
+        assert!(version_number("1.1.10") > version_number("1.1.9"));
+        assert!(version_number("1.2.4") > version_number("1.1.8"));
+        assert!(version_number("0.1.0") < version_number("1.0.0"));
+    }
 }
 
 #[cfg(test)]
