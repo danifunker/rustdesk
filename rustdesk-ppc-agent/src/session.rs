@@ -399,9 +399,9 @@ impl Video {
         Some((self.cap.width as i32, self.cap.height as i32))
     }
 
-    /// Probe, and if anything moved, capture/convert/encode one frame.
-    /// Returns None when the screen is unchanged -- the cheap path, ~15 ms.
-    fn next_frame(&mut self) -> Option<(Vec<u8>, bool, i64)> {
+    /// Probe for change. Returns the dirty bands, or None if nothing moved --
+    /// the cheap path, ~15 ms.
+    fn probe(&mut self) -> Option<[bool; crate::capture::BANDS]> {
         if self.broken {
             return None;
         }
@@ -422,13 +422,26 @@ impl Video {
             self.cap.invalidate();
         }
         let dirty = self.cap.dirty_bands();
-        if !dirty.iter().any(|d| *d) {
-            return None;
+        if dirty.iter().any(|d| *d) {
+            Some(dirty)
+        } else {
+            None
         }
-        let all = dirty.iter().all(|d| *d);
+    }
+
+    /// Read one band out of VRAM and convert just those rows.
+    ///
+    /// Deliberately per-band: the caller services input between bands, so a
+    /// screen-wide change no longer blocks input for the ~520 ms that reading
+    /// and converting a whole frame takes.
+    fn band(&mut self, b: usize) {
         let stride = self.cap.stride();
-        let frame = self.cap.read_bands(&dirty);
-        crate::convert::argb_to_i420(frame, stride, &mut self.img);
+        let (y0, y1) = self.cap.read_band(b);
+        crate::convert::argb_to_i420_rows(self.cap.buffer(), stride, &mut self.img, y0, y1);
+    }
+
+    /// Encode whatever is in the conversion buffer.
+    fn encode(&mut self, all: bool) -> Option<(Vec<u8>, bool, i64)> {
         let pts = self.start.elapsed().as_millis() as i64;
         match self.enc.encode(&self.img, pts, all) {
             Ok(f) if !f.data.is_empty() => Some((f.data.to_vec(), f.key, f.pts_ms)),
@@ -530,8 +543,21 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
     #[cfg(target_os = "macos")]
     send_cursor_data(peer)?;
 
+    macro_rules! pump_input {
+        () => {{
+            #[cfg(target_os = "macos")]
+            let alive = drain_input(peer, &mut injector, &mut cursor_tracker, &mut last_peer_input)?;
+            #[cfg(not(target_os = "macos"))]
+            let alive = drain_input(peer)?;
+            if !alive {
+                return Ok(());
+            }
+        }};
+    }
+
     loop {
-        // Pump one video frame, if the screen moved.
+        pump_input!();
+
         #[cfg(all(target_os = "macos", not(no_vpx)))]
         if let Some(v) = video.as_mut() {
             // Announce a new size before sending a frame in it: the peer sizes
@@ -550,20 +576,35 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
                 m.set_misc(mi);
                 peer.send(&m)?;
             }
-            if let Some((data, key, pts)) = v.next_frame() {
-                let mut vp = crate::message_proto::VP9::new();
-                vp.data = data;
-                vp.key = key;
-                vp.pts = pts;
-                let mut vp9s = crate::message_proto::VP9s::new();
-                vp9s.frames.push(vp);
-                let mut vf = crate::message_proto::VideoFrame::new();
-                // Field 12, not 6: we encode VP8, and a modern client feeds
-                // field 6 (`vp9s`) to its VP9 decoder.
-                vf.set_vp8s(vp9s);
-                let mut m = Message::new();
-                m.set_video_frame(vf);
-                peer.send(&m)?;
+
+            if let Some(dirty) = v.probe() {
+                let all = dirty.iter().all(|d| *d);
+                // One band at a time, servicing input in between. A whole
+                // frame is ~520 ms of reading and converting; a band is ~33 ms,
+                // which is the difference between a mouse that tracks and one
+                // that stalls whenever the Dock or a scroll bar animates.
+                for (b, moved) in dirty.iter().enumerate() {
+                    if !*moved {
+                        continue;
+                    }
+                    v.band(b);
+                    pump_input!();
+                }
+                if let Some((data, key, pts)) = v.encode(all) {
+                    let mut vp = crate::message_proto::VP9::new();
+                    vp.data = data;
+                    vp.key = key;
+                    vp.pts = pts;
+                    let mut vp9s = crate::message_proto::VP9s::new();
+                    vp9s.frames.push(vp);
+                    let mut vf = crate::message_proto::VideoFrame::new();
+                    // Field 12, not 6: we encode VP8, and a modern client feeds
+                    // field 6 (`vp9s`) to its VP9 decoder.
+                    vf.set_vp8s(vp9s);
+                    let mut m = Message::new();
+                    m.set_video_frame(vf);
+                    peer.send(&m)?;
+                }
             }
         }
 
@@ -571,90 +612,86 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
         // pointer themselves, and no input event announces that.
         #[cfg(target_os = "macos")]
         send_cursor_position(peer, &mut cursor_tracker, last_peer_input)?;
+    }
+}
 
-        // Drain everything already queued before spending another ~250 ms on a
-        // frame. Handling one message per iteration was survivable when an idle
-        // poll cost 6 ms; now that a capture cycle sets the floor, a client
-        // sending 20-100 mouse events a second would outrun the loop and the
-        // backlog would grow without bound -- the cursor would lag further
-        // behind for as long as the session lasted.
-        loop {
-            let msg = match peer.recv() {
-                Err(ref e) if is_timeout(e) => break,
-                Ok(m) => m,
-                Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
-                    log::info!("peer {} disconnected", peer.name);
-                    return Ok(());
-                }
-                Err(e) => return Err(e),
-            };
-            match msg.union {
-                Some(message::Union::mouse_event(me)) => {
-                    #[cfg(target_os = "macos")]
-                    {
-                        injector.mouse(&me);
-                        last_peer_input = std::time::Instant::now();
-                        // Keeps the tracker current without sending anything
-                        // back: this peer is driving, so its own position is
-                        // suppressed for the next 300 ms.
-                        send_cursor_position(peer, &mut cursor_tracker, last_peer_input)?;
-                    }
-                    let _ = &me;
-                }
-                Some(message::Union::key_event(ke)) => {
-                    #[cfg(target_os = "macos")]
-                    {
-                        injector.key(&ke);
-                        last_peer_input = std::time::Instant::now();
-                    }
-                    #[cfg(not(target_os = "macos"))]
-                    let _ = &ke;
-                }
-                Some(message::Union::test_delay(t)) => {
-                    if t.from_client {
-                        let mut m = Message::new();
-                        m.set_test_delay(t);
-                        peer.send(&m)?;
-                    }
-                }
-                // The peer's options. Worth logging rather than dropping: the
-                // client only draws a remote pointer when its "show remote
-                // cursor" toggle is on, and this is the only way to tell from
-                // here whether it is -- upstream's server uses the same signal
-                // to decide whether to send cursor data at all.
-                Some(message::Union::misc(mi)) => {
-                    if let Some(misc::Union::option(o)) = mi.union {
-                        log::info!(
-                            "peer options: show_remote_cursor={:?} image_quality={:?} \
-                             disable_clipboard={:?} disable_audio={:?}",
-                            o.show_remote_cursor.enum_value_or_default(),
-                            o.image_quality.enum_value_or_default(),
-                            o.disable_clipboard.enum_value_or_default(),
-                            o.disable_audio.enum_value_or_default()
-                        );
-                        // The toggle is usually flipped mid-session, long after
-                        // the shape was sent at login. Send it again, and make
-                        // the next poll report a position unconditionally --
-                        // otherwise the peer waits for the pointer to move
-                        // before it can draw anything at all.
-                        #[cfg(target_os = "macos")]
-                        if o.show_remote_cursor.enum_value_or_default() == BoolOption::Yes {
-                            send_cursor_data(peer)?;
-                            cursor_tracker.reset();
-                            // Report a position promptly even though the option
-                            // arrived alongside the peer's own input.
-                            last_peer_input = std::time::Instant::now()
-                                - std::time::Duration::from_millis(
-                                    crate::cursor::SUPPRESS_AFTER_INPUT_MS + 1,
-                                );
-                        }
-                    }
-                }
-                other => log::debug!(
-                    "   (no handler for {})",
-                    msg_name(&Message { union: other, ..Default::default() })
-                ),
+/// Handle every message the peer has already sent, then return.
+///
+/// Returns false when the peer has gone. Called between the stages of a frame
+/// as well as around it: a frame costs hundreds of milliseconds and input read
+/// only at frame boundaries makes the mouse stall for exactly that long.
+fn drain_input(
+    peer: &mut Peer,
+    #[cfg(target_os = "macos")] injector: &mut crate::input::Injector,
+    #[cfg(target_os = "macos")] cursor_tracker: &mut crate::cursor::Tracker,
+    #[cfg(target_os = "macos")] last_peer_input: &mut std::time::Instant,
+) -> io::Result<bool> {
+    loop {
+        let msg = match peer.recv() {
+            Err(ref e) if is_timeout(e) => return Ok(true),
+            Ok(m) => m,
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                log::info!("peer {} disconnected", peer.name);
+                return Ok(false);
             }
+            Err(e) => return Err(e),
+        };
+        match msg.union {
+            Some(message::Union::mouse_event(me)) => {
+                #[cfg(target_os = "macos")]
+                {
+                    injector.mouse(&me);
+                    *last_peer_input = std::time::Instant::now();
+                    send_cursor_position(peer, cursor_tracker, *last_peer_input)?;
+                }
+                let _ = &me;
+            }
+            Some(message::Union::key_event(ke)) => {
+                #[cfg(target_os = "macos")]
+                {
+                    injector.key(&ke);
+                    *last_peer_input = std::time::Instant::now();
+                }
+                let _ = &ke;
+            }
+            Some(message::Union::test_delay(t)) => {
+                if t.from_client {
+                    let mut m = Message::new();
+                    m.set_test_delay(t);
+                    peer.send(&m)?;
+                }
+            }
+            // The peer's options. Worth logging rather than dropping: the
+            // client only draws a remote pointer when its "show remote cursor"
+            // toggle is on, and this is the only way to tell from here whether
+            // it is.
+            Some(message::Union::misc(mi)) => {
+                if let Some(misc::Union::option(o)) = mi.union {
+                    log::info!(
+                        "peer options: show_remote_cursor={:?} image_quality={:?} \
+                         disable_clipboard={:?} disable_audio={:?}",
+                        o.show_remote_cursor.enum_value_or_default(),
+                        o.image_quality.enum_value_or_default(),
+                        o.disable_clipboard.enum_value_or_default(),
+                        o.disable_audio.enum_value_or_default()
+                    );
+                    #[cfg(target_os = "macos")]
+                    if o.show_remote_cursor.enum_value_or_default() == BoolOption::Yes {
+                        // Usually flipped mid-session, long after the shape was
+                        // sent at login; without this the peer never gets one.
+                        send_cursor_data(peer)?;
+                        cursor_tracker.reset();
+                        *last_peer_input = std::time::Instant::now()
+                            - std::time::Duration::from_millis(
+                                crate::cursor::SUPPRESS_AFTER_INPUT_MS + 1,
+                            );
+                    }
+                }
+            }
+            other => log::debug!(
+                "   (no handler for {})",
+                msg_name(&Message { union: other, ..Default::default() })
+            ),
         }
     }
 }
