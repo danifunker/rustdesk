@@ -48,6 +48,30 @@ re-sending after ten seconds if an answer goes missing so a peer that ignores
 them cannot wedge the timer. It also logs the round trip, which is the client's
 latency readout as well.
 
+## 1d. Video is given up on for the whole session if it fails once
+
+`Video::new` runs at login, and if `Capturer::new` fails the session logs
+"serving input only" and never tries again. Seen for real: an agent that had
+read the display fine at startup — its own banner said `display : 1920x1080` —
+had `CGDisplayBaseAddress` return NULL eleven minutes later, and every peer that
+connected afterwards got a working mouse and no picture until the process was
+restarted. A freshly exec'd process on the same machine read the framebuffer
+without trouble at the same moment, so whatever goes stale belongs to the
+long-lived process rather than to the display.
+
+Two things to do, in order:
+
+- **Retry.** `probe` already tolerates a 16-bit colour depth by pausing and
+  picking up again by itself; a null base address deserves the same treatment
+  rather than a dead session. Rebuild the `Capturer` every few seconds while
+  `broken`.
+- **Find out what invalidates it.** Suspect display sleep. `probes/fb-settle.c`
+  and `fb-livecheck.c` are the shape of probe that would answer it: hold a
+  mapping, let the display sleep, and see what the base address does.
+
+Worth knowing that this is invisible to `--probe-display`, which is a fresh
+process every time and so always gets a good mapping.
+
 ## 1c. An unknown message from modern clients
 
 A real client sends `d2 01 04 0a 02 0a 00` -- **field 26** of `Message`, which
