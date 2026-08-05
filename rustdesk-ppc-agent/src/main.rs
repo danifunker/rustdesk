@@ -227,11 +227,24 @@ fn probe_display() {
     use rustdesk_ppc_agent::convert::{argb_to_i420, I420};
     match rustdesk_ppc_agent::capture::Capturer::new() {
         Ok(mut c) => {
-            println!("display  : {}x{}  stride {}", c.width, c.height, c.stride());
+            let (w, h, stride) = (c.width, c.height, c.stride());
+            println!("display  : {}x{}  stride {}", w, h, stride);
+
+            // Capture and convert before anything else touches the capturer.
+            // `frame()` borrows it for as long as the returned slice lives, so
+            // the probes below cannot run until the conversion that reads it is
+            // done. (mrustc does not borrow-check, so getting this wrong here
+            // builds happily for the G5 and only fails under real rustc.)
+            let mut out = I420::new(w, h);
             let tcap = std::time::Instant::now();
             let f = c.frame();
             let cap_ms = tcap.elapsed().as_millis();
-            println!("first px : {:02x} {:02x} {:02x} {:02x}", f[0], f[1], f[2], f[3]);
+            let first_px = format!("{:02x} {:02x} {:02x} {:02x}", f[0], f[1], f[2], f[3]);
+            let tconv = std::time::Instant::now();
+            argb_to_i420(f, stride, &mut out);
+            let conv_ms = tconv.elapsed().as_millis();
+
+            println!("first px : {}", first_px);
             // How the real loop will behave: probe, then read only what moved.
             let t = std::time::Instant::now();
             let d1 = c.dirty_bands();
@@ -243,35 +256,43 @@ fn probe_display() {
                 probe_ms, d1.iter().filter(|x| **x).count(),
                 probe2_ms, d2.iter().filter(|x| **x).count());
 
-            let (w, h, stride) = (c.width, c.height, c.stride());
-            let t = std::time::Instant::now();
-            let mut out = I420::new(w, h);
-            argb_to_i420(f, stride, &mut out);
-            let conv_ms = t.elapsed().as_millis();
+            // What the probe costs against how much of the screen it looks at.
+            // Measured on the G5 this is flatly proportional to bytes -- window
+            // size makes no difference once the sampled runs are `memcpy`'d out
+            // rather than read byte by byte -- so these rows are a coverage
+            // dial, and the rate column says whether the copy is running at the
+            // ~23 MB/s a bulk read of VRAM gets. The first row is the shape the
+            // probe had before any of this.
+            println!("probe shape: ms per probe, median of 3");
+            println!("            {:>6} {:>6} {:>8} {:>6} {:>8}", "window", "step", "KB", "ms", "MB/s");
+            for &(window, step) in &[
+                (3usize, 64usize),
+                (128, 2048),
+                (128, 1024),
+                (128, 512),
+                (128, 256),
+                (256, 512),
+                (stride, stride),
+            ] {
+                let mut ms = [0u128; 3];
+                for m in ms.iter_mut() {
+                    let t = std::time::Instant::now();
+                    c.dirty_bands_tuned(window, step);
+                    *m = t.elapsed().as_millis();
+                }
+                ms.sort();
+                let kb = c.probe_bytes(window, step) / 1024;
+                let rate = if ms[1] > 0 { (kb as u128 * 1000 / ms[1] / 1024).to_string() } else { "-".to_owned() };
+                println!("            {:>6} {:>6} {:>8} {:>6} {:>8}", window, step, kb, ms[1], rate);
+            }
+            c.invalidate(); // the sweep left the checksums describing its last pattern
+
             let total = cap_ms + conv_ms;
             println!("capture   : {} ms (VRAM -> RAM)", cap_ms);
             println!("argb->i420: {} ms", conv_ms);
 
             #[cfg(not(no_vpx))]
-            let enc_ms = {
-                match rustdesk_ppc_agent::encode::Encoder::new(out.width, out.height, 1500) {
-                    Ok(mut e) => {
-                        // First frame is a keyframe and not representative; time
-                        // the second, which is what a steady session pays.
-                        let _ = e.encode(&out, 0, true);
-                        let t = std::time::Instant::now();
-                        match e.encode(&out, 33, false) {
-                            Ok(f) => {
-                                let ms = t.elapsed().as_millis();
-                                println!("vp8 encode: {} ms ({} bytes, key={})", ms, f.data.len(), f.key);
-                                ms
-                            }
-                            Err(er) => { println!("vp8 encode: failed: {}", er); 0 }
-                        }
-                    }
-                    Err(er) => { println!("vp8 encode: unavailable: {}", er); 0 }
-                }
-            };
+            let enc_ms = encode_sweep(&mut out);
             #[cfg(no_vpx)]
             let enc_ms = 0;
 
@@ -286,6 +307,123 @@ fn probe_display() {
 #[cfg(not(target_os = "macos"))]
 fn probe_display() {
     println!("--probe-display is only meaningful on macOS");
+}
+
+/// Time each encoder tuning against a still frame and a small change, and
+/// return what the shipping defaults cost.
+///
+/// Two columns because they answer different questions. **still** re-encodes an
+/// identical frame: it is the price of concluding that nothing moved, which the
+/// session pays on every frame it sends however little changed, and it is the
+/// floor that makes VP8 rather than capture the limit on ordinary interaction.
+/// **small** repaints a 256x64 patch first, which is roughly a redrawn line or
+/// two of text.
+///
+/// Median of three, because a single sample on a machine with a window server
+/// on it is noise. Each row builds its own encoder: every knob here is fixed at
+/// `vpx_codec_enc_init` time or depends on state accumulated since it.
+#[cfg(all(target_os = "macos", not(no_vpx)))]
+fn encode_sweep(img: &mut rustdesk_ppc_agent::convert::I420) -> u128 {
+    use rustdesk_ppc_agent::encode::{Encoder, Tune};
+
+    // Spelled out rather than derived from `Tune::default()`, so that moving a
+    // default does not quietly change what any row of the sweep means. `plain`
+    // is where this started, before any of it was measured.
+    let plain = Tune { static_threshold: 1000, last_ref_only: false, error_resilient: true };
+    let sweep: &[(&str, Tune)] = &[
+        ("static 1000", plain),
+        ("static 6000", Tune { static_threshold: 6000, ..plain }),
+        ("static 15000", Tune { static_threshold: 15000, ..plain }),
+        ("static 30000", Tune { static_threshold: 30000, ..plain }),
+        ("last ref only", Tune { last_ref_only: true, ..plain }),
+        ("no err resil", Tune { error_resilient: false, ..plain }),
+        ("15000 + lastref", Tune { static_threshold: 15000, last_ref_only: true, ..plain }),
+        (
+            "15000 + both",
+            Tune { static_threshold: 15000, last_ref_only: true, error_resilient: false },
+        ),
+    ];
+
+    println!("vp8 tuning: ms per frame, median of 3 (bytes for the small change)");
+    println!("            {:<16} {:>5} {:>6} {:>8}", "config", "still", "small", "bytes");
+    // Every configuration has to start from the same picture, so stamp the
+    // patch on once here rather than leaving the first row encoding the clean
+    // screen and the rest encoding a patched one.
+    dirty_patch(img, 0);
+    let mut baseline_ms = 0;
+    for (label, tune) in sweep {
+        let mut e = match Encoder::tuned(img.width, img.height, 1500, *tune) {
+            Ok(e) => e,
+            Err(er) => {
+                println!("            {:<16} unavailable: {}", label, er);
+                continue;
+            }
+        };
+        // The first frame is a keyframe and nothing like what a steady session
+        // pays; the few after it are still settling. Encode and discard.
+        let _ = e.encode(img, 0, true);
+        let mut pts = 33i64;
+        for _ in 0..3 {
+            let _ = e.encode(img, pts, false);
+            pts += 33;
+        }
+
+        // Alternate the two cases rather than timing one column and then the
+        // other. Rate control and mode decisions carry from frame to frame, so
+        // whichever column runs second is measured against a different encoder
+        // state -- with them run in sequence a still frame came out dearer than
+        // a changed one, which is not a thing that can be true.
+        let mut still = [0u128; 3];
+        let mut small = [0u128; 3];
+        let mut bytes = 0usize;
+        for i in 0..3 {
+            let t = std::time::Instant::now();
+            let _ = e.encode(img, pts, false);
+            still[i] = t.elapsed().as_millis();
+            pts += 33;
+
+            dirty_patch(img, i as u8 + 1);
+            let t = std::time::Instant::now();
+            bytes = match e.encode(img, pts, false) {
+                Ok(f) => f.data.len(),
+                Err(_) => 0,
+            };
+            small[i] = t.elapsed().as_millis();
+            pts += 33;
+        }
+        // Back to pattern 0, so the next config sees what this one first saw.
+        dirty_patch(img, 0);
+
+        still.sort();
+        small.sort();
+        let mark = if *tune == Tune::default() { "  <- in use" } else { "" };
+        println!(
+            "            {:<16} {:>5} {:>6} {:>8}{}",
+            label, still[1], small[1], bytes, mark
+        );
+        if *tune == Tune::default() {
+            baseline_ms = still[1];
+        }
+    }
+    baseline_ms
+}
+
+/// Repaint a 256x64 patch of the luma plane with something text-shaped.
+///
+/// Dark runs on a light background, in rows of twelve -- crude, but closer to
+/// what a terminal redraw costs an encoder than random noise would be. Noise is
+/// the worst case for a codec and would make every configuration here look bad
+/// in the same way.
+#[cfg(all(target_os = "macos", not(no_vpx)))]
+fn dirty_patch(img: &mut rustdesk_ppc_agent::convert::I420, n: u8) {
+    let (pw, ph) = (256.min(img.width), 64.min(img.height));
+    for y in 0..ph {
+        let line = (y + n as usize) % 12;
+        for x in 0..pw {
+            let ink = line >= 3 && line < 11 && (x + n as usize) % 7 < 4;
+            img.y[y * img.width + x] = if ink { 40 } else { 220 };
+        }
+    }
 }
 
 /// Answers the two open questions at once: does the framebuffer reflect changes,

@@ -22,6 +22,7 @@ struct vpxenc {
     vpx_codec_ctx_t codec;
     vpx_image_t img;
     int width, height;
+    int last_ref_only;
     unsigned char *out;   /* accumulated packets for the current frame */
     size_t out_len, out_cap;
     int out_key;
@@ -33,8 +34,14 @@ struct vpxenc {
  * threads: decided by the caller from the processors actually online, never
  * assumed -- a single-processor G4 or G5 is as much a target as the dual G5
  * this was developed on. VP8 only threads across token partitions, so asking
- * for more than one thread means asking for partitions to match. */
-struct vpxenc *vpxenc_new(int width, int height, int bitrate_kbps, int cpu_used, int threads)
+ * for more than one thread means asking for partitions to match.
+ *
+ * The last three are the tuning knobs `--probe-display` sweeps; see the Rust
+ * side's `Tune` for what each costs. They exist as parameters rather than
+ * constants so the sweep measures the same code the session runs.
+ */
+struct vpxenc *vpxenc_new(int width, int height, int bitrate_kbps, int cpu_used, int threads,
+                          int static_thresh, int last_ref_only, int error_resilient)
 {
     struct vpxenc *e;
     vpx_codec_enc_cfg_t cfg;
@@ -50,13 +57,20 @@ struct vpxenc *vpxenc_new(int width, int height, int bitrate_kbps, int cpu_used,
         return NULL;
     e->width = width;
     e->height = height;
+    e->last_ref_only = last_ref_only;
 
     cfg.g_w = width;
     cfg.g_h = height;
     cfg.rc_target_bitrate = bitrate_kbps;
     cfg.g_timebase.num = 1;
     cfg.g_timebase.den = 1000;          /* pts in milliseconds */
-    cfg.g_error_resilient = 1;          /* survive a dropped packet */
+    /* Error resilience buys survival of a dropped packet, which is worth
+     * nothing over a TCP session that cannot drop one -- so turning it off
+     * looked like free quality, since it re-enables the backward entropy
+     * update. Measured on the G5 it is neither: no faster, and 9% *more* bytes
+     * per frame. Left on, and left switchable, because that result is odd
+     * enough to be worth re-checking on other hardware. */
+    cfg.g_error_resilient = error_resilient ? 1 : 0;
     cfg.g_lag_in_frames = 0;            /* no lookahead: latency matters here */
     if (threads < 1)
         threads = 1;
@@ -77,7 +91,13 @@ struct vpxenc *vpxenc_new(int width, int height, int bitrate_kbps, int cpu_used,
         return NULL;
     }
     vpx_codec_control_(&e->codec, VP8E_SET_CPUUSED, cpu_used);
-    vpx_codec_control_(&e->codec, VP8E_SET_STATIC_THRESHOLD, 1000);
+    /* Below this much residual error a macroblock is declared unchanged and
+     * coded as a skip, which is the single cheapest thing that can happen to
+     * it. A desktop is mostly *exactly* static, so the threshold only has to be
+     * high enough to swallow the odd blend or antialiased edge -- and this is
+     * the one knob here that measurably pays. See the Rust `Tune` for the
+     * numbers and for why the default is 15000 rather than higher. */
+    vpx_codec_control_(&e->codec, VP8E_SET_STATIC_THRESHOLD, static_thresh);
     /* One partition per thread, rounded down to the power of two VP8 wants:
      * without this g_threads has nothing to divide the work along. */
     vpx_codec_control_(&e->codec, VP8E_SET_TOKEN_PARTITIONS, threads >= 4 ? 2 : (threads >= 2 ? 1 : 0));
@@ -127,6 +147,17 @@ int vpxenc_encode(struct vpxenc *e,
     e->img.stride[VPX_PLANE_V] = vstride;
 
     vpx_enc_frame_flags_t flags = force_key ? VPX_EFLAG_FORCE_KF : 0;
+    /* Restrict prediction to the previous frame, on the theory that VP8 was
+     * searching the golden and altref buffers too and that a desktop block
+     * matches the frame before it or nothing at all. Measured on the G5: no
+     * difference whatever, because at cpu_used = -16 the fast mode picker was
+     * evidently not searching them anyway. Kept as a knob, not as a win.
+     *
+     * Only on inter frames: a keyframe refreshes every reference by
+     * definition, so telling it not to is at best ignored. */
+    if (e->last_ref_only && !force_key)
+        flags |= VP8_EFLAG_NO_REF_GF | VP8_EFLAG_NO_REF_ARF
+               | VP8_EFLAG_NO_UPD_GF | VP8_EFLAG_NO_UPD_ARF;
     /* Realtime deadline: bounded encode time, which is the whole point here. */
     if (vpx_codec_encode(&e->codec, &e->img, pts_ms, 1, flags, VPX_DL_REALTIME)
             != VPX_CODEC_OK)

@@ -94,10 +94,13 @@ Phase 2 by decision. `Clipboard` message exists in the proto; the Mac side is
 
 ## 7. Conversion speed
 
-`argb_to_i420` is ~180 ms against 14 ms for hand-written C at `-O2`. Ranked
-options in [`videoperformance.md`](videoperformance.md#5-conversion-cost):
-`get_unchecked` in the hot loop, raising the C optimisation level, or an AltiVec
-shim. Note capture (347 ms) dominates, so this is worth less than it looks.
+`argb_to_i420` is ~185 ms against 14 ms for hand-written C at `-O2`. Ranked
+options in [`videoperformance.md`](videoperformance.md#5-conversion-cost): move
+it into a C shim as the other hot paths already are, `get_unchecked` in the hot
+loop, raising the C optimisation level, or AltiVec. Note capture (351 ms)
+dominates, so this is worth less than it looks — see
+[`performance-plan.md`](performance-plan.md) for where it sits against
+everything else.
 
 ## 8. Multi-monitor
 

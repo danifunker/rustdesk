@@ -62,6 +62,19 @@ const DEFAULT_BITRATE_KBPS: u32 = 1500;
 /// anything the sampled change detection missed.
 const SETTLE_REPAINT: std::time::Duration = std::time::Duration::from_millis(900);
 
+/// How long the screen must be still before the probe backs off, and how far
+/// apart probes may then be.
+///
+/// The probe is not free -- it reads VRAM, which is the slow thing on this
+/// machine -- and running it flat out on a desktop that has not moved for
+/// several seconds spends a processor the person sitting at the G5 might want.
+/// The cost is latency on the *first* change after a quiet spell, bounded by
+/// the interval; every change after that is noticed at full rate, because any
+/// dirty band resets the clock. Deliberately shorter than `SETTLE_REPAINT`'s
+/// window so the repaint that covers missed changes is never delayed by it.
+const IDLE_AFTER: std::time::Duration = std::time::Duration::from_millis(3000);
+const IDLE_PROBE_INTERVAL: std::time::Duration = std::time::Duration::from_millis(150);
+
 /// Login attempts allowed on a single connection before dropping it. The peer
 /// legitimately needs at least two (an empty probe, then the real password).
 const MAX_LOGIN_ATTEMPTS: u32 = 10;
@@ -358,6 +371,8 @@ struct Video {
     /// done since. See `probe`.
     last_change: std::time::Instant,
     repaired: bool,
+    /// When the framebuffer was last sampled, for the idle backoff.
+    last_probe: std::time::Instant,
     /// Set when the encoder could not be rebuilt; the session carries on with
     /// input only rather than dropping the peer.
     broken: bool,
@@ -379,6 +394,7 @@ impl Video {
             bpp_warned: false,
             last_change: std::time::Instant::now(),
             repaired: false,
+            last_probe: std::time::Instant::now(),
             broken: false,
         })
     }
@@ -415,6 +431,17 @@ impl Video {
         if self.broken {
             return None;
         }
+        // Nothing has moved for a while: sample at a slower cadence rather than
+        // reading VRAM as fast as the loop comes round. Gated on `repaired` so
+        // the settle repaint below always happens at full rate first, and any
+        // dirty band puts it straight back to probing every pass.
+        if self.repaired
+            && self.last_change.elapsed() >= IDLE_AFTER
+            && self.last_probe.elapsed() < IDLE_PROBE_INTERVAL
+        {
+            return None;
+        }
+        self.last_probe = std::time::Instant::now();
         // A 16-bit mode is reachable from the Displays pane, and the converter
         // assumes 32. Pause rather than send garbage, and pick up again by
         // itself if the depth comes back.
@@ -527,8 +554,9 @@ fn send_cursor_position(
 /// Dispatch until the peer disconnects, pumping video between messages.
 ///
 /// Single-threaded on purpose: one peer, one capture, and the encode is the
-/// expensive step. The socket is polled with a short timeout so an idle screen
-/// costs only the ~6 ms dirty-band probe.
+/// expensive step. The socket is polled with a short timeout, so an idle screen
+/// costs only the dirty-band probe -- and once it has been idle for a few
+/// seconds, not even that on every pass. See `IDLE_AFTER`.
 fn message_loop(peer: &mut Peer) -> io::Result<()> {
     #[cfg(all(target_os = "macos", not(no_vpx)))]
     let mut video = match Video::new(DEFAULT_BITRATE_KBPS) {

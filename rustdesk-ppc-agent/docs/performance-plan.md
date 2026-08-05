@@ -14,34 +14,40 @@ Target: `PowerMac11,2`, **two** PowerPC 970 cores @ 2.3 GHz, 4 GB, Mac OS X
 
 ## 1. The baseline, measured
 
-`rustdesk-agent --probe-display`, 1920x1080, after the change-detection and
-per-band work of 2026-08-05:
+`rustdesk-agent --probe-display`, 1920x1080, after the probe and encoder work of
+2026-08-05:
 
-| stage | cost | scales with |
-|---|---|---|
-| dirty-band probe | 29 ms | pixels sampled |
-| capture (VRAM → RAM) | 350 ms | **bytes read** |
-| ARGB → I420 | 175 ms | rows converted |
-| VP8 encode | 65 ms | frame size, threads |
-| **full-screen change** | **591 ms** | |
-| **idle poll** | **29 ms** | |
+| stage | cost | was | scales with |
+|---|---|---|---|
+| dirty-band probe | **14 ms** | 29 ms | bytes sampled |
+| capture (VRAM → RAM) | 351 ms | 350 ms | **bytes read** |
+| ARGB → I420 | 185 ms | 175 ms | rows converted |
+| VP8 encode | **34 ms** | 46 ms | frame size, threads |
+| **full-screen change** | **571 ms** | 591 ms | |
+| **idle poll** | **14 ms** | 29 ms | |
 
-Capture and conversion are now per-band, so a typical small update — a few lines
-of text, a menu, a cursor-sized region — costs roughly:
+Capture and conversion are per-band, so a typical small update — a few lines of
+text, a menu, a cursor-sized region — costs roughly:
 
 ```
-probe 29 + read 22 + convert 11 + encode 65  ≈  127 ms       (estimate,
-                                                              band costs derived
-                                                              from the measured
-                                                              per-row scaling)
+probe 14 + read 22 + convert 11 + encode 34  ≈  81 ms       (estimate: band
+                                                             costs derived from
+                                                             the measured
+                                                             per-row scaling)
 ```
 
-**That makes the encoder the floor for ordinary interaction, not the capture.**
-It is the one stage that still pays full price for a small change, because VP8
-encodes a whole frame however little of it moved. The old advice in
-`videoperformance.md` — "encode is the cheapest stage, tuning the codec is the
-least valuable thing available" — was true when conversion was full-frame and is
-no longer true for small updates. Full-screen motion is still capture-bound.
+against ~127 ms before. **The encoder is still the floor for ordinary
+interaction**, at 34 of those 81 ms, because VP8 encodes a whole frame however
+little of it moved. Full-screen motion is still capture-bound and essentially
+untouched — nothing done so far reads fewer bytes out of VRAM.
+
+### A correction to the old figures
+
+The 65 ms once quoted for encode was measured on the *first* inter frame after a
+keyframe, which is not what a steady session pays. With three warm-up frames
+first, the same settings measure 46 ms. So the encoder was never as bad as
+recorded, and the gap between it and capture was always wider than it looked.
+`--probe-display` now warms up before timing anything.
 
 ## 2. Why VNC feels faster
 
@@ -58,9 +64,9 @@ protocol has no "here is a rectangle of pixels" message. So every update pays:
 * ARGB → I420 conversion for the rows that changed, and
 * a whole-frame VP8 encode regardless.
 
-Anything that closes the gap has to either make those two cheaper or use the
-second processor. Switching to raw rectangles is not available without breaking
-protocol compatibility.
+Anything that closes the gap has to make those cheaper, shrink what is encoded,
+or use the second processor. Switching to raw rectangles is not available
+without breaking protocol compatibility.
 
 ## 3. The second CPU, where there is one
 
@@ -75,40 +81,89 @@ token partitions to match or `g_threads` has nothing to divide along.
 *Measured* on the dual G5: **92 ms → 65 ms**, −29%. The agent logs what it chose:
 
 ```text
-encoder: 1920x1080, 1500 kbps, 2 thread(s) of 2 processor(s)
+encoder: 1920x1080, 1500 kbps, 2 thread(s) of 2 processor(s), Tune { .. }
 ```
 
 Two more ways to spend a second core, in increasing order of effort:
 
 1. **Split the conversion across both cores.** `argb_to_i420_rows` already takes
    a row range, so two threads converting half the rows each is a small change
-   with no shared state. *Estimate*: 176 ms → ~95 ms full-frame. Must go through
-   `sys::threads_for`, and must stay correct on one core.
+   with no shared state. *Estimate*: 185 ms → ~100 ms full-frame. Must go
+   through `sys::threads_for`, and must stay correct on one core.
 2. **Pipeline capture against encode.** Capture is a VRAM read that barely
    touches the CPU (~23 MB/s, bus-bound); encode is pure CPU. Reading frame N+1
-   while encoding frame N should hide most of one behind the other. This is the
-   biggest win available and the largest change -- it needs a second thread and
-   a buffer handoff, and the input loop must keep being serviced throughout. On
-   a single-processor machine it should degrade to the current serial path
-   rather than thrash.
+   while encoding frame N should hide most of one behind the other. Worth less
+   than it was now that encode is 34 ms rather than 65 against a 351 ms capture
+   — the thing there is to hide is small. It needs a second thread and a buffer
+   handoff, and the input loop must keep being serviced throughout.
 
 ## 4. Ranked options
 
 | # | change | expected | effort | risk |
 |---|---|---|---|---|
 | ~~1~~ | ~~Threaded encode~~ | **done: −29% encode, measured** | trivial | none |
-| 2 | Threaded ARGB → I420 | *est.* −80 ms full-frame | small | low |
-| 3 | Lower the resolution | capture ∝ pixels: 1024x768 is ~126 ms *measured* | none, it is a setting | changes what the user sees |
-| 4 | Pipeline capture against encode | *est.* −40% wall clock | large | needs care around input latency |
-| 5 | AltiVec conversion | *est.* 175 ms → ~40 ms | medium | AltiVec on `gcc10`, 4-pixel lanes |
-| 6 | Encode a sub-rectangle | would make small updates ~free | large | **check the client accepts it first** |
-| 7 | Adaptive probe cadence | −29 ms per idle poll | small | slower to notice a change |
+| ~~2~~ | ~~Encoder tuning~~ | **done: 46 → 34 ms, measured** | trivial | a quality dial, see below |
+| ~~3~~ | ~~Cheaper probe~~ | **done: 29 → 14 ms with 4x the coverage, measured** | small | none |
+| 4 | **Serve at half resolution** | *est.* 571 → ~260 ms, 81 → ~50 ms | medium | halves sharpness |
+| 5 | Converter in C, then AltiVec | *est.* 185 → ~50 ms, then ~30 | small → medium | none, then AltiVec on `gcc10` |
+| 6 | Threaded ARGB → I420 | *est.* −85 ms full-frame | small | low |
+| 7 | Measure `CGWindowListCreateImage` | one probe run; could be −250 ms | trivial to find out | may be much worse |
+| 8 | Pipeline capture against encode | *est.* −30% wall clock | large | needs care around input latency |
+| 9 | Tiles as displays | small updates near-free | large | **speculative, read the client first** |
 
-Option 6 is the one that would actually close the gap with VNC, and it is also
-the one most likely to be impossible: it depends on whether a RustDesk client
-will render a `VideoFrame` smaller than the display, and where it would place
-it. Read the client's decoder before writing any of it. If it does not work, the
-combination of 1, 2 and 4 is the realistic ceiling.
+### 4 — serve at half resolution
+
+The largest remaining win that needs nothing from the client. Do not change the
+G5's own display mode: downscale in the agent and tell the peer the display *is*
+960x540, scaling injected mouse coordinates and reported cursor positions by
+two. Every stage divides — capture reads only even rows (351 → ~166 ms, straight
+off the striding table in `videoperformance.md`), conversion ~185 → ~50 ms,
+encode 34 → ~12 ms.
+
+The property that matters: because `PeerInfo` reports the smaller size, the
+canvas, the pointer and the video all agree, and no client behaviour has to be
+verified. The variant where a small frame is sent into a full-size canvas does
+depend on the client, and is option 9's problem.
+
+Coordinate scaling lands in two places — `input::Injector::decide_mouse` and
+`cursor::Tracker` — both of which are pure and host-testable. Worth a flag
+rather than a decision, since it genuinely costs sharpness on text.
+
+### 5 — converter in C
+
+Ranked above AltiVec deliberately, because the first step is much cheaper than
+the second. mrustc emits C compiled at **-O1**, with Rust bounds checks in the
+hot loop; hand-written C at -O2 did luma-only from RAM in 14 ms against the
+185 ms the whole conversion costs now. `vpx_shim.c` and `input_shim.c` already
+establish the pattern, and the build already passes `-maltivec`. Get the plain-C
+version first and measure before writing any vector code.
+
+### 7 — the alternative capture path
+
+Capture is the single largest cost and has never moved. 23 MB/s is dreadful even
+for uncached VRAM, and it is dreadful *because* it is a CPU-driven read that
+cannot burst. `CGWindowListCreateImage` is 10.5+ and is already wired into
+`probes/capture-live.c` and `probes/fb-try.c` — but only ever checksummed for
+liveness, **never timed as a capture route**. If the window server hands back a
+RAM-backed image via GPU DMA it could be several times faster; if it recomposites
+the screen per call it will be worse. One probe run settles it, and the answer
+changes what options 6 and 8 are worth. It composites the whole screen, so it
+would replace the full-frame path only, not per-band reads.
+
+### 9 — where "encode a sub-rectangle" really stands
+
+There are two blockers, not one. **VP8 keyframes carry the frame dimensions and
+inter frames must match them**, so a rectangle that varies per frame would force
+a keyframe every frame — expensive and large. And `VideoFrame` has no x/y
+placement.
+
+The one protocol-legal route is a *fixed* grid of tiles declared as separate
+displays in `PeerInfo`, each with its own x/y offset and its own encoder, with
+only the tiles that moved sent. That is the shape modern RustDesk's combined
+multi-monitor view composites. It is the only option here that removes the
+whole-screen tax and genuinely matches VNC's cost model — and it depends on
+client behaviour that must be read in the client's source before any of it is
+written, needs N encoders, and may require the user to pick a display mode.
 
 ## 5. Already ruled out
 
@@ -120,6 +175,21 @@ Do not re-litigate these; each cost real time to establish.
   `src/capture.rs`.
 * **Reading the framebuffer per pixel.** 6364 ms per frame against 350 ms for a
   bulk copy. The read must be one `memcpy` per band.
+* **Hashing the framebuffer in place.** The same mistake one level down, and it
+  survived in the probe until 2026-08-05: a byte-at-a-time hash over uncached
+  VRAM measured **1.9 MB/s** against 22.8 MB/s for a bulk copy of the same
+  bytes. `memcpy` the sampled runs into RAM and hash *that*. See `PROBE_WINDOW`.
+* **Wider probe windows to cut transaction count.** The theory was that the
+  probe was latency-bound and that reading 128 bytes cost what 3 bytes cost.
+  Measured flatly false: every window size from 3 to 7680 bytes lands at the
+  same MB/s, and time tracks volume exactly. The window is a coverage dial, not
+  a cost dial.
+* **`VP8_EFLAG_NO_REF_GF | NO_REF_ARF`.** The argument was that VP8 searches
+  three references per macroblock where one would do. Measured 47 ms against 46:
+  nothing. At `cpu_used = -16` the fast mode picker was evidently not searching
+  them anyway.
+* **Turning off `g_error_resilient`.** Pointless over TCP, so it should have been
+  free quality. Measured no faster *and* 9% more bytes per frame. Left on.
 * **libyuv's `ARGBToI420`.** Its `ARGB` means little-endian word order, i.e.
   B,G,R,A in memory; this framebuffer is genuinely A,R,G,B. It would silently
   swap red and blue.
@@ -132,12 +202,24 @@ Do not re-litigate these; each cost real time to establish.
 ## 6. How to measure
 
 ```bash
-ssh ppctiger '~/rustdesk-agent --probe-display'     # per-stage timings
+export SSH_AUTH_SOCK=/tmp/ssh-agent-ppc.sock      # the key is passphrase-protected
+ssh ppctiger '~/rustdesk-agent --probe-display'   # per-stage timings and both sweeps
 PPC_HOST=ppctiger probes/run.sh vram-vs-ram read-scaling
 cargo run --example probe_client -- 192.168.99.116:21118 ppctest123
 ```
 
-Two cautions learned the hard way:
+`--probe-display` carries two sweeps, so the constants they feed are re-checked
+on whatever machine is in front of you rather than inherited from this one:
+
+* **probe shape** — cost against coverage for each `(window, step)`. The MB/s
+  column is the check that the sampled runs are being copied at bulk speed;
+  anything near 2 MB/s means something is reading VRAM a byte at a time again.
+* **vp8 tuning** — each `encode::Tune` timed against a still frame and a small
+  change, with the configuration actually in use marked. Three warm-up frames
+  first, and the two columns interleaved: run in sequence, a still frame came
+  out dearer than a changed one, which is not a thing that can be true.
+
+Three cautions learned the hard way:
 
 * **Do not measure with a client connected.** The agent serves one peer at a
   time and the encode path is shared; `probe_client` will simply fail.
@@ -145,3 +227,5 @@ Two cautions learned the hard way:
   not changing measure nothing. Force a change, and know what change you forced
   -- `killall Dock` is throttled by launchd to one respawn per ten seconds,
   which has already produced one wrong conclusion in this project.
+* **Warm the encoder up.** See the correction in §1. Anything timed on the first
+  frame or two after a keyframe is measuring the keyframe's aftermath.
