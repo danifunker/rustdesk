@@ -98,10 +98,15 @@ void rd_mouse_here(int type, int button)
 }
 
 /* Both axes. wheel1 is vertical, wheel2 horizontal; a client's two-finger
- * sideways swipe arrives as x and was previously dropped on the floor. */
-void rd_scroll(int dy, int dx)
+ * sideways swipe arrives as x and was previously dropped on the floor.
+ *
+ * `pixels` picks the unit. A wheel sends notches and wants lines; a trackpad
+ * sends a distance and wants pixels. Feeding pixel deltas to the line unit
+ * scrolls a page per twitch, and notches to the pixel unit barely moves. */
+void rd_scroll(int dy, int dx, int pixels)
 {
-    CGEventRef e = CGEventCreateScrollWheelEvent(src(), kCGScrollEventUnitLine, 2, dy, dx);
+    CGScrollEventUnit unit = pixels ? kCGScrollEventUnitPixel : kCGScrollEventUnitLine;
+    CGEventRef e = CGEventCreateScrollWheelEvent(src(), unit, 2, dy, dx);
     if (e) {
         CGEventPost(kCGHIDEventTap, e);
         CFRelease(e);
