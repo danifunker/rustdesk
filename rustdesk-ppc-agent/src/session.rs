@@ -430,12 +430,17 @@ fn send_cursor_data(peer: &mut Peer) -> io::Result<()> {
 
 /// Send where the pointer is, if it has moved since last time.
 #[cfg(target_os = "macos")]
-fn send_cursor_position(peer: &mut Peer, tracker: &mut crate::cursor::Tracker) -> io::Result<()> {
+fn send_cursor_position(
+    peer: &mut Peer,
+    tracker: &mut crate::cursor::Tracker,
+    last_peer_input: std::time::Instant,
+) -> io::Result<()> {
     let (x, y) = crate::input::cursor_position();
     if x < 0.0 {
         return Ok(()); // the position was unreadable; nothing useful to send
     }
-    if let Some((x, y)) = tracker.update(x as i32, y as i32) {
+    let since = last_peer_input.elapsed().as_millis() as u64;
+    if let Some((x, y)) = tracker.update(x as i32, y as i32, since) {
         let mut cp = CursorPosition::new();
         cp.x = x;
         cp.y = y;
@@ -480,6 +485,11 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
     // change. See `crate::cursor`.
     #[cfg(target_os = "macos")]
     let mut cursor_tracker = crate::cursor::Tracker::new();
+    // When this peer last sent input. Its own cursor position is held back for
+    // a moment afterwards -- see `cursor::SUPPRESS_AFTER_INPUT_MS`.
+    #[cfg(target_os = "macos")]
+    let mut last_peer_input = std::time::Instant::now()
+        - std::time::Duration::from_millis(crate::cursor::SUPPRESS_AFTER_INPUT_MS + 1);
     #[cfg(target_os = "macos")]
     send_cursor_data(peer)?;
 
@@ -507,7 +517,7 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
         // Also poll once an iteration: the person at the G5 can move the
         // pointer themselves, and no input event announces that.
         #[cfg(target_os = "macos")]
-        send_cursor_position(peer, &mut cursor_tracker)?;
+        send_cursor_position(peer, &mut cursor_tracker, last_peer_input)?;
 
         // Drain everything already queued before spending another ~250 ms on a
         // frame. Handling one message per iteration was survivable when an idle
@@ -530,17 +540,21 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
                     #[cfg(target_os = "macos")]
                     {
                         injector.mouse(&me);
-                        // Report the pointer here rather than once per video
-                        // frame. A frame can take half a second, so polling
-                        // alongside it made the peer's cursor jump between
-                        // widely spaced positions instead of tracking.
-                        send_cursor_position(peer, &mut cursor_tracker)?;
+                        last_peer_input = std::time::Instant::now();
+                        // Keeps the tracker current without sending anything
+                        // back: this peer is driving, so its own position is
+                        // suppressed for the next 300 ms.
+                        send_cursor_position(peer, &mut cursor_tracker, last_peer_input)?;
                     }
                     let _ = &me;
                 }
                 Some(message::Union::key_event(ke)) => {
                     #[cfg(target_os = "macos")]
-                    injector.key(&ke);
+                    {
+                        injector.key(&ke);
+                        last_peer_input = std::time::Instant::now();
+                    }
+                    #[cfg(not(target_os = "macos"))]
                     let _ = &ke;
                 }
                 Some(message::Union::test_delay(t)) => {
@@ -574,6 +588,12 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
                         if o.show_remote_cursor.enum_value_or_default() == BoolOption::Yes {
                             send_cursor_data(peer)?;
                             cursor_tracker.reset();
+                            // Report a position promptly even though the option
+                            // arrived alongside the peer's own input.
+                            last_peer_input = std::time::Instant::now()
+                                - std::time::Duration::from_millis(
+                                    crate::cursor::SUPPRESS_AFTER_INPUT_MS + 1,
+                                );
                         }
                     }
                 }

@@ -76,10 +76,21 @@ pub fn arrow() -> Cursor {
     Cursor { width: width as i32, height: height as i32, hotx: 0, hoty: 0, rgba }
 }
 
-/// Tracks the pointer so a position is only sent when it actually moves.
+/// How long after a peer's own input its cursor position stays suppressed.
 ///
-/// Worth the state: the poll runs every ~30 ms, and a client that is shown the
-/// same coordinates thirty times a second is being sent traffic for nothing.
+/// Upstream's value, from `run_pos` in `src/server/input_service.rs`, which
+/// excludes the connection whose input arrived within the last 300 ms.
+pub const SUPPRESS_AFTER_INPUT_MS: u64 = 300;
+
+/// Tracks the pointer so a position is only sent when it actually moves, and
+/// not back at the peer that just moved it.
+///
+/// The suppression is not an optimisation. The client treats an incoming
+/// position as the remote side taking over: `setCursorPosition` sets
+/// `got_mouse_control = false`, after which it *discards* its own mouse events
+/// until one moves more than 12 pixels at once. Echoing positions back at a
+/// peer that is driving therefore stops its mouse working -- it moves for the
+/// moment before the first position arrives, then stops.
 pub struct Tracker {
     last: Option<(i32, i32)>,
 }
@@ -96,14 +107,18 @@ impl Tracker {
         self.last = None;
     }
 
-    /// Returns the position to send, or None if it has not moved.
-    pub fn update(&mut self, x: i32, y: i32) -> Option<(i32, i32)> {
-        if self.last == Some((x, y)) {
-            None
-        } else {
-            self.last = Some((x, y));
-            Some((x, y))
+    /// Returns the position to send, or None to stay quiet.
+    ///
+    /// `since_peer_input_ms` is how long ago this peer last sent input. The
+    /// position is always recorded, as upstream records it, so that once the
+    /// suppression window passes only a genuine new movement is reported.
+    pub fn update(&mut self, x: i32, y: i32, since_peer_input_ms: u64) -> Option<(i32, i32)> {
+        let changed = self.last != Some((x, y));
+        self.last = Some((x, y));
+        if !changed || since_peer_input_ms < SUPPRESS_AFTER_INPUT_MS {
+            return None;
         }
+        Some((x, y))
     }
 }
 
@@ -146,22 +161,46 @@ mod tests {
         assert!(alphas.iter().all(|a| *a == 0 || *a == 255), "no partial alpha is intended");
     }
 
+    /// Long enough ago that nothing is suppressed.
+    const IDLE: u64 = 10_000;
+
     #[test]
     fn a_reset_makes_the_next_position_report_again() {
         let mut t = Tracker::new();
-        assert_eq!(t.update(5, 5), Some((5, 5)));
-        assert_eq!(t.update(5, 5), None);
+        assert_eq!(t.update(5, 5, IDLE), Some((5, 5)));
+        assert_eq!(t.update(5, 5, IDLE), None);
         t.reset();
-        assert_eq!(t.update(5, 5), Some((5, 5)), "after a reset the position is news again");
+        assert_eq!(t.update(5, 5, IDLE), Some((5, 5)), "after a reset the position is news again");
     }
 
     #[test]
     fn a_position_is_only_reported_when_it_changes() {
         let mut t = Tracker::new();
-        assert_eq!(t.update(10, 10), Some((10, 10)), "the first position is always news");
-        assert_eq!(t.update(10, 10), None);
-        assert_eq!(t.update(10, 11), Some((10, 11)));
-        assert_eq!(t.update(10, 11), None);
-        assert_eq!(t.update(0, 0), Some((0, 0)), "the origin is a real position");
+        assert_eq!(t.update(10, 10, IDLE), Some((10, 10)), "the first position is always news");
+        assert_eq!(t.update(10, 10, IDLE), None);
+        assert_eq!(t.update(10, 11, IDLE), Some((10, 11)));
+        assert_eq!(t.update(10, 11, IDLE), None);
+        assert_eq!(t.update(0, 0, IDLE), Some((0, 0)), "the origin is a real position");
+    }
+
+    /// The peer that is driving must not be told where it just put the cursor:
+    /// the client reads that as losing mouse control and starts dropping its
+    /// own movements.
+    #[test]
+    fn a_peer_that_just_sent_input_is_not_told_the_position() {
+        let mut t = Tracker::new();
+        assert_eq!(t.update(100, 100, 0), None, "input this instant");
+        assert_eq!(t.update(120, 120, 299), None, "still inside the window");
+        assert_eq!(t.update(140, 140, 300), Some((140, 140)), "the window has passed");
+    }
+
+    /// Suppressed positions are still recorded, so when the window passes a
+    /// stationary pointer stays quiet rather than emitting a stale position.
+    #[test]
+    fn a_suppressed_position_is_still_remembered() {
+        let mut t = Tracker::new();
+        assert_eq!(t.update(50, 50, 0), None);
+        assert_eq!(t.update(50, 50, IDLE), None, "unchanged since the suppressed update");
+        assert_eq!(t.update(51, 50, IDLE), Some((51, 50)));
     }
 }
