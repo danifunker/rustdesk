@@ -267,6 +267,51 @@ fn probe_display() {
             let agrees =
                 reference.y == out.y && reference.u == out.u && reference.v == out.v;
 
+            // The screenshot PNG, on the frame that was just captured. A
+            // screenshot is a one-off the peer asks for, and it blocks the
+            // session loop while it runs -- no video, no input -- so the deflate
+            // level is a stall-against-bytes dial rather than a size one, and it
+            // is worth measuring on the machine instead of taking zlib's
+            // default. `% raw` is against the RGB the PNG carries, not the ARGB
+            // that came out of VRAM.
+            // The packing shim first, against its Rust reference, the way the
+            // converter above is checked: a channel shuffle that swapped red and
+            // blue would look entirely plausible until someone opened the file.
+            let tpack = std::time::Instant::now();
+            let packed = rustdesk_ppc_agent::png::pack_rgb_rows(f, stride, w, h);
+            let pack_ms = tpack.elapsed().as_millis();
+            let tpackr = std::time::Instant::now();
+            let packed_ref = rustdesk_ppc_agent::png::pack_rgb_rows_rust(f, stride, w, h);
+            let pack_rust_ms = tpackr.elapsed().as_millis();
+            println!(
+                "argb->rgb : {} ms (C shim) vs {} ms (rust reference) -- rows {}",
+                pack_ms,
+                pack_rust_ms,
+                if packed == packed_ref { "identical" } else { "*** DIFFER: the shim is wrong ***" }
+            );
+            drop(packed_ref);
+
+            println!("screenshot: PNG deflate level against stall and size");
+            println!("            {:>6} {:>8} {:>8} {:>8} {:>8}", "level", "pack", "total", "KB", "% raw");
+            let raw_kb = w * h * 3 / 1024;
+            for level in [1, 6, 9] {
+                let t = std::time::Instant::now();
+                let r = rustdesk_ppc_agent::png::encode_argb_tuned(f, stride, w, h, level);
+                let ms = t.elapsed().as_millis();
+                match r {
+                    Ok(p) => println!(
+                        "            {:>6} {:>8} {:>8} {:>8} {:>7.1}%",
+                        level,
+                        pack_ms,
+                        ms,
+                        p.len() / 1024,
+                        100.0 * (p.len() / 1024) as f64 / raw_kb as f64
+                    ),
+                    Err(e) => println!("            {:>6} {:>8} {:>8} failed: {}", level, pack_ms, ms, e),
+                }
+            }
+            drop(packed);
+
             println!("first px : {}", first_px);
             // How the real loop will behave: probe, then read only what moved.
             let t = std::time::Instant::now();

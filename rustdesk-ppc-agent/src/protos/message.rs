@@ -9927,6 +9927,104 @@ impl Message {
         }
     }
 
+    // .hbb.ScreenshotRequest screenshot_request = 29;
+
+    pub fn get_screenshot_request(&self) -> &ScreenshotRequest {
+        match self.union {
+            ::std::option::Option::Some(message::Union::screenshot_request(ref v)) => v,
+            _ => <ScreenshotRequest as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_screenshot_request(&mut self) {
+        self.union = ::std::option::Option::None;
+    }
+
+    pub fn has_screenshot_request(&self) -> bool {
+        match self.union {
+            ::std::option::Option::Some(message::Union::screenshot_request(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_screenshot_request(&mut self, v: ScreenshotRequest) {
+        self.union = ::std::option::Option::Some(message::Union::screenshot_request(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_screenshot_request(&mut self) -> &mut ScreenshotRequest {
+        if let ::std::option::Option::Some(message::Union::screenshot_request(_)) = self.union {
+        } else {
+            self.union = ::std::option::Option::Some(message::Union::screenshot_request(ScreenshotRequest::new()));
+        }
+        match self.union {
+            ::std::option::Option::Some(message::Union::screenshot_request(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_screenshot_request(&mut self) -> ScreenshotRequest {
+        if self.has_screenshot_request() {
+            match self.union.take() {
+                ::std::option::Option::Some(message::Union::screenshot_request(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            ScreenshotRequest::new()
+        }
+    }
+
+    // .hbb.ScreenshotResponse screenshot_response = 30;
+
+    pub fn get_screenshot_response(&self) -> &ScreenshotResponse {
+        match self.union {
+            ::std::option::Option::Some(message::Union::screenshot_response(ref v)) => v,
+            _ => <ScreenshotResponse as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_screenshot_response(&mut self) {
+        self.union = ::std::option::Option::None;
+    }
+
+    pub fn has_screenshot_response(&self) -> bool {
+        match self.union {
+            ::std::option::Option::Some(message::Union::screenshot_response(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_screenshot_response(&mut self, v: ScreenshotResponse) {
+        self.union = ::std::option::Option::Some(message::Union::screenshot_response(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_screenshot_response(&mut self) -> &mut ScreenshotResponse {
+        if let ::std::option::Option::Some(message::Union::screenshot_response(_)) = self.union {
+        } else {
+            self.union = ::std::option::Option::Some(message::Union::screenshot_response(ScreenshotResponse::new()));
+        }
+        match self.union {
+            ::std::option::Option::Some(message::Union::screenshot_response(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_screenshot_response(&mut self) -> ScreenshotResponse {
+        if self.has_screenshot_response() {
+            match self.union.take() {
+                ::std::option::Option::Some(message::Union::screenshot_response(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            ScreenshotResponse::new()
+        }
+    }
+
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
         let mut fields = ::std::vec::Vec::new();
         fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, SignedId>(
@@ -10054,6 +10152,20 @@ impl Message {
             Message::mut_pointer_device_event,
             Message::set_pointer_device_event,
         ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, ScreenshotRequest>(
+            "screenshot_request",
+            Message::has_screenshot_request,
+            Message::get_screenshot_request,
+            Message::mut_screenshot_request,
+            Message::set_screenshot_request,
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, ScreenshotResponse>(
+            "screenshot_response",
+            Message::has_screenshot_response,
+            Message::get_screenshot_response,
+            Message::mut_screenshot_response,
+            Message::set_screenshot_response,
+        ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<Message>(
             "Message",
             42,
@@ -10145,6 +10257,16 @@ impl ::protobuf::Message for Message {
             }
         }
         if let Some(message::Union::pointer_device_event(ref v)) = self.union {
+            if !v.is_initialized() {
+                return false;
+            }
+        }
+        if let Some(message::Union::screenshot_request(ref v)) = self.union {
+            if !v.is_initialized() {
+                return false;
+            }
+        }
+        if let Some(message::Union::screenshot_response(ref v)) = self.union {
             if !v.is_initialized() {
                 return false;
             }
@@ -10264,6 +10386,18 @@ impl ::protobuf::Message for Message {
                     }
                     self.union = ::std::option::Option::Some(message::Union::pointer_device_event(is.read_message()?));
                 },
+                29 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeLengthDelimited {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    self.union = ::std::option::Option::Some(message::Union::screenshot_request(is.read_message()?));
+                },
+                30 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeLengthDelimited {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    self.union = ::std::option::Option::Some(message::Union::screenshot_response(is.read_message()?));
+                },
                 _ => {
                     ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
                 },
@@ -10349,6 +10483,14 @@ impl ::protobuf::Message for Message {
                     let len = v.compute_size();
                     my_size += 2 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
                 },
+                &message::Union::screenshot_request(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 2 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
+                },
+                &message::Union::screenshot_response(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 2 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
+                },
             };
         }
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
@@ -10413,6 +10555,12 @@ impl ::protobuf::Message for Message {
                 &message::Union::pointer_device_event(ref v) => {
                     ::protobuf::rt::write_message_field_with_cached_size(26, v, os)?;
                 },
+                &message::Union::screenshot_request(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(29, v, os)?;
+                },
+                &message::Union::screenshot_response(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(30, v, os)?;
+                },
             };
         }
         os.write_unknown_fields(self.get_unknown_fields())?;
@@ -10469,6 +10617,8 @@ impl ::protobuf::Clear for Message {
         self.union = ::std::option::Option::None;
         self.union = ::std::option::Option::None;
         self.union = ::std::option::Option::None;
+        self.union = ::std::option::Option::None;
+        self.union = ::std::option::Option::None;
         self.unknown_fields.clear();
     }
 }
@@ -10506,6 +10656,8 @@ pub mod message {
         file_response(super::FileResponse),
         misc(super::Misc),
         pointer_device_event(super::PointerDeviceEvent),
+        screenshot_request(super::ScreenshotRequest),
+        screenshot_response(super::ScreenshotResponse),
     }
 
     impl ::protobuf::Oneof for Union {
@@ -11722,6 +11874,316 @@ impl ::protobuf::reflect::ProtobufValue for TouchPanEnd {
     type RuntimeType = ::protobuf::reflect::runtime_types::RuntimeTypeMessage<Self>;
 }
 
+#[derive(PartialEq,Clone,Default)]
+pub struct ScreenshotRequest {
+    // message fields
+    pub display: i32,
+    pub sid: ::std::string::String,
+    // special fields
+    pub unknown_fields: ::protobuf::UnknownFields,
+    pub cached_size: ::protobuf::rt::CachedSize,
+}
+
+impl<'a> ::std::default::Default for &'a ScreenshotRequest {
+    fn default() -> &'a ScreenshotRequest {
+        <ScreenshotRequest as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl ScreenshotRequest {
+    pub fn new() -> ScreenshotRequest {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::new();
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "display",
+            |m: &ScreenshotRequest| { &m.display },
+            |m: &mut ScreenshotRequest| { &mut m.display },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "sid",
+            |m: &ScreenshotRequest| { &m.sid },
+            |m: &mut ScreenshotRequest| { &mut m.sid },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ScreenshotRequest>(
+            "ScreenshotRequest",
+            49,
+            fields,
+        )
+    }
+}
+
+impl ::protobuf::Message for ScreenshotRequest {
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::ProtobufResult<()> {
+        while !is.eof()? {
+            let (field_number, wire_type) = is.read_tag_unpack()?;
+            match field_number {
+                1 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    self.display = is.read_int32()?;
+                },
+                2 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeLengthDelimited {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    self.sid = is.read_string()?;
+                },
+                _ => {
+                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u32 {
+        let mut my_size = 0;
+        if self.display != 0 {
+            my_size += ::protobuf::rt::value_size(1, self.display, ::protobuf::wire_format::WireTypeVarint);
+        }
+        if !self.sid.is_empty() {
+            my_size += ::protobuf::rt::string_size(2, &self.sid);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
+        self.cached_size.set(my_size);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::ProtobufResult<()> {
+        if self.display != 0 {
+            os.write_int32(1, self.display)?;
+        }
+        if !self.sid.is_empty() {
+            os.write_string(2, &self.sid)?;
+        }
+        os.write_unknown_fields(self.get_unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn get_cached_size(&self) -> u32 {
+        self.cached_size.get()
+    }
+
+    fn get_unknown_fields(&self) -> &::protobuf::UnknownFields {
+        &self.unknown_fields
+    }
+
+    fn mut_unknown_fields(&mut self) -> &mut ::protobuf::UnknownFields {
+        &mut self.unknown_fields
+    }
+
+    fn new() -> ScreenshotRequest {
+        ScreenshotRequest::new()
+    }
+
+    fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 49)
+    }
+
+    fn default_instance() -> &'static ScreenshotRequest {
+        static instance: ScreenshotRequest = ScreenshotRequest {
+            display: 0,
+            sid: ::std::string::String::new(),
+            unknown_fields: ::protobuf::UnknownFields::new(),
+            cached_size: ::protobuf::rt::CachedSize::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::Clear for ScreenshotRequest {
+    fn clear(&mut self) {
+        self.display = 0;
+        self.sid.clear();
+        self.unknown_fields.clear();
+    }
+}
+
+impl ::std::fmt::Debug for ScreenshotRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ScreenshotRequest {
+    type RuntimeType = ::protobuf::reflect::runtime_types::RuntimeTypeMessage<Self>;
+}
+
+#[derive(PartialEq,Clone,Default)]
+pub struct ScreenshotResponse {
+    // message fields
+    pub sid: ::std::string::String,
+    pub msg: ::std::string::String,
+    pub data: ::std::vec::Vec<u8>,
+    // special fields
+    pub unknown_fields: ::protobuf::UnknownFields,
+    pub cached_size: ::protobuf::rt::CachedSize,
+}
+
+impl<'a> ::std::default::Default for &'a ScreenshotResponse {
+    fn default() -> &'a ScreenshotResponse {
+        <ScreenshotResponse as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl ScreenshotResponse {
+    pub fn new() -> ScreenshotResponse {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::new();
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "sid",
+            |m: &ScreenshotResponse| { &m.sid },
+            |m: &mut ScreenshotResponse| { &mut m.sid },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "msg",
+            |m: &ScreenshotResponse| { &m.msg },
+            |m: &mut ScreenshotResponse| { &mut m.msg },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "data",
+            |m: &ScreenshotResponse| { &m.data },
+            |m: &mut ScreenshotResponse| { &mut m.data },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ScreenshotResponse>(
+            "ScreenshotResponse",
+            50,
+            fields,
+        )
+    }
+}
+
+impl ::protobuf::Message for ScreenshotResponse {
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::ProtobufResult<()> {
+        while !is.eof()? {
+            let (field_number, wire_type) = is.read_tag_unpack()?;
+            match field_number {
+                1 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeLengthDelimited {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    self.sid = is.read_string()?;
+                },
+                2 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeLengthDelimited {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    self.msg = is.read_string()?;
+                },
+                3 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeLengthDelimited {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    self.data = is.read_bytes()?;
+                },
+                _ => {
+                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u32 {
+        let mut my_size = 0;
+        if !self.sid.is_empty() {
+            my_size += ::protobuf::rt::string_size(1, &self.sid);
+        }
+        if !self.msg.is_empty() {
+            my_size += ::protobuf::rt::string_size(2, &self.msg);
+        }
+        if !self.data.is_empty() {
+            my_size += ::protobuf::rt::bytes_size(3, &self.data);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
+        self.cached_size.set(my_size);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::ProtobufResult<()> {
+        if !self.sid.is_empty() {
+            os.write_string(1, &self.sid)?;
+        }
+        if !self.msg.is_empty() {
+            os.write_string(2, &self.msg)?;
+        }
+        if !self.data.is_empty() {
+            os.write_bytes(3, &self.data)?;
+        }
+        os.write_unknown_fields(self.get_unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn get_cached_size(&self) -> u32 {
+        self.cached_size.get()
+    }
+
+    fn get_unknown_fields(&self) -> &::protobuf::UnknownFields {
+        &self.unknown_fields
+    }
+
+    fn mut_unknown_fields(&mut self) -> &mut ::protobuf::UnknownFields {
+        &mut self.unknown_fields
+    }
+
+    fn new() -> ScreenshotResponse {
+        ScreenshotResponse::new()
+    }
+
+    fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 50)
+    }
+
+    fn default_instance() -> &'static ScreenshotResponse {
+        static instance: ScreenshotResponse = ScreenshotResponse {
+            sid: ::std::string::String::new(),
+            msg: ::std::string::String::new(),
+            data: ::std::vec::Vec::new(),
+            unknown_fields: ::protobuf::UnknownFields::new(),
+            cached_size: ::protobuf::rt::CachedSize::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::Clear for ScreenshotResponse {
+    fn clear(&mut self) {
+        self.sid.clear();
+        self.msg.clear();
+        self.data.clear();
+        self.unknown_fields.clear();
+    }
+}
+
+impl ::std::fmt::Debug for ScreenshotResponse {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ScreenshotResponse {
+    type RuntimeType = ::protobuf::reflect::runtime_types::RuntimeTypeMessage<Self>;
+}
+
 #[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
 pub enum ControlKey {
     Alt = 1,
@@ -12405,7 +12867,7 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     lose_reason\x18\t\x20\x01(\tH\0R\x0bcloseReasonB\0\x12'\n\rrefresh_video\
     \x18\n\x20\x01(\x08H\0R\x0crefreshVideoB\0\x126\n\x15refresh_video_displ\
     ay\x18\x1f\x20\x01(\x05H\0R\x13refreshVideoDisplayB\0B\t\n\x05union\x12\
-    \0:\0\"\xcb\x07\n\x07Message\x12.\n\tsigned_id\x18\x03\x20\x01(\x0b2\r.h\
+    \0:\0\"\xe4\x08\n\x07Message\x12.\n\tsigned_id\x18\x03\x20\x01(\x0b2\r.h\
     bb.SignedIdH\0R\x08signedIdB\0\x121\n\npublic_key\x18\x04\x20\x01(\x0b2\
     \x0e.hbb.PublicKeyH\0R\tpublicKeyB\0\x121\n\ntest_delay\x18\x05\x20\x01(\
     \x0b2\x0e.hbb.TestDelayH\0R\ttestDelayB\0\x124\n\x0bvideo_frame\x18\x06\
@@ -12425,7 +12887,10 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \rfile_response\x18\x12\x20\x01(\x0b2\x11.hbb.FileResponseH\0R\x0cfileRe\
     sponseB\0\x12!\n\x04misc\x18\x13\x20\x01(\x0b2\t.hbb.MiscH\0R\x04miscB\0\
     \x12M\n\x14pointer_device_event\x18\x1a\x20\x01(\x0b2\x17.hbb.PointerDev\
-    iceEventH\0R\x12pointerDeviceEventB\0B\t\n\x05union\x12\0:\0\"\x88\x01\n\
+    iceEventH\0R\x12pointerDeviceEventB\0\x12I\n\x12screenshot_request\x18\
+    \x1d\x20\x01(\x0b2\x16.hbb.ScreenshotRequestH\0R\x11screenshotRequestB\0\
+    \x12L\n\x13screenshot_response\x18\x1e\x20\x01(\x0b2\x17.hbb.ScreenshotR\
+    esponseH\0R\x12screenshotResponseB\0B\t\n\x05union\x12\0:\0\"\x88\x01\n\
     \x12PointerDeviceEvent\x124\n\x0btouch_event\x18\x01\x20\x01(\x0b2\x0f.h\
     bb.TouchEventH\0R\ntouchEventB\0\x12/\n\tmodifiers\x18\x02\x20\x03(\x0e2\
     \x0f.hbb.ControlKeyR\tmodifiersB\0B\t\n\x05union\x12\0:\0\"\xf3\x01\n\nT\
@@ -12440,51 +12905,55 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     uchPanUpdate\x12\x0e\n\x01x\x18\x01\x20\x01(\x05R\x01xB\0\x12\x0e\n\x01y\
     \x18\x02\x20\x01(\x05R\x01yB\0:\0\"/\n\x0bTouchPanEnd\x12\x0e\n\x01x\x18\
     \x01\x20\x01(\x05R\x01xB\0\x12\x0e\n\x01y\x18\x02\x20\x01(\x05R\x01yB\0:\
-    \0*\xaa\x08\n\nControlKey\x12\t\n\x03Alt\x10\x01\x1a\0\x12\x0f\n\tBacksp\
-    ace\x10\x02\x1a\0\x12\x0e\n\x08CapsLock\x10\x03\x1a\0\x12\r\n\x07Control\
-    \x10\x04\x1a\0\x12\x0c\n\x06Delete\x10\x05\x1a\0\x12\x0f\n\tDownArrow\
-    \x10\x06\x1a\0\x12\t\n\x03End\x10\x07\x1a\0\x12\x0c\n\x06Escape\x10\x08\
-    \x1a\0\x12\x08\n\x02F1\x10\t\x1a\0\x12\t\n\x03F10\x10\n\x1a\0\x12\t\n\
-    \x03F11\x10\x0b\x1a\0\x12\t\n\x03F12\x10\x0c\x1a\0\x12\x08\n\x02F2\x10\r\
-    \x1a\0\x12\x08\n\x02F3\x10\x0e\x1a\0\x12\x08\n\x02F4\x10\x0f\x1a\0\x12\
-    \x08\n\x02F5\x10\x10\x1a\0\x12\x08\n\x02F6\x10\x11\x1a\0\x12\x08\n\x02F7\
-    \x10\x12\x1a\0\x12\x08\n\x02F8\x10\x13\x1a\0\x12\x08\n\x02F9\x10\x14\x1a\
-    \0\x12\n\n\x04Home\x10\x15\x1a\0\x12\x0f\n\tLeftArrow\x10\x16\x1a\0\x12\
-    \n\n\x04Meta\x10\x17\x1a\0\x12\x0c\n\x06Option\x10\x18\x1a\0\x12\x0e\n\
-    \x08PageDown\x10\x19\x1a\0\x12\x0c\n\x06PageUp\x10\x1a\x1a\0\x12\x0c\n\
-    \x06Return\x10\x1b\x1a\0\x12\x10\n\nRightArrow\x10\x1c\x1a\0\x12\x0b\n\
-    \x05Shift\x10\x1d\x1a\0\x12\x0b\n\x05Space\x10\x1e\x1a\0\x12\t\n\x03Tab\
-    \x10\x1f\x1a\0\x12\r\n\x07UpArrow\x10\x20\x1a\0\x12\r\n\x07Numpad0\x10!\
-    \x1a\0\x12\r\n\x07Numpad1\x10\"\x1a\0\x12\r\n\x07Numpad2\x10#\x1a\0\x12\
-    \r\n\x07Numpad3\x10$\x1a\0\x12\r\n\x07Numpad4\x10%\x1a\0\x12\r\n\x07Nump\
-    ad5\x10&\x1a\0\x12\r\n\x07Numpad6\x10'\x1a\0\x12\r\n\x07Numpad7\x10(\x1a\
-    \0\x12\r\n\x07Numpad8\x10)\x1a\0\x12\r\n\x07Numpad9\x10*\x1a\0\x12\x0c\n\
-    \x06Cancel\x10+\x1a\0\x12\x0b\n\x05Clear\x10,\x1a\0\x12\n\n\x04Menu\x10-\
-    \x1a\0\x12\x0b\n\x05Pause\x10.\x1a\0\x12\n\n\x04Kana\x10/\x1a\0\x12\x0c\
-    \n\x06Hangul\x100\x1a\0\x12\x0b\n\x05Junja\x101\x1a\0\x12\x0b\n\x05Final\
-    \x102\x1a\0\x12\x0b\n\x05Hanja\x103\x1a\0\x12\x0b\n\x05Kanji\x104\x1a\0\
-    \x12\r\n\x07Convert\x105\x1a\0\x12\x0c\n\x06Select\x106\x1a\0\x12\x0b\n\
-    \x05Print\x107\x1a\0\x12\r\n\x07Execute\x108\x1a\0\x12\x0e\n\x08Snapshot\
-    \x109\x1a\0\x12\x0c\n\x06Insert\x10:\x1a\0\x12\n\n\x04Help\x10;\x1a\0\
-    \x12\x0b\n\x05Sleep\x10<\x1a\0\x12\x0f\n\tSeparator\x10=\x1a\0\x12\x0c\n\
-    \x06Scroll\x10>\x1a\0\x12\r\n\x07NumLock\x10?\x1a\0\x12\n\n\x04RWin\x10@\
-    \x1a\0\x12\n\n\x04Apps\x10A\x1a\0\x12\x0e\n\x08Multiply\x10B\x1a\0\x12\t\
-    \n\x03Add\x10C\x1a\0\x12\x0e\n\x08Subtract\x10D\x1a\0\x12\r\n\x07Decimal\
-    \x10E\x1a\0\x12\x0c\n\x06Divide\x10F\x1a\0\x12\x0c\n\x06Equals\x10G\x1a\
-    \0\x12\x11\n\x0bNumpadEnter\x10H\x1a\0\x12\x0c\n\x06RShift\x10I\x1a\0\
-    \x12\x0e\n\x08RControl\x10J\x1a\0\x12\n\n\x04RAlt\x10K\x1a\0\x12\x10\n\n\
-    CtrlAltDel\x10d\x1a\0\x12\x10\n\nLockScreen\x10e\x1a\0\x1a\0*F\n\x0cKeyb\
-    oardMode\x12\x0c\n\x06Legacy\x10\0\x1a\0\x12\t\n\x03Map\x10\x01\x1a\0\
-    \x12\x0f\n\tTranslate\x10\x02\x1a\0\x12\n\n\x04Auto\x10\x03\x1a\0\x1a\0*\
-    R\n\x08FileType\x12\t\n\x03Dir\x10\x01\x1a\0\x12\r\n\x07DirLink\x10\x02\
-    \x1a\0\x12\x0e\n\x08DirDrive\x10\x03\x1a\0\x12\n\n\x04File\x10\x04\x1a\0\
-    \x12\x0e\n\x08FileLink\x10\x05\x1a\0\x1a\0*<\n\nPermission\x12\x0e\n\x08\
-    Keyboard\x10\x01\x1a\0\x12\x0f\n\tClipboard\x10\x02\x1a\0\x12\x0b\n\x05A\
-    udio\x10\x03\x1a\0\x1a\0*E\n\x0cImageQuality\x12\x0c\n\x06NotSet\x10\0\
-    \x1a\0\x12\t\n\x03Low\x10\x02\x1a\0\x12\x0e\n\x08Balanced\x10\x03\x1a\0\
-    \x12\n\n\x04Best\x10\x04\x1a\0\x1a\0*1\n\nBoolOption\x12\x0c\n\x06NotSet\
-    \x10\0\x1a\0\x12\x08\n\x02No\x10\x01\x1a\0\x12\t\n\x03Yes\x10\x02\x1a\0\
-    \x1a\0B\0b\x06proto3\
+    \0\"E\n\x11ScreenshotRequest\x12\x1a\n\x07display\x18\x01\x20\x01(\x05R\
+    \x07displayB\0\x12\x12\n\x03sid\x18\x02\x20\x01(\tR\x03sidB\0:\0\"T\n\
+    \x12ScreenshotResponse\x12\x12\n\x03sid\x18\x01\x20\x01(\tR\x03sidB\0\
+    \x12\x12\n\x03msg\x18\x02\x20\x01(\tR\x03msgB\0\x12\x14\n\x04data\x18\
+    \x03\x20\x01(\x0cR\x04dataB\0:\0*\xaa\x08\n\nControlKey\x12\t\n\x03Alt\
+    \x10\x01\x1a\0\x12\x0f\n\tBackspace\x10\x02\x1a\0\x12\x0e\n\x08CapsLock\
+    \x10\x03\x1a\0\x12\r\n\x07Control\x10\x04\x1a\0\x12\x0c\n\x06Delete\x10\
+    \x05\x1a\0\x12\x0f\n\tDownArrow\x10\x06\x1a\0\x12\t\n\x03End\x10\x07\x1a\
+    \0\x12\x0c\n\x06Escape\x10\x08\x1a\0\x12\x08\n\x02F1\x10\t\x1a\0\x12\t\n\
+    \x03F10\x10\n\x1a\0\x12\t\n\x03F11\x10\x0b\x1a\0\x12\t\n\x03F12\x10\x0c\
+    \x1a\0\x12\x08\n\x02F2\x10\r\x1a\0\x12\x08\n\x02F3\x10\x0e\x1a\0\x12\x08\
+    \n\x02F4\x10\x0f\x1a\0\x12\x08\n\x02F5\x10\x10\x1a\0\x12\x08\n\x02F6\x10\
+    \x11\x1a\0\x12\x08\n\x02F7\x10\x12\x1a\0\x12\x08\n\x02F8\x10\x13\x1a\0\
+    \x12\x08\n\x02F9\x10\x14\x1a\0\x12\n\n\x04Home\x10\x15\x1a\0\x12\x0f\n\t\
+    LeftArrow\x10\x16\x1a\0\x12\n\n\x04Meta\x10\x17\x1a\0\x12\x0c\n\x06Optio\
+    n\x10\x18\x1a\0\x12\x0e\n\x08PageDown\x10\x19\x1a\0\x12\x0c\n\x06PageUp\
+    \x10\x1a\x1a\0\x12\x0c\n\x06Return\x10\x1b\x1a\0\x12\x10\n\nRightArrow\
+    \x10\x1c\x1a\0\x12\x0b\n\x05Shift\x10\x1d\x1a\0\x12\x0b\n\x05Space\x10\
+    \x1e\x1a\0\x12\t\n\x03Tab\x10\x1f\x1a\0\x12\r\n\x07UpArrow\x10\x20\x1a\0\
+    \x12\r\n\x07Numpad0\x10!\x1a\0\x12\r\n\x07Numpad1\x10\"\x1a\0\x12\r\n\
+    \x07Numpad2\x10#\x1a\0\x12\r\n\x07Numpad3\x10$\x1a\0\x12\r\n\x07Numpad4\
+    \x10%\x1a\0\x12\r\n\x07Numpad5\x10&\x1a\0\x12\r\n\x07Numpad6\x10'\x1a\0\
+    \x12\r\n\x07Numpad7\x10(\x1a\0\x12\r\n\x07Numpad8\x10)\x1a\0\x12\r\n\x07\
+    Numpad9\x10*\x1a\0\x12\x0c\n\x06Cancel\x10+\x1a\0\x12\x0b\n\x05Clear\x10\
+    ,\x1a\0\x12\n\n\x04Menu\x10-\x1a\0\x12\x0b\n\x05Pause\x10.\x1a\0\x12\n\n\
+    \x04Kana\x10/\x1a\0\x12\x0c\n\x06Hangul\x100\x1a\0\x12\x0b\n\x05Junja\
+    \x101\x1a\0\x12\x0b\n\x05Final\x102\x1a\0\x12\x0b\n\x05Hanja\x103\x1a\0\
+    \x12\x0b\n\x05Kanji\x104\x1a\0\x12\r\n\x07Convert\x105\x1a\0\x12\x0c\n\
+    \x06Select\x106\x1a\0\x12\x0b\n\x05Print\x107\x1a\0\x12\r\n\x07Execute\
+    \x108\x1a\0\x12\x0e\n\x08Snapshot\x109\x1a\0\x12\x0c\n\x06Insert\x10:\
+    \x1a\0\x12\n\n\x04Help\x10;\x1a\0\x12\x0b\n\x05Sleep\x10<\x1a\0\x12\x0f\
+    \n\tSeparator\x10=\x1a\0\x12\x0c\n\x06Scroll\x10>\x1a\0\x12\r\n\x07NumLo\
+    ck\x10?\x1a\0\x12\n\n\x04RWin\x10@\x1a\0\x12\n\n\x04Apps\x10A\x1a\0\x12\
+    \x0e\n\x08Multiply\x10B\x1a\0\x12\t\n\x03Add\x10C\x1a\0\x12\x0e\n\x08Sub\
+    tract\x10D\x1a\0\x12\r\n\x07Decimal\x10E\x1a\0\x12\x0c\n\x06Divide\x10F\
+    \x1a\0\x12\x0c\n\x06Equals\x10G\x1a\0\x12\x11\n\x0bNumpadEnter\x10H\x1a\
+    \0\x12\x0c\n\x06RShift\x10I\x1a\0\x12\x0e\n\x08RControl\x10J\x1a\0\x12\n\
+    \n\x04RAlt\x10K\x1a\0\x12\x10\n\nCtrlAltDel\x10d\x1a\0\x12\x10\n\nLockSc\
+    reen\x10e\x1a\0\x1a\0*F\n\x0cKeyboardMode\x12\x0c\n\x06Legacy\x10\0\x1a\
+    \0\x12\t\n\x03Map\x10\x01\x1a\0\x12\x0f\n\tTranslate\x10\x02\x1a\0\x12\n\
+    \n\x04Auto\x10\x03\x1a\0\x1a\0*R\n\x08FileType\x12\t\n\x03Dir\x10\x01\
+    \x1a\0\x12\r\n\x07DirLink\x10\x02\x1a\0\x12\x0e\n\x08DirDrive\x10\x03\
+    \x1a\0\x12\n\n\x04File\x10\x04\x1a\0\x12\x0e\n\x08FileLink\x10\x05\x1a\0\
+    \x1a\0*<\n\nPermission\x12\x0e\n\x08Keyboard\x10\x01\x1a\0\x12\x0f\n\tCl\
+    ipboard\x10\x02\x1a\0\x12\x0b\n\x05Audio\x10\x03\x1a\0\x1a\0*E\n\x0cImag\
+    eQuality\x12\x0c\n\x06NotSet\x10\0\x1a\0\x12\t\n\x03Low\x10\x02\x1a\0\
+    \x12\x0e\n\x08Balanced\x10\x03\x1a\0\x12\n\n\x04Best\x10\x04\x1a\0\x1a\0\
+    *1\n\nBoolOption\x12\x0c\n\x06NotSet\x10\0\x1a\0\x12\x08\n\x02No\x10\x01\
+    \x1a\0\x12\t\n\x03Yes\x10\x02\x1a\0\x1a\0B\0b\x06proto3\
 ";
 
 /// `FileDescriptorProto` object which was a source for this generated file
@@ -12550,6 +13019,8 @@ pub fn file_descriptor() -> ::protobuf::reflect::FileDescriptor {
         messages.push(TouchPanStart::generated_message_descriptor_data());
         messages.push(TouchPanUpdate::generated_message_descriptor_data());
         messages.push(TouchPanEnd::generated_message_descriptor_data());
+        messages.push(ScreenshotRequest::generated_message_descriptor_data());
+        messages.push(ScreenshotResponse::generated_message_descriptor_data());
         let mut enums = ::std::vec::Vec::new();
         enums.push(ControlKey::generated_enum_descriptor_data());
         enums.push(KeyboardMode::generated_enum_descriptor_data());
