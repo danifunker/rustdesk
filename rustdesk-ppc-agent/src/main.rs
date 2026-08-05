@@ -208,6 +208,7 @@ fn main() {
             id: ident.id.clone(),
             hostname: ident.hostname.clone(),
             username: std::env::var("USER").unwrap_or_else(|_| "admin".to_owned()),
+            port,
         };
         std::thread::spawn(move || rustdesk_ppc_agent::lan::serve(me));
     }
