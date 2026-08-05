@@ -62,17 +62,36 @@ fn clamp_u8(v: i32) -> u8 {
 /// `src` is the raw framebuffer, `stride` its bytes-per-row (which may exceed
 /// `width * 4`; on the measured G5 it does not, but a different mode could).
 pub fn argb_to_i420(src: &[u8], stride: usize, dst: &mut I420) {
+    let h = dst.height;
+    argb_to_i420_rows(src, stride, dst, 0, h);
+}
+
+/// Convert only rows `y0..y1`, leaving the rest of `dst` alone.
+///
+/// The point is latency, not throughput. Converting the whole frame costs
+/// ~172 ms on the G5 whether one band changed or all sixteen, and nothing reads
+/// input while it runs -- so hovering over the Dock, whose magnification
+/// animates a single band, used to cost a full conversion per frame and stall
+/// the mouse. Bounds are snapped outward to even rows because 4:2:0 chroma is
+/// shared by each 2x2 block, so a band boundary cannot fall inside one.
+pub fn argb_to_i420_rows(src: &[u8], stride: usize, dst: &mut I420, y0: usize, y1: usize) {
     let (w, h) = (dst.width, dst.height);
     let cs = dst.chroma_stride();
     debug_assert!(stride >= w * 4);
-    debug_assert!(src.len() >= stride * h);
+
+    let y0 = y0 & !1;
+    let y1 = ((y1 + 1) & !1).min(h);
+    if y0 >= y1 {
+        return;
+    }
+    debug_assert!(src.len() >= stride * y1);
 
     // One pass over 2x2 blocks: each source pixel is read once and contributes
     // to both its own luma and the block's chroma average. Measured on the G5
     // this is no faster than two passes (193 vs 196 ms) -- reads from the RAM
     // shadow are cheap, and the cost is arithmetic plus bounds checks -- but it
     // is the simpler shape, so it stays.
-    for by in 0..h / 2 {
+    for by in (y0 / 2)..(y1 / 2) {
         let (r0, r1) = (by * 2 * stride, (by * 2 + 1) * stride);
         for bx in 0..w / 2 {
             let x = bx * 2 * 4;
@@ -204,5 +223,79 @@ mod tests {
         assert!((d.u[0] as i32 - 128).abs() <= 2, "u={}", d.u[0]);
         assert!((d.v[0] as i32 - 128).abs() <= 2, "v={}", d.v[0]);
         assert!(d.y[0] > 200 && d.y[3] < 20, "luma not per-pixel: {:?}", d.y);
+    }
+}
+
+#[cfg(test)]
+mod band_tests {
+    use super::*;
+
+    fn frame(w: usize, h: usize, seed: u8) -> Vec<u8> {
+        let mut v = vec![0u8; w * h * 4];
+        for (i, p) in v.chunks_mut(4).enumerate() {
+            p[0] = 0xff;
+            p[1] = (i as u8).wrapping_mul(3).wrapping_add(seed);
+            p[2] = (i as u8).wrapping_mul(5).wrapping_add(seed);
+            p[3] = (i as u8).wrapping_mul(7).wrapping_add(seed);
+        }
+        v
+    }
+
+    /// Converting in bands must produce exactly what one whole-frame pass does,
+    /// or a partially updated frame would drift from the real screen.
+    #[test]
+    fn band_by_band_equals_a_single_full_conversion() {
+        let (w, h) = (64usize, 32usize);
+        let src = frame(w, h, 11);
+        let mut whole = I420::new(w, h);
+        argb_to_i420(&src, w * 4, &mut whole);
+
+        let mut banded = I420::new(w, h);
+        for b in 0..8 {
+            let (y0, y1) = (b * 4, (b + 1) * 4);
+            argb_to_i420_rows(&src, w * 4, &mut banded, y0, y1);
+        }
+        assert_eq!(banded.y, whole.y, "luma differs");
+        assert_eq!(banded.u, whole.u, "chroma u differs");
+        assert_eq!(banded.v, whole.v, "chroma v differs");
+    }
+
+    /// Rows outside the range must not be touched: the rest of the plane still
+    /// holds the previous frame, which is the whole point of reading bands.
+    #[test]
+    fn rows_outside_the_range_are_left_alone() {
+        let (w, h) = (16usize, 16usize);
+        let mut img = I420::new(w, h);
+        for b in img.y.iter_mut() {
+            *b = 0xAB;
+        }
+        let src = frame(w, h, 3);
+        argb_to_i420_rows(&src, w * 4, &mut img, 4, 8);
+        assert!(img.y[0..4 * w].iter().all(|b| *b == 0xAB), "rows above were overwritten");
+        assert!(img.y[8 * w..].iter().all(|b| *b == 0xAB), "rows below were overwritten");
+        assert!(img.y[4 * w..8 * w].iter().any(|b| *b != 0xAB), "the range was not converted");
+    }
+
+    /// An odd range must still land on whole 2x2 blocks.
+    #[test]
+    fn an_odd_range_is_snapped_to_even_rows() {
+        let (w, h) = (16usize, 16usize);
+        let src = frame(w, h, 5);
+        let mut a = I420::new(w, h);
+        let mut b = I420::new(w, h);
+        argb_to_i420_rows(&src, w * 4, &mut a, 3, 7);
+        argb_to_i420_rows(&src, w * 4, &mut b, 2, 8);
+        assert_eq!(a.y, b.y);
+        assert_eq!(a.u, b.u);
+    }
+
+    #[test]
+    fn an_empty_or_inverted_range_does_nothing() {
+        let (w, h) = (8usize, 8usize);
+        let src = frame(w, h, 1);
+        let mut img = I420::new(w, h);
+        argb_to_i420_rows(&src, w * 4, &mut img, 4, 4);
+        argb_to_i420_rows(&src, w * 4, &mut img, 6, 2);
+        assert!(img.y.iter().all(|b| *b == 0), "nothing should have been written");
     }
 }

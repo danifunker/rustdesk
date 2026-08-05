@@ -285,6 +285,42 @@ impl Capturer {
         dirty
     }
 
+    /// The rows a band covers, clamped to the screen.
+    pub fn band_range(&self, b: usize) -> (usize, usize) {
+        let rows_per = self.band_rows();
+        let start = (b * rows_per).min(self.height);
+        let end = ((b + 1) * rows_per).min(self.height);
+        (start, end)
+    }
+
+    /// Copy one band out of VRAM into the shadow, returning the rows it covers.
+    ///
+    /// Reading a band at a time rather than all of them at once is what lets the
+    /// caller service input in between: a full-screen read is ~347 ms during
+    /// which nothing else happens, while one band is ~22 ms.
+    pub fn read_band(&mut self, b: usize) -> (usize, usize) {
+        let n = self.bytes_per_row * self.height;
+        if self.buf.len() != n {
+            self.buf.resize(n, 0);
+        }
+        let (start, end) = self.band_range(b);
+        if start >= end {
+            return (start, end);
+        }
+        let off = start * self.bytes_per_row;
+        let len = (end - start) * self.bytes_per_row;
+        let base = current_base(self.display, self.base);
+        unsafe {
+            std::ptr::copy_nonoverlapping(base.add(off), self.buf.as_mut_ptr().add(off), len);
+        }
+        (start, end)
+    }
+
+    /// The RAM shadow, as last read.
+    pub fn buffer(&self) -> &[u8] {
+        &self.buf
+    }
+
     /// Copy only the given bands out of VRAM into the shadow. Cost is
     /// proportional to the number of bands read.
     pub fn read_bands(&mut self, dirty: &[bool; BANDS]) -> &[u8] {
