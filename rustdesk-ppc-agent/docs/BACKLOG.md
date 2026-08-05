@@ -175,6 +175,37 @@ machine over the network, which this agent cannot support in any case -- waking
 it means it was off, and an agent that is off did not answer the broadcast.
 Discovery itself does not read the field.
 
+## 11. What the modern protocol survey turned up
+
+Compared current `hbb_common` against the 1.1.8 proto this agent implements,
+looking for things a modern client sends that we drop, or expects that we never
+say. Recorded so the survey is not repeated.
+
+**The version we report is load-bearing.** A modern client changes what it
+sends based on it, and two gates in `src/common.rs` read it: at 1.2.4 the
+refresh button switches to `Misc::refresh_video_display` (field 31, which we do
+not know), and at 1.4.5 the client may switch to *relative* mouse mode and send
+deltas instead of absolute coordinates, which `decide_mouse` cannot handle. It
+used to come from `CARGO_PKG_VERSION`; it is now pinned in `session.rs` with a
+test, because bumping a crate version is an ordinary thing to do and would have
+broken the mouse silently.
+
+Checked and needing nothing:
+
+* **`video_ack_required`** (LoginRequest field 9) -- the client never sets it,
+  so there is no ack-based flow control to honour.
+* **`Misc::refresh_video_display`** -- only sent to peers claiming 1.2.4+, so
+  unreachable while we report 0.1.0. Handling it would be dead code.
+* **`VideoFrame.display`** and **`SwitchDisplay.cursor_embedded`** -- both
+  default to what is already true here (display 0, cursor not drawn into the
+  frame, since it is a hardware overlay).
+* **`PeerInfo.features` / `encoding` / `resolutions`** -- unset, and the client
+  copes: it decodes our VP8 without being told we can produce it.
+
+Worth knowing: **no `Misc` message has ever arrived** in any logged session, so
+the peer-options logging and the refresh handling have never actually fired.
+They are plumbed, not proven.
+
 ## 3. Audio
 
 A phase-1 goal that is not started. `libopus.a` is already built and on the G5;
