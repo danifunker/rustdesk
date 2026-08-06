@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Run one probe inside the logged-in GUI ("Aqua") session, from an ssh shell.
+
+  This is the only way to test anything session-dependent on the G5 without
+  sitting at it, and there are more such things than you would expect: the
+  pasteboard is unreachable over ssh and from a detached `screen`
+  (PasteboardCreate -> -4960), while CGDisplayBaseAddress works fine in both --
+  so "capture works, therefore this will" is exactly the wrong inference, and
+  the only way to find out is to run the code where the agent runs.
+
+  It is what established that the clipboard works at all: probes/clipwatch.c
+  started this way reported `PasteboardCreate = 0` and then watched a real
+  pasteboard for eight minutes while markers were pushed through the agent.
+
+  Usage, from the host. Point ProgramArguments at the probe, then:
+
+      scp rustdesk-ppc-agent/deploy/probe-in-aqua.plist \
+          ppctiger:~/Library/LaunchAgents/com.rustdesk.probe-aqua.plist
+      ssh ppctiger 'launchctl unload -S Aqua ~/Library/LaunchAgents/com.rustdesk.probe-aqua.plist
+                    rm -f ~/probe-aqua.log
+                    launchctl load -S Aqua ~/Library/LaunchAgents/com.rustdesk.probe-aqua.plist'
+      ssh ppctiger 'tail -f ~/probe-aqua.log'
+
+  **`-S Aqua` is the whole trick and is missing from Leopard's `launchctl load`
+  usage text.** Without it, launchctl filters by the *caller's* session type,
+  matches nothing against LimitLoadToSessionType Aqua, and says "nothing found
+  to load". `unload` needs it too, or the job keeps running.
+
+  No KeepAlive: a probe should run once and stop. Unload it when finished --
+  a stale entry here is a job launchd will try to start at every login.
+
+  Build the probe with **-fno-gcse**, like everything else this project compiles
+  for the G5. clipwatch was first built at plain -O2 and died on its first loop
+  iteration; see docs/BACKLOG.md item 1e.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.rustdesk.probe-aqua</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/admin/ppc-probes/clipwatch</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- The point of the file. -->
+    <key>LimitLoadToSessionType</key>
+    <string>Aqua</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/admin/probe-aqua.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/admin/probe-aqua.log</string>
+</dict>
+</plist>
