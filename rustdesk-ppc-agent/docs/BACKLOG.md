@@ -152,26 +152,54 @@ window-server connection being torn down was the better theory.
 one `sleep`, no timer, no polling. **Clean at 2, 5, 11, 20 and 40 minutes**,
 both with and without a mapping held from startup. 90, 180 and 420 running.
 
+### The reported conditions do not reproduce, 2026-08-05 night
+
+Tested against the real agent, with a real peer, in both launch configurations.
+Every round: restart the agent for a clean t=0, touch nothing for N minutes --
+no ssh, no probe, no connection -- then connect exactly once.
+
+| scenario | rounds | result |
+|---|---|---|
+| cold start → 11 min → first peer, **launchd** | 2 | clean, 16 frames each |
+| cold start → 11 min → first peer, **screen** | 3 | clean, 16 frames each |
+| `fb-idle`, pure idle in a C process | 6 waits: 2, 5, 11, 20, 40, 90 min | clean, with and without a held mapping |
+
+**So the account in this item is not sufficient to produce the failure.** It was
+written from a single occurrence, and something that was true then is not
+recorded here. Do not re-run the table above; it is done.
+
+The first version of the soak could not have found anything either, and the
+reason is worth keeping: it connected every ten minutes *from t=0*, so the agent
+was never idle from a cold start -- the connection at t=0 exercised
+CoreGraphics and each one after kept the connection warm. Three healthy cycles
+in a column is what made it visible. The same shape as `fb-vigil` keeping awake
+the display it was asking about.
+
 ### What is running now
 
-`probes/soak-video.sh` on the host, connecting a real peer every ten minutes for
-seven hours and recording what arrives, plus a freshly exec'd check on the G5 at
-the same moment -- the comparison the original report turns on. It dumps the
-agent log, a fresh process's view, HID idle and the process list the moment a
-session starts blind. The detector is the agent's own "video unavailable" line
-rather than `frames=0`, because the retry above would otherwise hide a
-transient failure behind a recovered session.
+`probes/soak-video.sh`, on the host. `SOAK_LAUNCH` picks launchd or `screen`;
+`SOAK_WARM=1` serves one session before the idle. It dumps the agent log, a
+freshly exec'd process's view, HID idle and the process list the moment a
+session starts blind, and the detector is the agent's own "video unavailable"
+line rather than `frames=0` -- the retry above would otherwise hide a transient
+failure behind a session that recovered.
 
-### A confound to resolve before trusting a negative result
+**Warm rounds are the variable now under test**, at 11, 11, 20, 30, 45, 60, 90
+and 150 minutes. Every round in the table above was a *virgin* agent that had
+never built a `Capturer`, so none of them could catch a fault that needs one to
+have been created and dropped first -- and the report never says no peer had
+connected before, only that every peer *after* the failure got no picture.
 
-**The original failure was almost certainly a `screen`-started agent; tonight's
-soak is running against a launchd-started one.** Item 1d was written before the
-LaunchAgent was in use, so the incident happened to an agent launched by
-`build-ppc.sh deploy` under a detached `screen` whose ssh had since closed. That
-is a different session lifecycle from the Aqua session the agent now runs in,
-and it is exactly the kind of difference this project keeps being caught by --
-see item 9, and the clipboard's -4960. If the soak comes back clean, that is the
-next variable to change, not a reason to close this.
+### Variables still untried, if the warm rounds are clean too
+
+* **A machine that has been up for days.** The G5 has been up a day and a half
+  through all of this; the original incident's uptime is unknown.
+* **Something else holding the display.** A screensaver, or another VNC-ish
+  server. `CGDisplayCapture` by any process is the documented way to make
+  `CGDisplayBaseAddress` useless to everyone else, and item 1 already records
+  this agent doing that to itself.
+* **Many more trials.** Five samples cannot distinguish "does not happen" from
+  "happens one time in fifty".
 
 Worth knowing that this is invisible to `--probe-display`, which is a fresh
 process every time and so always gets a good mapping. Also that
