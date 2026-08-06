@@ -102,6 +102,22 @@ const IDLE_PROBE_INTERVAL: std::time::Duration = std::time::Duration::from_milli
 /// Longest a peer goes without an exact frame. See the settle repaint.
 const KEYFRAME_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// How long to wait before trying to build the video pipeline again, when a
+/// session has no picture.
+///
+/// Backlog item 1d: `Capturer::new` returned NULL from a long-lived process
+/// while a freshly exec'd one read the framebuffer fine at the same moment, and
+/// because the failure was permanent for the session, every peer afterwards got
+/// a working mouse and no picture until someone restarted the agent.
+///
+/// Five seconds is chosen against the cost of being wrong in each direction: a
+/// failed `Capturer::new` is a handful of CoreGraphics calls, so retrying costs
+/// nothing worth counting, and a peer that reconnects into a working agent
+/// would rather wait five seconds than sit blind. It also bounds how long the
+/// symptom lasts if the cause turns out to be transient, which is the part
+/// nobody yet knows.
+const VIDEO_RETRY: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// How often to ask the pasteboard whether anyone has copied anything.
 ///
 /// A poll rather than a notification because the Pasteboard Manager has no
@@ -879,7 +895,7 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
             // user only"), and every display query then returns nonsense. The
             // session still runs, with input but no picture, which is a
             // confusing thing to debug from the client end.
-            log::warn!("video unavailable: {} -- serving input only", e);
+            log::warn!("video unavailable: {} -- retrying every {}s", e, VIDEO_RETRY.as_secs());
             log::warn!(
                 "if the display reads 0x0, the agent has no window server: start it \
                  under `screen` or as the LaunchAgent, not with `&` or nohup"
@@ -887,6 +903,8 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
             None
         }
     };
+    #[cfg(all(target_os = "macos", not(no_vpx)))]
+    let mut video_retry_at = std::time::Instant::now() + VIDEO_RETRY;
 
     peer.stream.set_read_timeout(Some(std::time::Duration::from_millis(POLL_MS)))?;
     #[cfg(target_os = "macos")]
@@ -1005,6 +1023,37 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
         #[cfg(all(target_os = "macos", not(no_vpx)))]
         {
             idle_last_pass = true;
+        }
+
+        // A session that started without video tries again, instead of serving
+        // input for ever. `Capturer::new` has been seen to fail on a long-lived
+        // process while a freshly exec'd one read the framebuffer fine at the
+        // same moment -- backlog item 1d -- and the cost of that was every peer
+        // afterwards getting a working mouse and no picture until someone
+        // restarted the agent. The cause is still open; not recovering from it
+        // is a separate fault and this is the one that can be fixed without
+        // knowing.
+        //
+        // The same shape as `probe` tolerating a 16-bit colour mode: pause, pick
+        // up again by itself.
+        // Both ways a session ends up without a picture: never having had one,
+        // and `broken`, which `poll_geometry` sets when the encoder cannot be
+        // rebuilt around a new screen size. Neither recovers on its own.
+        #[cfg(all(target_os = "macos", not(no_vpx)))]
+        let no_picture = video.as_ref().map_or(true, |v| v.broken);
+        #[cfg(all(target_os = "macos", not(no_vpx)))]
+        if no_picture && std::time::Instant::now() >= video_retry_at {
+            video_retry_at = std::time::Instant::now() + VIDEO_RETRY;
+            match Video::new(DEFAULT_BITRATE_KBPS) {
+                Ok(v) => {
+                    log::info!("video is available again; this session now has a picture");
+                    video = Some(v);
+                }
+                // At debug, not warn: this repeats every VIDEO_RETRY for as long
+                // as the session lasts, and the warning at the top of the
+                // session already said it once.
+                Err(e) => log::debug!("video still unavailable: {}", e),
+            }
         }
 
         #[cfg(all(target_os = "macos", not(no_vpx)))]
