@@ -51,6 +51,15 @@ fn main() {
         .compile("cursorshim");
     println!("cargo:rerun-if-changed=src/cursor_shim.c");
 
+    // The Mac clipboard. In C because the Pasteboard Manager is a
+    // CoreFoundation API and CFDataRef lifetimes are less ceremony here.
+    cc::Build::new()
+        .file("src/clipboard_shim.c")
+        .flag(NO_MISCOMPILE)
+        .opt_level(2)
+        .compile("clipboardshim");
+    println!("cargo:rerun-if-changed=src/clipboard_shim.c");
+
     // Quartz injection. In C because CGPoint crosses the API by value, and a
     // 16-byte two-double struct is where the 32-bit PowerPC calling convention
     // diverges from a naive extern "C" declaration.

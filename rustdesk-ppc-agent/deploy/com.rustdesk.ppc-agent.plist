@@ -3,9 +3,15 @@
 <!--
   Run the agent inside the logged-in user's GUI ("Aqua") session.
 
-  Convenience rather than necessity: capture works fine from an ordinary ssh
-  login, so this exists to start the agent at every login and restart it if it
-  dies, without anyone having to ssh in.
+  This used to say "convenience rather than necessity", because capture works
+  fine from an ordinary ssh login. **The clipboard does not.** PasteboardCreate
+  returns -4960 from an ssh login and from the detached `screen` that
+  build-ppc.sh uses, and pbcopy and pbpaste fail there too -- so it is the
+  session and not the API, and capture is no guide to it. Measured with
+  probes/pasteboard.c and probes/clipshim.c.
+
+  So: the clipboard works only when the agent is started from here. Everything
+  else works either way.
 
   Install:
       scp deploy/com.rustdesk.ppc-agent.plist \
@@ -13,10 +19,21 @@
 
   Then, *in Terminal.app on the G5 itself* (an ssh session cannot reach the Aqua
   session's launchd):
+      launchctl unload ~/Library/LaunchAgents/com.rustdesk.ppc-agent.plist
       launchctl load -w ~/Library/LaunchAgents/com.rustdesk.ppc-agent.plist
 
-  It also loads by itself at every login, so that command is only needed to start
-  it without logging out first.
+  It also loads by itself at every login, so that is only needed to start it
+  without logging out first.
+
+  **Only one agent at a time.** Both this and `build-ppc.sh deploy` bind port
+  21118, and they interact badly in both directions: a launchd-started agent
+  will lose the port to a screen-started one, and `deploy` kills by process name,
+  which kills the launchd copy -- whereupon KeepAlive restarts it and the two
+  take turns failing to bind. Stop the screen one first:
+
+      ssh ppctiger 'screen -S rdagent -X quit'
+
+  and use `launchctl unload` before deploying a new binary from the host.
 -->
 <plist version="1.0">
 <dict>

@@ -411,10 +411,62 @@ Two things that had to be established rather than assumed:
 A shape that cannot be read falls back to the built-in arrow rather than to no
 pointer at all.
 
-## 6. Clipboard
+## 6. Clipboard (built; needs the agent moved into the Aqua session)
 
-Phase 2 by decision. `Clipboard` message exists in the proto; the Mac side is
-`NSPasteboard`/`PasteboardCreate`.
+Text, both directions. Everything is written, host-tested and deployed, and it
+does nothing at all until the agent is started from the LaunchAgent — which is
+the finding, not an oversight.
+
+**The pasteboard needs the Aqua session, and capture is no guide to that.**
+`CGDisplayBaseAddress` works perfectly over ssh, so it was reasonable to expect
+the clipboard to as well. It does not: `PasteboardCreate` returns **-4960** from
+an ssh login *and* from the detached `screen` that `build-ppc.sh deploy` uses.
+`pbcopy` and `pbpaste` fail there too, which is what rules out the API choice —
+the Scrap Manager or Cocoa would fail the same way, because it is the session.
+Measured with `probes/pasteboard.c`; `probes/clipshim.c` then drives the real
+shim at its production flags and confirms every call returns -1 rather than
+crashing, which is the path that runs on a machine nobody has switched over.
+
+`launchctl bsexec` into the Finder's session is the other way in and needs root,
+which is not available here. So the switch is a human at the G5:
+
+```
+# in Terminal.app on the G5 itself -- an ssh session reaches a different launchd
+ssh ppctiger 'screen -S rdagent -X quit'      # only one agent may hold 21118
+launchctl load -w ~/Library/LaunchAgents/com.rustdesk.ppc-agent.plist
+```
+
+The plist is already installed on the G5 and `plutil -lint` passes. See its
+header for why the two launch methods must not both be running.
+
+**Two things about a modern client that the 1.1.8 proto hides**, both found
+before writing code rather than after:
+
+* **The message moved.** At 1.3.0+ the client sends `MultiClipboards` (field 28)
+  to any non-iOS peer, not `Clipboard` (16). At the 1.4.5 we report, field 16
+  never arrives from a desktop peer at all. Both are decoded.
+* **The content is really zstd**, not the raw-block frames `zstd_frame.rs`
+  writes — those exist because the cursor path only ever needs to *produce*
+  one. Reading a peer's clipboard needs a real decompressor, so this links
+  libzstd, which turns out to be on the G5 already (1.5.7 in `/opt/local`,
+  beside the libraries the binary depends on regardless). Worth knowing for
+  anything else that wants compression.
+
+**Text only**, deliberately: a browser copy arrives as three entries (text, HTML,
+RTF) and the text one is picked out. Images would mean converting RGBA and PNG
+into pasteboard flavours both ways.
+
+The loop is the part that needed care rather than the API. Writing a peer's
+clipboard onto the Mac marks the pasteboard modified, so the next poll reads it
+back, sends it to the peer, whose own sync applies it and sends it back for
+ever. `clipboard::Sync` remembers the last text that crossed in either direction
+and drops the echo; both directions are host-tested.
+
+Still to do once someone has switched the launch method over:
+
+- Confirm the round trip against a real client, in both directions.
+- Decide whether to honour `OptionMessage.disable_clipboard`, which the agent
+  currently logs and ignores. Cheap, and it is what upstream does.
 
 ## ~~7. Conversion speed~~ (done)
 

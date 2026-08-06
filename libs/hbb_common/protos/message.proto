@@ -213,10 +213,36 @@ message Hash {
   string challenge = 2;
 };
 
+// Fields 3-6 and `ClipboardFormat` are backported: 1.1.8 knew only compressed
+// text, and a modern client tags every entry with a format. Without the tag
+// every flavour of a copy looks alike, and a browser copy sends three.
+enum ClipboardFormat {
+  Text = 0;
+  Rtf = 1;
+  Html = 2;
+  ImageRgba = 21;
+  ImagePng = 22;
+  ImageSvg = 23;
+  Special = 31;
+}
+
 message Clipboard {
   bool compress = 1;
   bytes content = 2;
+  int32 width = 3;
+  int32 height = 4;
+  ClipboardFormat format = 5;
+  // Special format name, only used when format is Special.
+  string special_name = 6;
 };
+
+// Field 28 on Message, backported. A client sends its clipboard here rather
+// than in `clipboard` (16) whenever the peer claims 1.3.0 or newer and is not
+// iOS -- `is_support_multi_clipboard` in the client's `src/clipboard.rs` -- so
+// at the 1.4.5 this agent reports, field 16 never arrives from a desktop peer.
+// One copy produces several entries: a browser sends text, HTML and RTF
+// together.
+message MultiClipboards { repeated Clipboard clipboards = 1; }
 
 enum FileType {
   Dir = 1;
@@ -440,6 +466,9 @@ message Message {
     // appears and the request lands as an unrecognised field.
     ScreenshotRequest screenshot_request = 29;
     ScreenshotResponse screenshot_response = 30;
+    // See the note on the message itself: at the version we report, this is
+    // where a desktop peer's clipboard arrives, and field 16 does not.
+    MultiClipboards multi_clipboards = 28;
   }
 }
 
