@@ -162,11 +162,21 @@ no ssh, no probe, no connection -- then connect exactly once.
 |---|---|---|
 | cold start → 11 min → first peer, **launchd** | 2 | clean, 16 frames each |
 | cold start → 11 min → first peer, **screen** | 3 | clean, 16 frames each |
-| `fb-idle`, pure idle in a C process | 6 waits: 2, 5, 11, 20, 40, 90 min | clean, with and without a held mapping |
+| **warm** (one session served first) → 11 min → peer, screen | 2 | clean |
+| warm → 20 min → peer, screen | 1 | clean |
+| warm → 30 min → peer, screen | 1 | clean |
+| `fb-idle`, pure idle in a C process | 7 waits: 2, 5, 11, 20, 40, 90, 180 min | clean, with and without a held mapping |
+
+Every round reported 16 frames, 2 keyframes, and a fresh process seeing the same
+good base address (`0xb0028000`) at the same moment -- which is the comparison
+the original report turns on, and it never diverged once.
 
 **So the account in this item is not sufficient to produce the failure.** It was
 written from a single occurrence, and something that was true then is not
 recorded here. Do not re-run the table above; it is done.
+
+Longer warm waits (45, 60, 90, 150) and `fb-idle` at 420 minutes were still
+running when this was written; anything they turn up belongs in this table.
 
 The first version of the soak could not have found anything either, and the
 reason is worth keeping: it connected every ten minutes *from t=0*, so the agent
@@ -184,11 +194,11 @@ session starts blind, and the detector is the agent's own "video unavailable"
 line rather than `frames=0` -- the retry above would otherwise hide a transient
 failure behind a session that recovered.
 
-**Warm rounds are the variable now under test**, at 11, 11, 20, 30, 45, 60, 90
-and 150 minutes. Every round in the table above was a *virgin* agent that had
+Warm rounds were added because every cold round used a *virgin* agent that had
 never built a `Capturer`, so none of them could catch a fault that needs one to
 have been created and dropped first -- and the report never says no peer had
-connected before, only that every peer *after* the failure got no picture.
+connected before, only that every peer *after* the failure got no picture. They
+are clean too, so far.
 
 ### Variables still untried, if the warm rounds are clean too
 
