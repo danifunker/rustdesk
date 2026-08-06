@@ -111,7 +111,7 @@ next arithmetic-heavy shim is a coin toss. Worth doing:
   the way the converter is. That check is what makes a miscompile survivable,
   and it is cheaper than understanding the compiler.
 
-## 1d. Video is given up on for the whole session if it fails once
+## 1d. Video is given up on for the whole session if it fails once (recovery done, cause open)
 
 `Video::new` runs at login, and if `Capturer::new` fails the session logs
 "serving input only" and never tries again. Seen for real: an agent that had
@@ -122,18 +122,62 @@ restarted. A freshly exec'd process on the same machine read the framebuffer
 without trouble at the same moment, so whatever goes stale belongs to the
 long-lived process rather than to the display.
 
-Two things to do, in order:
+**The recovery is done; the cause is not.** These are separate faults and only
+one of them needed the cause:
 
-- **Retry.** `probe` already tolerates a 16-bit colour depth by pausing and
-  picking up again by itself; a null base address deserves the same treatment
-  rather than a dead session. Rebuild the `Capturer` every few seconds while
-  `broken`.
-- **Find out what invalidates it.** Suspect display sleep. `probes/fb-settle.c`
-  and `fb-livecheck.c` are the shape of probe that would answer it: hold a
-  mapping, let the display sleep, and see what the base address does.
+- ~~**Retry**~~ **done.** A session that starts blind now rebuilds the whole
+  video pipeline every `VIDEO_RETRY` (5 s) instead of serving input for ever,
+  and `broken` -- set when the encoder cannot be rebuilt around a new screen
+  size -- is covered by the same path. Same shape as `probe` tolerating a 16-bit
+  colour mode. Whatever the cause turns out to be, the symptom is now bounded at
+  five seconds rather than lasting until someone restarts the agent.
+- **Find out what invalidates it.** Open. Two hypotheses have died, both
+  recorded below because the *way* they died is the useful part.
+
+### What has been ruled out, 2026-08-05
+
+**Display sleep. No.** It was suspected on the strength of the failure being at
+eleven minutes and `pmset` reporting `displaysleep 10` -- two numbers that look
+alike, which is not evidence. Worse, the probe written to test it *could not*:
+`fb-vigil` polling CoreGraphics every 15 s resets `HIDIdleTime` (visible in
+`ioreg -c IOHIDSystem`), so the display stayed awake for 33 minutes and the
+observation destroyed the thing observed. If you poll a display to ask whether
+it is asleep, you have already answered no.
+
+**Plain idleness. No.** The sharper reading of the report is that the agent read
+the geometry at startup for its banner, made *no* CoreGraphics call while it
+waited, and the first one after eleven minutes failed -- so an unused
+window-server connection being torn down was the better theory.
+`probes/fb-idle.c` reproduces exactly that sequence, doing nothing in between:
+one `sleep`, no timer, no polling. **Clean at 2, 5, 11, 20 and 40 minutes**,
+both with and without a mapping held from startup. 90, 180 and 420 running.
+
+### What is running now
+
+`probes/soak-video.sh` on the host, connecting a real peer every ten minutes for
+seven hours and recording what arrives, plus a freshly exec'd check on the G5 at
+the same moment -- the comparison the original report turns on. It dumps the
+agent log, a fresh process's view, HID idle and the process list the moment a
+session starts blind. The detector is the agent's own "video unavailable" line
+rather than `frames=0`, because the retry above would otherwise hide a
+transient failure behind a recovered session.
+
+### A confound to resolve before trusting a negative result
+
+**The original failure was almost certainly a `screen`-started agent; tonight's
+soak is running against a launchd-started one.** Item 1d was written before the
+LaunchAgent was in use, so the incident happened to an agent launched by
+`build-ppc.sh deploy` under a detached `screen` whose ssh had since closed. That
+is a different session lifecycle from the Aqua session the agent now runs in,
+and it is exactly the kind of difference this project keeps being caught by --
+see item 9, and the clipboard's -4960. If the soak comes back clean, that is the
+next variable to change, not a reason to close this.
 
 Worth knowing that this is invisible to `--probe-display`, which is a fresh
-process every time and so always gets a good mapping.
+process every time and so always gets a good mapping. Also that
+`Capturer::new` now reports *which* query failed, with the whole state on one
+line: a display query returning 0 used to be reported as "display is not 32 bits
+per pixel", which reads as a colour-mode change rather than a dead connection.
 
 ## ~~1c. An unknown message from modern clients~~ (identified)
 
