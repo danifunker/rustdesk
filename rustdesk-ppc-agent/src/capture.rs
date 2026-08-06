@@ -381,23 +381,54 @@ pub struct Capturer {
 
 #[cfg(target_os = "macos")]
 impl Capturer {
+    /// Build a capturer, or say precisely why not.
+    ///
+    /// Every query runs before any of them is judged, which is deliberate.
+    /// Checking the colour depth first and returning on it meant that a display
+    /// query returning **0** -- what a stale or missing window-server connection
+    /// gives -- was reported as "display is not 32 bits per pixel", which reads
+    /// as somebody having switched the Displays preference pane to thousands of
+    /// colours. Backlog item 1d is being chased through exactly these log lines,
+    /// so they have to describe the state rather than the first check to trip.
     pub fn new() -> Result<Self, &'static str> {
         unsafe {
             let display = CGMainDisplayID();
             let bpp = CGDisplayBitsPerPixel(display);
+            let width = CGDisplayPixelsWide(display);
+            let height = CGDisplayPixelsHigh(display);
+            let bytes_per_row = CGDisplayBytesPerRow(display);
+            let base = CGDisplayBaseAddress(display);
+
+            if bpp != 32 || base.is_null() || width == 0 || height == 0 {
+                log::warn!(
+                    "capture unavailable: display {} reads {}x{}, {} bpp, stride {}, base {:?}",
+                    display, width, height, bpp, bytes_per_row, base
+                );
+            }
+            // Zero is not a colour mode. It is what the window server reports
+            // when it is not answering, and it deserves its own sentence.
+            if bpp == 0 && width == 0 {
+                return Err("the window server answered nothing at all (no session?)");
+            }
+            if bpp == 0 {
+                return Err("the window server reported no colour depth");
+            }
             if bpp != 32 {
                 // 16-bit modes exist on this vintage; the converter assumes 32.
                 return Err("display is not 32 bits per pixel");
             }
-            let base = CGDisplayBaseAddress(display);
             if base.is_null() {
                 return Err("CGDisplayBaseAddress returned NULL (no window server session?)");
             }
-            let height = CGDisplayPixelsHigh(display);
-            let bytes_per_row = CGDisplayBytesPerRow(display);
+            if width == 0 || height == 0 {
+                return Err("the window server reported a zero-sized display");
+            }
+            if bytes_per_row < width * 4 {
+                return Err("stride is narrower than the display it describes");
+            }
             Ok(Self {
                 display,
-                width: CGDisplayPixelsWide(display),
+                width,
                 height,
                 bytes_per_row,
                 base,
