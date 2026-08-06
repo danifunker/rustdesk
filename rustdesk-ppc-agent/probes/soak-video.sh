@@ -53,7 +53,7 @@ FIRST_PID=$(ssh "$HOST" 'ps -axo pid,comm | awk "\$2 ~ /rustdesk-agent/ {print \
 
 {
     echo "# soak-video: $CYCLES cycles, ${GAP}s apart, agent pid $FIRST_PID"
-    echo "# looking for: frames=0 on a cycle, i.e. a peer that got no picture"
+    echo "# looking for: a blind session -- frames=0, or "video unavailable" in the agent log"
     echo "# columns: time  up(min)  pid  frames  keyframes  first-frame  fresh-base-address"
 } >> "$LOG"
 
@@ -81,12 +81,20 @@ for i in $(seq 1 "$CYCLES"); do
 
     line=$(printf "%s  %4d  %-6s  %-14s %-3s %-22s %s%s" \
         "$now" "$up" "$pid" "$frames" "${keys:-?}" "${firstf:-?}" "${fresh:-?}" "$restarted")
+
+    # The agent's own account is the better detector now that it retries every
+    # five seconds: a transient failure recovers mid-session, so the peer may
+    # still see frames and `frames=0` would miss it entirely. "video unavailable"
+    # is logged when the session starts blind, whether or not it recovers.
+    blind=$(ssh -o ConnectTimeout=15 "$HOST" 'grep -c "video unavailable" ~/agent.log 2>/dev/null' 2>/dev/null)
+    [ -n "$blind" ] || blind=0
+    [ "$blind" -gt 0 ] 2>/dev/null && line="$line  <-- $blind BLIND SESSION(S)"
     echo "$line" >> "$LOG"
 
     # The thing being hunted. Grab everything that might explain it, at once,
     # while the agent is still in the failed state -- a second chance may be
     # hours away.
-    if [ "$frames" = "0" ] || [ "$frames" = "CONNECT-FAILED" ]; then
+    if [ "$frames" = "0" ] || [ "$frames" = "CONNECT-FAILED" ] || [ "$blind" -gt 0 ] 2>/dev/null; then
         {
             echo "### REPRODUCED at $now, up ${up} min"
             ssh "$HOST" 'echo "-- agent log, last 40 --"; tail -40 ~/agent.log
