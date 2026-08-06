@@ -3669,6 +3669,10 @@ pub struct Clipboard {
     // message fields
     pub compress: bool,
     pub content: ::std::vec::Vec<u8>,
+    pub width: i32,
+    pub height: i32,
+    pub format: ::protobuf::ProtobufEnumOrUnknown<ClipboardFormat>,
+    pub special_name: ::std::string::String,
     // special fields
     pub unknown_fields: ::protobuf::UnknownFields,
     pub cached_size: ::protobuf::rt::CachedSize,
@@ -3696,6 +3700,26 @@ impl Clipboard {
             "content",
             |m: &Clipboard| { &m.content },
             |m: &mut Clipboard| { &mut m.content },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "width",
+            |m: &Clipboard| { &m.width },
+            |m: &mut Clipboard| { &mut m.width },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "height",
+            |m: &Clipboard| { &m.height },
+            |m: &mut Clipboard| { &mut m.height },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "format",
+            |m: &Clipboard| { &m.format },
+            |m: &mut Clipboard| { &mut m.format },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "special_name",
+            |m: &Clipboard| { &m.special_name },
+            |m: &mut Clipboard| { &mut m.special_name },
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<Clipboard>(
             "Clipboard",
@@ -3726,6 +3750,30 @@ impl ::protobuf::Message for Clipboard {
                     }
                     self.content = is.read_bytes()?;
                 },
+                3 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    self.width = is.read_int32()?;
+                },
+                4 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    self.height = is.read_int32()?;
+                },
+                5 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    self.format = is.read_enum_or_unknown()?;
+                },
+                6 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeLengthDelimited {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    self.special_name = is.read_string()?;
+                },
                 _ => {
                     ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
                 },
@@ -3744,6 +3792,18 @@ impl ::protobuf::Message for Clipboard {
         if !self.content.is_empty() {
             my_size += ::protobuf::rt::bytes_size(2, &self.content);
         }
+        if self.width != 0 {
+            my_size += ::protobuf::rt::value_size(3, self.width, ::protobuf::wire_format::WireTypeVarint);
+        }
+        if self.height != 0 {
+            my_size += ::protobuf::rt::value_size(4, self.height, ::protobuf::wire_format::WireTypeVarint);
+        }
+        if self.format != ::protobuf::ProtobufEnumOrUnknown::new(ClipboardFormat::Text) {
+            my_size += ::protobuf::rt::enum_or_unknown_size(5, self.format);
+        }
+        if !self.special_name.is_empty() {
+            my_size += ::protobuf::rt::string_size(6, &self.special_name);
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
         self.cached_size.set(my_size);
         my_size
@@ -3755,6 +3815,18 @@ impl ::protobuf::Message for Clipboard {
         }
         if !self.content.is_empty() {
             os.write_bytes(2, &self.content)?;
+        }
+        if self.width != 0 {
+            os.write_int32(3, self.width)?;
+        }
+        if self.height != 0 {
+            os.write_int32(4, self.height)?;
+        }
+        if self.format != ::protobuf::ProtobufEnumOrUnknown::new(ClipboardFormat::Text) {
+            os.write_enum(5, ::protobuf::ProtobufEnumOrUnknown::value(&self.format))?;
+        }
+        if !self.special_name.is_empty() {
+            os.write_string(6, &self.special_name)?;
         }
         os.write_unknown_fields(self.get_unknown_fields())?;
         ::std::result::Result::Ok(())
@@ -3784,6 +3856,10 @@ impl ::protobuf::Message for Clipboard {
         static instance: Clipboard = Clipboard {
             compress: false,
             content: ::std::vec::Vec::new(),
+            width: 0,
+            height: 0,
+            format: ::protobuf::ProtobufEnumOrUnknown::from_i32(0),
+            special_name: ::std::string::String::new(),
             unknown_fields: ::protobuf::UnknownFields::new(),
             cached_size: ::protobuf::rt::CachedSize::new(),
         };
@@ -3795,6 +3871,10 @@ impl ::protobuf::Clear for Clipboard {
     fn clear(&mut self) {
         self.compress = false;
         self.content.clear();
+        self.width = 0;
+        self.height = 0;
+        self.format = ::protobuf::ProtobufEnumOrUnknown::new(ClipboardFormat::Text);
+        self.special_name.clear();
         self.unknown_fields.clear();
     }
 }
@@ -3806,6 +3886,134 @@ impl ::std::fmt::Debug for Clipboard {
 }
 
 impl ::protobuf::reflect::ProtobufValue for Clipboard {
+    type RuntimeType = ::protobuf::reflect::runtime_types::RuntimeTypeMessage<Self>;
+}
+
+#[derive(PartialEq,Clone,Default)]
+pub struct MultiClipboards {
+    // message fields
+    pub clipboards: ::std::vec::Vec<Clipboard>,
+    // special fields
+    pub unknown_fields: ::protobuf::UnknownFields,
+    pub cached_size: ::protobuf::rt::CachedSize,
+}
+
+impl<'a> ::std::default::Default for &'a MultiClipboards {
+    fn default() -> &'a MultiClipboards {
+        <MultiClipboards as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl MultiClipboards {
+    pub fn new() -> MultiClipboards {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::new();
+        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
+            "clipboards",
+            |m: &MultiClipboards| { &m.clipboards },
+            |m: &mut MultiClipboards| { &mut m.clipboards },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<MultiClipboards>(
+            "MultiClipboards",
+            18,
+            fields,
+        )
+    }
+}
+
+impl ::protobuf::Message for MultiClipboards {
+    fn is_initialized(&self) -> bool {
+        for v in &self.clipboards {
+            if !v.is_initialized() {
+                return false;
+            }
+        };
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::ProtobufResult<()> {
+        while !is.eof()? {
+            let (field_number, wire_type) = is.read_tag_unpack()?;
+            match field_number {
+                1 => {
+                    ::protobuf::rt::read_repeated_message_into_vec(wire_type, is, &mut self.clipboards)?;
+                },
+                _ => {
+                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u32 {
+        let mut my_size = 0;
+        for value in &self.clipboards {
+            let len = value.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
+        };
+        my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
+        self.cached_size.set(my_size);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::ProtobufResult<()> {
+        for v in &self.clipboards {
+            ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
+        };
+        os.write_unknown_fields(self.get_unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn get_cached_size(&self) -> u32 {
+        self.cached_size.get()
+    }
+
+    fn get_unknown_fields(&self) -> &::protobuf::UnknownFields {
+        &self.unknown_fields
+    }
+
+    fn mut_unknown_fields(&mut self) -> &mut ::protobuf::UnknownFields {
+        &mut self.unknown_fields
+    }
+
+    fn new() -> MultiClipboards {
+        MultiClipboards::new()
+    }
+
+    fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 18)
+    }
+
+    fn default_instance() -> &'static MultiClipboards {
+        static instance: MultiClipboards = MultiClipboards {
+            clipboards: ::std::vec::Vec::new(),
+            unknown_fields: ::protobuf::UnknownFields::new(),
+            cached_size: ::protobuf::rt::CachedSize::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::Clear for MultiClipboards {
+    fn clear(&mut self) {
+        self.clipboards.clear();
+        self.unknown_fields.clear();
+    }
+}
+
+impl ::std::fmt::Debug for MultiClipboards {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for MultiClipboards {
     type RuntimeType = ::protobuf::reflect::runtime_types::RuntimeTypeMessage<Self>;
 }
 
@@ -3862,7 +4070,7 @@ impl FileEntry {
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<FileEntry>(
             "FileEntry",
-            18,
+            19,
             fields,
         )
     }
@@ -3976,7 +4184,7 @@ impl ::protobuf::Message for FileEntry {
     }
 
     fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
-        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 18)
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 19)
     }
 
     fn default_instance() -> &'static FileEntry {
@@ -4055,7 +4263,7 @@ impl FileDirectory {
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<FileDirectory>(
             "FileDirectory",
-            19,
+            20,
             fields,
         )
     }
@@ -4148,7 +4356,7 @@ impl ::protobuf::Message for FileDirectory {
     }
 
     fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
-        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 19)
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 20)
     }
 
     fn default_instance() -> &'static FileDirectory {
@@ -4217,7 +4425,7 @@ impl ReadDir {
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ReadDir>(
             "ReadDir",
-            20,
+            21,
             fields,
         )
     }
@@ -4295,7 +4503,7 @@ impl ::protobuf::Message for ReadDir {
     }
 
     fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
-        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 20)
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 21)
     }
 
     fn default_instance() -> &'static ReadDir {
@@ -4368,7 +4576,7 @@ impl ReadAllFiles {
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ReadAllFiles>(
             "ReadAllFiles",
-            21,
+            22,
             fields,
         )
     }
@@ -4458,7 +4666,7 @@ impl ::protobuf::Message for ReadAllFiles {
     }
 
     fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
-        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 21)
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 22)
     }
 
     fn default_instance() -> &'static ReadAllFiles {
@@ -4964,7 +5172,7 @@ impl FileAction {
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<FileAction>(
             "FileAction",
-            22,
+            23,
             fields,
         )
     }
@@ -5170,7 +5378,7 @@ impl ::protobuf::Message for FileAction {
     }
 
     fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
-        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 22)
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 23)
     }
 
     fn default_instance() -> &'static FileAction {
@@ -5255,7 +5463,7 @@ impl FileTransferCancel {
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<FileTransferCancel>(
             "FileTransferCancel",
-            23,
+            24,
             fields,
         )
     }
@@ -5321,7 +5529,7 @@ impl ::protobuf::Message for FileTransferCancel {
     }
 
     fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
-        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 23)
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 24)
     }
 
     fn default_instance() -> &'static FileTransferCancel {
@@ -5599,7 +5807,7 @@ impl FileResponse {
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<FileResponse>(
             "FileResponse",
-            24,
+            25,
             fields,
         )
     }
@@ -5733,7 +5941,7 @@ impl ::protobuf::Message for FileResponse {
     }
 
     fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
-        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 24)
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 25)
     }
 
     fn default_instance() -> &'static FileResponse {
@@ -5828,7 +6036,7 @@ impl FileTransferBlock {
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<FileTransferBlock>(
             "FileTransferBlock",
-            25,
+            26,
             fields,
         )
     }
@@ -5930,7 +6138,7 @@ impl ::protobuf::Message for FileTransferBlock {
     }
 
     fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
-        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 25)
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 26)
     }
 
     fn default_instance() -> &'static FileTransferBlock {
@@ -6007,7 +6215,7 @@ impl FileTransferError {
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<FileTransferError>(
             "FileTransferError",
-            26,
+            27,
             fields,
         )
     }
@@ -6097,7 +6305,7 @@ impl ::protobuf::Message for FileTransferError {
     }
 
     fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
-        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 26)
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 27)
     }
 
     fn default_instance() -> &'static FileTransferError {
@@ -6172,7 +6380,7 @@ impl FileTransferSendRequest {
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<FileTransferSendRequest>(
             "FileTransferSendRequest",
-            27,
+            28,
             fields,
         )
     }
@@ -6262,7 +6470,7 @@ impl ::protobuf::Message for FileTransferSendRequest {
     }
 
     fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
-        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 27)
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 28)
     }
 
     fn default_instance() -> &'static FileTransferSendRequest {
@@ -6331,7 +6539,7 @@ impl FileTransferDone {
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<FileTransferDone>(
             "FileTransferDone",
-            28,
+            29,
             fields,
         )
     }
@@ -6409,7 +6617,7 @@ impl ::protobuf::Message for FileTransferDone {
     }
 
     fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
-        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 28)
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 29)
     }
 
     fn default_instance() -> &'static FileTransferDone {
@@ -6482,7 +6690,7 @@ impl FileTransferReceiveRequest {
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<FileTransferReceiveRequest>(
             "FileTransferReceiveRequest",
-            29,
+            30,
             fields,
         )
     }
@@ -6575,7 +6783,7 @@ impl ::protobuf::Message for FileTransferReceiveRequest {
     }
 
     fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
-        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 29)
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 30)
     }
 
     fn default_instance() -> &'static FileTransferReceiveRequest {
@@ -6650,7 +6858,7 @@ impl FileRemoveDir {
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<FileRemoveDir>(
             "FileRemoveDir",
-            30,
+            31,
             fields,
         )
     }
@@ -6740,7 +6948,7 @@ impl ::protobuf::Message for FileRemoveDir {
     }
 
     fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
-        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 30)
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 31)
     }
 
     fn default_instance() -> &'static FileRemoveDir {
@@ -6815,7 +7023,7 @@ impl FileRemoveFile {
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<FileRemoveFile>(
             "FileRemoveFile",
-            31,
+            32,
             fields,
         )
     }
@@ -6905,7 +7113,7 @@ impl ::protobuf::Message for FileRemoveFile {
     }
 
     fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
-        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 31)
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 32)
     }
 
     fn default_instance() -> &'static FileRemoveFile {
@@ -6974,7 +7182,7 @@ impl FileDirCreate {
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<FileDirCreate>(
             "FileDirCreate",
-            32,
+            33,
             fields,
         )
     }
@@ -7052,7 +7260,7 @@ impl ::protobuf::Message for FileDirCreate {
     }
 
     fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
-        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 32)
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 33)
     }
 
     fn default_instance() -> &'static FileDirCreate {
@@ -7137,7 +7345,7 @@ impl SwitchDisplay {
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<SwitchDisplay>(
             "SwitchDisplay",
-            33,
+            34,
             fields,
         )
     }
@@ -7251,7 +7459,7 @@ impl ::protobuf::Message for SwitchDisplay {
     }
 
     fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
-        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 33)
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 34)
     }
 
     fn default_instance() -> &'static SwitchDisplay {
@@ -7324,7 +7532,7 @@ impl PermissionInfo {
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<PermissionInfo>(
             "PermissionInfo",
-            34,
+            35,
             fields,
         )
     }
@@ -7402,7 +7610,7 @@ impl ::protobuf::Message for PermissionInfo {
     }
 
     fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
-        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 34)
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 35)
     }
 
     fn default_instance() -> &'static PermissionInfo {
@@ -7505,7 +7713,7 @@ impl OptionMessage {
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<OptionMessage>(
             "OptionMessage",
-            35,
+            36,
             fields,
         )
     }
@@ -7655,7 +7863,7 @@ impl ::protobuf::Message for OptionMessage {
     }
 
     fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
-        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 35)
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 36)
     }
 
     fn default_instance() -> &'static OptionMessage {
@@ -7734,7 +7942,7 @@ impl TestDelay {
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TestDelay>(
             "TestDelay",
-            36,
+            37,
             fields,
         )
     }
@@ -7812,7 +8020,7 @@ impl ::protobuf::Message for TestDelay {
     }
 
     fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
-        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 36)
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 37)
     }
 
     fn default_instance() -> &'static TestDelay {
@@ -7879,7 +8087,7 @@ impl PublicKey {
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<PublicKey>(
             "PublicKey",
-            37,
+            38,
             fields,
         )
     }
@@ -7957,7 +8165,7 @@ impl ::protobuf::Message for PublicKey {
     }
 
     fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
-        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 37)
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 38)
     }
 
     fn default_instance() -> &'static PublicKey {
@@ -8018,7 +8226,7 @@ impl SignedId {
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<SignedId>(
             "SignedId",
-            38,
+            39,
             fields,
         )
     }
@@ -8084,7 +8292,7 @@ impl ::protobuf::Message for SignedId {
     }
 
     fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
-        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 38)
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 39)
     }
 
     fn default_instance() -> &'static SignedId {
@@ -8149,7 +8357,7 @@ impl AudioFormat {
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<AudioFormat>(
             "AudioFormat",
-            39,
+            40,
             fields,
         )
     }
@@ -8227,7 +8435,7 @@ impl ::protobuf::Message for AudioFormat {
     }
 
     fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
-        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 39)
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 40)
     }
 
     fn default_instance() -> &'static AudioFormat {
@@ -8288,7 +8496,7 @@ impl AudioFrame {
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<AudioFrame>(
             "AudioFrame",
-            40,
+            41,
             fields,
         )
     }
@@ -8354,7 +8562,7 @@ impl ::protobuf::Message for AudioFrame {
     }
 
     fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
-        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 40)
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 41)
     }
 
     fn default_instance() -> &'static AudioFrame {
@@ -8805,7 +9013,7 @@ impl Misc {
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<Misc>(
             "Misc",
-            41,
+            42,
             fields,
         )
     }
@@ -8993,7 +9201,7 @@ impl ::protobuf::Message for Misc {
     }
 
     fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
-        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 41)
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 42)
     }
 
     fn default_instance() -> &'static Misc {
@@ -10025,6 +10233,55 @@ impl Message {
         }
     }
 
+    // .hbb.MultiClipboards multi_clipboards = 28;
+
+    pub fn get_multi_clipboards(&self) -> &MultiClipboards {
+        match self.union {
+            ::std::option::Option::Some(message::Union::multi_clipboards(ref v)) => v,
+            _ => <MultiClipboards as ::protobuf::Message>::default_instance(),
+        }
+    }
+
+    pub fn clear_multi_clipboards(&mut self) {
+        self.union = ::std::option::Option::None;
+    }
+
+    pub fn has_multi_clipboards(&self) -> bool {
+        match self.union {
+            ::std::option::Option::Some(message::Union::multi_clipboards(..)) => true,
+            _ => false,
+        }
+    }
+
+    // Param is passed by value, moved
+    pub fn set_multi_clipboards(&mut self, v: MultiClipboards) {
+        self.union = ::std::option::Option::Some(message::Union::multi_clipboards(v))
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_multi_clipboards(&mut self) -> &mut MultiClipboards {
+        if let ::std::option::Option::Some(message::Union::multi_clipboards(_)) = self.union {
+        } else {
+            self.union = ::std::option::Option::Some(message::Union::multi_clipboards(MultiClipboards::new()));
+        }
+        match self.union {
+            ::std::option::Option::Some(message::Union::multi_clipboards(ref mut v)) => v,
+            _ => panic!(),
+        }
+    }
+
+    // Take field
+    pub fn take_multi_clipboards(&mut self) -> MultiClipboards {
+        if self.has_multi_clipboards() {
+            match self.union.take() {
+                ::std::option::Option::Some(message::Union::multi_clipboards(v)) => v,
+                _ => panic!(),
+            }
+        } else {
+            MultiClipboards::new()
+        }
+    }
+
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
         let mut fields = ::std::vec::Vec::new();
         fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, SignedId>(
@@ -10166,9 +10423,16 @@ impl Message {
             Message::mut_screenshot_response,
             Message::set_screenshot_response,
         ));
+        fields.push(::protobuf::reflect::rt::v2::make_oneof_message_has_get_mut_set_accessor::<_, MultiClipboards>(
+            "multi_clipboards",
+            Message::has_multi_clipboards,
+            Message::get_multi_clipboards,
+            Message::mut_multi_clipboards,
+            Message::set_multi_clipboards,
+        ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<Message>(
             "Message",
-            42,
+            43,
             fields,
         )
     }
@@ -10267,6 +10531,11 @@ impl ::protobuf::Message for Message {
             }
         }
         if let Some(message::Union::screenshot_response(ref v)) = self.union {
+            if !v.is_initialized() {
+                return false;
+            }
+        }
+        if let Some(message::Union::multi_clipboards(ref v)) = self.union {
             if !v.is_initialized() {
                 return false;
             }
@@ -10398,6 +10667,12 @@ impl ::protobuf::Message for Message {
                     }
                     self.union = ::std::option::Option::Some(message::Union::screenshot_response(is.read_message()?));
                 },
+                28 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeLengthDelimited {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    self.union = ::std::option::Option::Some(message::Union::multi_clipboards(is.read_message()?));
+                },
                 _ => {
                     ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
                 },
@@ -10491,6 +10766,10 @@ impl ::protobuf::Message for Message {
                     let len = v.compute_size();
                     my_size += 2 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
                 },
+                &message::Union::multi_clipboards(ref v) => {
+                    let len = v.compute_size();
+                    my_size += 2 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
+                },
             };
         }
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
@@ -10561,6 +10840,9 @@ impl ::protobuf::Message for Message {
                 &message::Union::screenshot_response(ref v) => {
                     ::protobuf::rt::write_message_field_with_cached_size(30, v, os)?;
                 },
+                &message::Union::multi_clipboards(ref v) => {
+                    ::protobuf::rt::write_message_field_with_cached_size(28, v, os)?;
+                },
             };
         }
         os.write_unknown_fields(self.get_unknown_fields())?;
@@ -10584,7 +10866,7 @@ impl ::protobuf::Message for Message {
     }
 
     fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
-        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 42)
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 43)
     }
 
     fn default_instance() -> &'static Message {
@@ -10599,6 +10881,7 @@ impl ::protobuf::Message for Message {
 
 impl ::protobuf::Clear for Message {
     fn clear(&mut self) {
+        self.union = ::std::option::Option::None;
         self.union = ::std::option::Option::None;
         self.union = ::std::option::Option::None;
         self.union = ::std::option::Option::None;
@@ -10658,6 +10941,7 @@ pub mod message {
         pointer_device_event(super::PointerDeviceEvent),
         screenshot_request(super::ScreenshotRequest),
         screenshot_response(super::ScreenshotResponse),
+        multi_clipboards(super::MultiClipboards),
     }
 
     impl ::protobuf::Oneof for Union {
@@ -10751,7 +11035,7 @@ impl PointerDeviceEvent {
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<PointerDeviceEvent>(
             "PointerDeviceEvent",
-            43,
+            44,
             fields,
         )
     }
@@ -10840,7 +11124,7 @@ impl ::protobuf::Message for PointerDeviceEvent {
     }
 
     fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
-        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 43)
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 44)
     }
 
     fn default_instance() -> &'static PointerDeviceEvent {
@@ -11132,7 +11416,7 @@ impl TouchEvent {
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TouchEvent>(
             "TouchEvent",
-            44,
+            45,
             fields,
         )
     }
@@ -11266,7 +11550,7 @@ impl ::protobuf::Message for TouchEvent {
     }
 
     fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
-        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 44)
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 45)
     }
 
     fn default_instance() -> &'static TouchEvent {
@@ -11343,7 +11627,7 @@ impl TouchScaleUpdate {
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TouchScaleUpdate>(
             "TouchScaleUpdate",
-            45,
+            46,
             fields,
         )
     }
@@ -11409,7 +11693,7 @@ impl ::protobuf::Message for TouchScaleUpdate {
     }
 
     fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
-        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 45)
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 46)
     }
 
     fn default_instance() -> &'static TouchScaleUpdate {
@@ -11474,7 +11758,7 @@ impl TouchPanStart {
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TouchPanStart>(
             "TouchPanStart",
-            46,
+            47,
             fields,
         )
     }
@@ -11552,7 +11836,7 @@ impl ::protobuf::Message for TouchPanStart {
     }
 
     fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
-        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 46)
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 47)
     }
 
     fn default_instance() -> &'static TouchPanStart {
@@ -11619,7 +11903,7 @@ impl TouchPanUpdate {
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TouchPanUpdate>(
             "TouchPanUpdate",
-            47,
+            48,
             fields,
         )
     }
@@ -11697,7 +11981,7 @@ impl ::protobuf::Message for TouchPanUpdate {
     }
 
     fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
-        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 47)
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 48)
     }
 
     fn default_instance() -> &'static TouchPanUpdate {
@@ -11764,7 +12048,7 @@ impl TouchPanEnd {
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<TouchPanEnd>(
             "TouchPanEnd",
-            48,
+            49,
             fields,
         )
     }
@@ -11842,7 +12126,7 @@ impl ::protobuf::Message for TouchPanEnd {
     }
 
     fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
-        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 48)
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 49)
     }
 
     fn default_instance() -> &'static TouchPanEnd {
@@ -11909,7 +12193,7 @@ impl ScreenshotRequest {
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ScreenshotRequest>(
             "ScreenshotRequest",
-            49,
+            50,
             fields,
         )
     }
@@ -11987,7 +12271,7 @@ impl ::protobuf::Message for ScreenshotRequest {
     }
 
     fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
-        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 49)
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 50)
     }
 
     fn default_instance() -> &'static ScreenshotRequest {
@@ -12060,7 +12344,7 @@ impl ScreenshotResponse {
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ScreenshotResponse>(
             "ScreenshotResponse",
-            50,
+            51,
             fields,
         )
     }
@@ -12150,7 +12434,7 @@ impl ::protobuf::Message for ScreenshotResponse {
     }
 
     fn descriptor_static() -> ::protobuf::reflect::MessageDescriptor {
-        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 50)
+        ::protobuf::reflect::MessageDescriptor::new_generated_2(file_descriptor(), 51)
     }
 
     fn default_instance() -> &'static ScreenshotResponse {
@@ -12513,6 +12797,69 @@ impl KeyboardMode {
 }
 
 #[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+pub enum ClipboardFormat {
+    Text = 0,
+    Rtf = 1,
+    Html = 2,
+    ImageRgba = 21,
+    ImagePng = 22,
+    ImageSvg = 23,
+    Special = 31,
+}
+
+impl ::protobuf::ProtobufEnum for ClipboardFormat {
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<ClipboardFormat> {
+        match value {
+            0 => ::std::option::Option::Some(ClipboardFormat::Text),
+            1 => ::std::option::Option::Some(ClipboardFormat::Rtf),
+            2 => ::std::option::Option::Some(ClipboardFormat::Html),
+            21 => ::std::option::Option::Some(ClipboardFormat::ImageRgba),
+            22 => ::std::option::Option::Some(ClipboardFormat::ImagePng),
+            23 => ::std::option::Option::Some(ClipboardFormat::ImageSvg),
+            31 => ::std::option::Option::Some(ClipboardFormat::Special),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn values() -> &'static [Self] {
+        static values: &'static [ClipboardFormat] = &[
+            ClipboardFormat::Text,
+            ClipboardFormat::Rtf,
+            ClipboardFormat::Html,
+            ClipboardFormat::ImageRgba,
+            ClipboardFormat::ImagePng,
+            ClipboardFormat::ImageSvg,
+            ClipboardFormat::Special,
+        ];
+        values
+    }
+
+    fn enum_descriptor_static() -> ::protobuf::reflect::EnumDescriptor {
+        ::protobuf::reflect::EnumDescriptor::new_generated_2(file_descriptor(), 2)
+    }
+}
+
+impl ::std::default::Default for ClipboardFormat {
+    fn default() -> Self {
+        ClipboardFormat::Text
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ClipboardFormat {
+    type RuntimeType = ::protobuf::reflect::runtime_types::RuntimeTypeEnum<Self>;
+}
+
+impl ClipboardFormat {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new_2::<ClipboardFormat>("ClipboardFormat", 2)
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
 pub enum FileType {
     Dir = 1,
     DirLink = 2,
@@ -12549,7 +12896,7 @@ impl ::protobuf::ProtobufEnum for FileType {
     }
 
     fn enum_descriptor_static() -> ::protobuf::reflect::EnumDescriptor {
-        ::protobuf::reflect::EnumDescriptor::new_generated_2(file_descriptor(), 2)
+        ::protobuf::reflect::EnumDescriptor::new_generated_2(file_descriptor(), 3)
     }
 }
 
@@ -12566,7 +12913,7 @@ impl ::protobuf::reflect::ProtobufValue for FileType {
 
 impl FileType {
     fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
-        ::protobuf::reflect::GeneratedEnumDescriptorData::new_2::<FileType>("FileType", 2)
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new_2::<FileType>("FileType", 3)
     }
 }
 
@@ -12601,7 +12948,7 @@ impl ::protobuf::ProtobufEnum for Permission {
     }
 
     fn enum_descriptor_static() -> ::protobuf::reflect::EnumDescriptor {
-        ::protobuf::reflect::EnumDescriptor::new_generated_2(file_descriptor(), 3)
+        ::protobuf::reflect::EnumDescriptor::new_generated_2(file_descriptor(), 4)
     }
 }
 
@@ -12618,7 +12965,7 @@ impl ::protobuf::reflect::ProtobufValue for Permission {
 
 impl Permission {
     fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
-        ::protobuf::reflect::GeneratedEnumDescriptorData::new_2::<Permission>("Permission", 3)
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new_2::<Permission>("Permission", 4)
     }
 }
 
@@ -12656,7 +13003,7 @@ impl ::protobuf::ProtobufEnum for ImageQuality {
     }
 
     fn enum_descriptor_static() -> ::protobuf::reflect::EnumDescriptor {
-        ::protobuf::reflect::EnumDescriptor::new_generated_2(file_descriptor(), 4)
+        ::protobuf::reflect::EnumDescriptor::new_generated_2(file_descriptor(), 5)
     }
 }
 
@@ -12672,7 +13019,7 @@ impl ::protobuf::reflect::ProtobufValue for ImageQuality {
 
 impl ImageQuality {
     fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
-        ::protobuf::reflect::GeneratedEnumDescriptorData::new_2::<ImageQuality>("ImageQuality", 4)
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new_2::<ImageQuality>("ImageQuality", 5)
     }
 }
 
@@ -12707,7 +13054,7 @@ impl ::protobuf::ProtobufEnum for BoolOption {
     }
 
     fn enum_descriptor_static() -> ::protobuf::reflect::EnumDescriptor {
-        ::protobuf::reflect::EnumDescriptor::new_generated_2(file_descriptor(), 5)
+        ::protobuf::reflect::EnumDescriptor::new_generated_2(file_descriptor(), 6)
     }
 }
 
@@ -12723,7 +13070,7 @@ impl ::protobuf::reflect::ProtobufValue for BoolOption {
 
 impl BoolOption {
     fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
-        ::protobuf::reflect::GeneratedEnumDescriptorData::new_2::<BoolOption>("BoolOption", 5)
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new_2::<BoolOption>("BoolOption", 6)
     }
 }
 
@@ -12783,9 +13130,14 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \"2\n\x0eCursorPosition\x12\x0e\n\x01x\x18\x01\x20\x01(\x11R\x01xB\0\x12\
     \x0e\n\x01y\x18\x02\x20\x01(\x11R\x01yB\0:\0\">\n\x04Hash\x12\x14\n\x04s\
     alt\x18\x01\x20\x01(\tR\x04saltB\0\x12\x1e\n\tchallenge\x18\x02\x20\x01(\
-    \tR\tchallengeB\0:\0\"G\n\tClipboard\x12\x1c\n\x08compress\x18\x01\x20\
-    \x01(\x08R\x08compressB\0\x12\x1a\n\x07content\x18\x02\x20\x01(\x0cR\x07\
-    contentB\0:\0\"\xaf\x01\n\tFileEntry\x12.\n\nentry_type\x18\x01\x20\x01(\
+    \tR\tchallengeB\0:\0\"\xce\x01\n\tClipboard\x12\x1c\n\x08compress\x18\
+    \x01\x20\x01(\x08R\x08compressB\0\x12\x1a\n\x07content\x18\x02\x20\x01(\
+    \x0cR\x07contentB\0\x12\x16\n\x05width\x18\x03\x20\x01(\x05R\x05widthB\0\
+    \x12\x18\n\x06height\x18\x04\x20\x01(\x05R\x06heightB\0\x12.\n\x06format\
+    \x18\x05\x20\x01(\x0e2\x14.hbb.ClipboardFormatR\x06formatB\0\x12#\n\x0cs\
+    pecial_name\x18\x06\x20\x01(\tR\x0bspecialNameB\0:\0\"E\n\x0fMultiClipbo\
+    ards\x120\n\nclipboards\x18\x01\x20\x03(\x0b2\x0e.hbb.ClipboardR\nclipbo\
+    ardsB\0:\0\"\xaf\x01\n\tFileEntry\x12.\n\nentry_type\x18\x01\x20\x01(\
     \x0e2\r.hbb.FileTypeR\tentryTypeB\0\x12\x14\n\x04name\x18\x02\x20\x01(\t\
     R\x04nameB\0\x12\x1d\n\tis_hidden\x18\x03\x20\x01(\x08R\x08isHiddenB\0\
     \x12\x14\n\x04size\x18\x04\x20\x01(\x04R\x04sizeB\0\x12%\n\rmodified_tim\
@@ -12867,8 +13219,8 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     lose_reason\x18\t\x20\x01(\tH\0R\x0bcloseReasonB\0\x12'\n\rrefresh_video\
     \x18\n\x20\x01(\x08H\0R\x0crefreshVideoB\0\x126\n\x15refresh_video_displ\
     ay\x18\x1f\x20\x01(\x05H\0R\x13refreshVideoDisplayB\0B\t\n\x05union\x12\
-    \0:\0\"\xe4\x08\n\x07Message\x12.\n\tsigned_id\x18\x03\x20\x01(\x0b2\r.h\
-    bb.SignedIdH\0R\x08signedIdB\0\x121\n\npublic_key\x18\x04\x20\x01(\x0b2\
+    \0:\0\"\xa9\t\n\x07Message\x12.\n\tsigned_id\x18\x03\x20\x01(\x0b2\r.hbb\
+    .SignedIdH\0R\x08signedIdB\0\x121\n\npublic_key\x18\x04\x20\x01(\x0b2\
     \x0e.hbb.PublicKeyH\0R\tpublicKeyB\0\x121\n\ntest_delay\x18\x05\x20\x01(\
     \x0b2\x0e.hbb.TestDelayH\0R\ttestDelayB\0\x124\n\x0bvideo_frame\x18\x06\
     \x20\x01(\x0b2\x0f.hbb.VideoFrameH\0R\nvideoFrameB\0\x12:\n\rlogin_reque\
@@ -12890,70 +13242,75 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     iceEventH\0R\x12pointerDeviceEventB\0\x12I\n\x12screenshot_request\x18\
     \x1d\x20\x01(\x0b2\x16.hbb.ScreenshotRequestH\0R\x11screenshotRequestB\0\
     \x12L\n\x13screenshot_response\x18\x1e\x20\x01(\x0b2\x17.hbb.ScreenshotR\
-    esponseH\0R\x12screenshotResponseB\0B\t\n\x05union\x12\0:\0\"\x88\x01\n\
-    \x12PointerDeviceEvent\x124\n\x0btouch_event\x18\x01\x20\x01(\x0b2\x0f.h\
-    bb.TouchEventH\0R\ntouchEventB\0\x12/\n\tmodifiers\x18\x02\x20\x03(\x0e2\
-    \x0f.hbb.ControlKeyR\tmodifiersB\0B\t\n\x05union\x12\0:\0\"\xf3\x01\n\nT\
-    ouchEvent\x12<\n\x0cscale_update\x18\x01\x20\x01(\x0b2\x15.hbb.TouchScal\
-    eUpdateH\0R\x0bscaleUpdateB\0\x123\n\tpan_start\x18\x02\x20\x01(\x0b2\
-    \x12.hbb.TouchPanStartH\0R\x08panStartB\0\x126\n\npan_update\x18\x03\x20\
-    \x01(\x0b2\x13.hbb.TouchPanUpdateH\0R\tpanUpdateB\0\x12-\n\x07pan_end\
-    \x18\x04\x20\x01(\x0b2\x10.hbb.TouchPanEndH\0R\x06panEndB\0B\t\n\x05unio\
-    n\x12\0:\0\",\n\x10TouchScaleUpdate\x12\x16\n\x05scale\x18\x01\x20\x01(\
-    \x05R\x05scaleB\0:\0\"1\n\rTouchPanStart\x12\x0e\n\x01x\x18\x01\x20\x01(\
-    \x05R\x01xB\0\x12\x0e\n\x01y\x18\x02\x20\x01(\x05R\x01yB\0:\0\"2\n\x0eTo\
-    uchPanUpdate\x12\x0e\n\x01x\x18\x01\x20\x01(\x05R\x01xB\0\x12\x0e\n\x01y\
-    \x18\x02\x20\x01(\x05R\x01yB\0:\0\"/\n\x0bTouchPanEnd\x12\x0e\n\x01x\x18\
-    \x01\x20\x01(\x05R\x01xB\0\x12\x0e\n\x01y\x18\x02\x20\x01(\x05R\x01yB\0:\
-    \0\"E\n\x11ScreenshotRequest\x12\x1a\n\x07display\x18\x01\x20\x01(\x05R\
-    \x07displayB\0\x12\x12\n\x03sid\x18\x02\x20\x01(\tR\x03sidB\0:\0\"T\n\
-    \x12ScreenshotResponse\x12\x12\n\x03sid\x18\x01\x20\x01(\tR\x03sidB\0\
-    \x12\x12\n\x03msg\x18\x02\x20\x01(\tR\x03msgB\0\x12\x14\n\x04data\x18\
-    \x03\x20\x01(\x0cR\x04dataB\0:\0*\xaa\x08\n\nControlKey\x12\t\n\x03Alt\
-    \x10\x01\x1a\0\x12\x0f\n\tBackspace\x10\x02\x1a\0\x12\x0e\n\x08CapsLock\
-    \x10\x03\x1a\0\x12\r\n\x07Control\x10\x04\x1a\0\x12\x0c\n\x06Delete\x10\
-    \x05\x1a\0\x12\x0f\n\tDownArrow\x10\x06\x1a\0\x12\t\n\x03End\x10\x07\x1a\
-    \0\x12\x0c\n\x06Escape\x10\x08\x1a\0\x12\x08\n\x02F1\x10\t\x1a\0\x12\t\n\
-    \x03F10\x10\n\x1a\0\x12\t\n\x03F11\x10\x0b\x1a\0\x12\t\n\x03F12\x10\x0c\
-    \x1a\0\x12\x08\n\x02F2\x10\r\x1a\0\x12\x08\n\x02F3\x10\x0e\x1a\0\x12\x08\
-    \n\x02F4\x10\x0f\x1a\0\x12\x08\n\x02F5\x10\x10\x1a\0\x12\x08\n\x02F6\x10\
-    \x11\x1a\0\x12\x08\n\x02F7\x10\x12\x1a\0\x12\x08\n\x02F8\x10\x13\x1a\0\
-    \x12\x08\n\x02F9\x10\x14\x1a\0\x12\n\n\x04Home\x10\x15\x1a\0\x12\x0f\n\t\
-    LeftArrow\x10\x16\x1a\0\x12\n\n\x04Meta\x10\x17\x1a\0\x12\x0c\n\x06Optio\
-    n\x10\x18\x1a\0\x12\x0e\n\x08PageDown\x10\x19\x1a\0\x12\x0c\n\x06PageUp\
-    \x10\x1a\x1a\0\x12\x0c\n\x06Return\x10\x1b\x1a\0\x12\x10\n\nRightArrow\
-    \x10\x1c\x1a\0\x12\x0b\n\x05Shift\x10\x1d\x1a\0\x12\x0b\n\x05Space\x10\
-    \x1e\x1a\0\x12\t\n\x03Tab\x10\x1f\x1a\0\x12\r\n\x07UpArrow\x10\x20\x1a\0\
-    \x12\r\n\x07Numpad0\x10!\x1a\0\x12\r\n\x07Numpad1\x10\"\x1a\0\x12\r\n\
-    \x07Numpad2\x10#\x1a\0\x12\r\n\x07Numpad3\x10$\x1a\0\x12\r\n\x07Numpad4\
-    \x10%\x1a\0\x12\r\n\x07Numpad5\x10&\x1a\0\x12\r\n\x07Numpad6\x10'\x1a\0\
-    \x12\r\n\x07Numpad7\x10(\x1a\0\x12\r\n\x07Numpad8\x10)\x1a\0\x12\r\n\x07\
-    Numpad9\x10*\x1a\0\x12\x0c\n\x06Cancel\x10+\x1a\0\x12\x0b\n\x05Clear\x10\
-    ,\x1a\0\x12\n\n\x04Menu\x10-\x1a\0\x12\x0b\n\x05Pause\x10.\x1a\0\x12\n\n\
-    \x04Kana\x10/\x1a\0\x12\x0c\n\x06Hangul\x100\x1a\0\x12\x0b\n\x05Junja\
-    \x101\x1a\0\x12\x0b\n\x05Final\x102\x1a\0\x12\x0b\n\x05Hanja\x103\x1a\0\
-    \x12\x0b\n\x05Kanji\x104\x1a\0\x12\r\n\x07Convert\x105\x1a\0\x12\x0c\n\
-    \x06Select\x106\x1a\0\x12\x0b\n\x05Print\x107\x1a\0\x12\r\n\x07Execute\
-    \x108\x1a\0\x12\x0e\n\x08Snapshot\x109\x1a\0\x12\x0c\n\x06Insert\x10:\
-    \x1a\0\x12\n\n\x04Help\x10;\x1a\0\x12\x0b\n\x05Sleep\x10<\x1a\0\x12\x0f\
-    \n\tSeparator\x10=\x1a\0\x12\x0c\n\x06Scroll\x10>\x1a\0\x12\r\n\x07NumLo\
-    ck\x10?\x1a\0\x12\n\n\x04RWin\x10@\x1a\0\x12\n\n\x04Apps\x10A\x1a\0\x12\
-    \x0e\n\x08Multiply\x10B\x1a\0\x12\t\n\x03Add\x10C\x1a\0\x12\x0e\n\x08Sub\
-    tract\x10D\x1a\0\x12\r\n\x07Decimal\x10E\x1a\0\x12\x0c\n\x06Divide\x10F\
-    \x1a\0\x12\x0c\n\x06Equals\x10G\x1a\0\x12\x11\n\x0bNumpadEnter\x10H\x1a\
-    \0\x12\x0c\n\x06RShift\x10I\x1a\0\x12\x0e\n\x08RControl\x10J\x1a\0\x12\n\
-    \n\x04RAlt\x10K\x1a\0\x12\x10\n\nCtrlAltDel\x10d\x1a\0\x12\x10\n\nLockSc\
-    reen\x10e\x1a\0\x1a\0*F\n\x0cKeyboardMode\x12\x0c\n\x06Legacy\x10\0\x1a\
-    \0\x12\t\n\x03Map\x10\x01\x1a\0\x12\x0f\n\tTranslate\x10\x02\x1a\0\x12\n\
-    \n\x04Auto\x10\x03\x1a\0\x1a\0*R\n\x08FileType\x12\t\n\x03Dir\x10\x01\
-    \x1a\0\x12\r\n\x07DirLink\x10\x02\x1a\0\x12\x0e\n\x08DirDrive\x10\x03\
-    \x1a\0\x12\n\n\x04File\x10\x04\x1a\0\x12\x0e\n\x08FileLink\x10\x05\x1a\0\
-    \x1a\0*<\n\nPermission\x12\x0e\n\x08Keyboard\x10\x01\x1a\0\x12\x0f\n\tCl\
-    ipboard\x10\x02\x1a\0\x12\x0b\n\x05Audio\x10\x03\x1a\0\x1a\0*E\n\x0cImag\
-    eQuality\x12\x0c\n\x06NotSet\x10\0\x1a\0\x12\t\n\x03Low\x10\x02\x1a\0\
-    \x12\x0e\n\x08Balanced\x10\x03\x1a\0\x12\n\n\x04Best\x10\x04\x1a\0\x1a\0\
-    *1\n\nBoolOption\x12\x0c\n\x06NotSet\x10\0\x1a\0\x12\x08\n\x02No\x10\x01\
-    \x1a\0\x12\t\n\x03Yes\x10\x02\x1a\0\x1a\0B\0b\x06proto3\
+    esponseH\0R\x12screenshotResponseB\0\x12C\n\x10multi_clipboards\x18\x1c\
+    \x20\x01(\x0b2\x14.hbb.MultiClipboardsH\0R\x0fmultiClipboardsB\0B\t\n\
+    \x05union\x12\0:\0\"\x88\x01\n\x12PointerDeviceEvent\x124\n\x0btouch_eve\
+    nt\x18\x01\x20\x01(\x0b2\x0f.hbb.TouchEventH\0R\ntouchEventB\0\x12/\n\tm\
+    odifiers\x18\x02\x20\x03(\x0e2\x0f.hbb.ControlKeyR\tmodifiersB\0B\t\n\
+    \x05union\x12\0:\0\"\xf3\x01\n\nTouchEvent\x12<\n\x0cscale_update\x18\
+    \x01\x20\x01(\x0b2\x15.hbb.TouchScaleUpdateH\0R\x0bscaleUpdateB\0\x123\n\
+    \tpan_start\x18\x02\x20\x01(\x0b2\x12.hbb.TouchPanStartH\0R\x08panStartB\
+    \0\x126\n\npan_update\x18\x03\x20\x01(\x0b2\x13.hbb.TouchPanUpdateH\0R\t\
+    panUpdateB\0\x12-\n\x07pan_end\x18\x04\x20\x01(\x0b2\x10.hbb.TouchPanEnd\
+    H\0R\x06panEndB\0B\t\n\x05union\x12\0:\0\",\n\x10TouchScaleUpdate\x12\
+    \x16\n\x05scale\x18\x01\x20\x01(\x05R\x05scaleB\0:\0\"1\n\rTouchPanStart\
+    \x12\x0e\n\x01x\x18\x01\x20\x01(\x05R\x01xB\0\x12\x0e\n\x01y\x18\x02\x20\
+    \x01(\x05R\x01yB\0:\0\"2\n\x0eTouchPanUpdate\x12\x0e\n\x01x\x18\x01\x20\
+    \x01(\x05R\x01xB\0\x12\x0e\n\x01y\x18\x02\x20\x01(\x05R\x01yB\0:\0\"/\n\
+    \x0bTouchPanEnd\x12\x0e\n\x01x\x18\x01\x20\x01(\x05R\x01xB\0\x12\x0e\n\
+    \x01y\x18\x02\x20\x01(\x05R\x01yB\0:\0\"E\n\x11ScreenshotRequest\x12\x1a\
+    \n\x07display\x18\x01\x20\x01(\x05R\x07displayB\0\x12\x12\n\x03sid\x18\
+    \x02\x20\x01(\tR\x03sidB\0:\0\"T\n\x12ScreenshotResponse\x12\x12\n\x03si\
+    d\x18\x01\x20\x01(\tR\x03sidB\0\x12\x12\n\x03msg\x18\x02\x20\x01(\tR\x03\
+    msgB\0\x12\x14\n\x04data\x18\x03\x20\x01(\x0cR\x04dataB\0:\0*\xaa\x08\n\
+    \nControlKey\x12\t\n\x03Alt\x10\x01\x1a\0\x12\x0f\n\tBackspace\x10\x02\
+    \x1a\0\x12\x0e\n\x08CapsLock\x10\x03\x1a\0\x12\r\n\x07Control\x10\x04\
+    \x1a\0\x12\x0c\n\x06Delete\x10\x05\x1a\0\x12\x0f\n\tDownArrow\x10\x06\
+    \x1a\0\x12\t\n\x03End\x10\x07\x1a\0\x12\x0c\n\x06Escape\x10\x08\x1a\0\
+    \x12\x08\n\x02F1\x10\t\x1a\0\x12\t\n\x03F10\x10\n\x1a\0\x12\t\n\x03F11\
+    \x10\x0b\x1a\0\x12\t\n\x03F12\x10\x0c\x1a\0\x12\x08\n\x02F2\x10\r\x1a\0\
+    \x12\x08\n\x02F3\x10\x0e\x1a\0\x12\x08\n\x02F4\x10\x0f\x1a\0\x12\x08\n\
+    \x02F5\x10\x10\x1a\0\x12\x08\n\x02F6\x10\x11\x1a\0\x12\x08\n\x02F7\x10\
+    \x12\x1a\0\x12\x08\n\x02F8\x10\x13\x1a\0\x12\x08\n\x02F9\x10\x14\x1a\0\
+    \x12\n\n\x04Home\x10\x15\x1a\0\x12\x0f\n\tLeftArrow\x10\x16\x1a\0\x12\n\
+    \n\x04Meta\x10\x17\x1a\0\x12\x0c\n\x06Option\x10\x18\x1a\0\x12\x0e\n\x08\
+    PageDown\x10\x19\x1a\0\x12\x0c\n\x06PageUp\x10\x1a\x1a\0\x12\x0c\n\x06Re\
+    turn\x10\x1b\x1a\0\x12\x10\n\nRightArrow\x10\x1c\x1a\0\x12\x0b\n\x05Shif\
+    t\x10\x1d\x1a\0\x12\x0b\n\x05Space\x10\x1e\x1a\0\x12\t\n\x03Tab\x10\x1f\
+    \x1a\0\x12\r\n\x07UpArrow\x10\x20\x1a\0\x12\r\n\x07Numpad0\x10!\x1a\0\
+    \x12\r\n\x07Numpad1\x10\"\x1a\0\x12\r\n\x07Numpad2\x10#\x1a\0\x12\r\n\
+    \x07Numpad3\x10$\x1a\0\x12\r\n\x07Numpad4\x10%\x1a\0\x12\r\n\x07Numpad5\
+    \x10&\x1a\0\x12\r\n\x07Numpad6\x10'\x1a\0\x12\r\n\x07Numpad7\x10(\x1a\0\
+    \x12\r\n\x07Numpad8\x10)\x1a\0\x12\r\n\x07Numpad9\x10*\x1a\0\x12\x0c\n\
+    \x06Cancel\x10+\x1a\0\x12\x0b\n\x05Clear\x10,\x1a\0\x12\n\n\x04Menu\x10-\
+    \x1a\0\x12\x0b\n\x05Pause\x10.\x1a\0\x12\n\n\x04Kana\x10/\x1a\0\x12\x0c\
+    \n\x06Hangul\x100\x1a\0\x12\x0b\n\x05Junja\x101\x1a\0\x12\x0b\n\x05Final\
+    \x102\x1a\0\x12\x0b\n\x05Hanja\x103\x1a\0\x12\x0b\n\x05Kanji\x104\x1a\0\
+    \x12\r\n\x07Convert\x105\x1a\0\x12\x0c\n\x06Select\x106\x1a\0\x12\x0b\n\
+    \x05Print\x107\x1a\0\x12\r\n\x07Execute\x108\x1a\0\x12\x0e\n\x08Snapshot\
+    \x109\x1a\0\x12\x0c\n\x06Insert\x10:\x1a\0\x12\n\n\x04Help\x10;\x1a\0\
+    \x12\x0b\n\x05Sleep\x10<\x1a\0\x12\x0f\n\tSeparator\x10=\x1a\0\x12\x0c\n\
+    \x06Scroll\x10>\x1a\0\x12\r\n\x07NumLock\x10?\x1a\0\x12\n\n\x04RWin\x10@\
+    \x1a\0\x12\n\n\x04Apps\x10A\x1a\0\x12\x0e\n\x08Multiply\x10B\x1a\0\x12\t\
+    \n\x03Add\x10C\x1a\0\x12\x0e\n\x08Subtract\x10D\x1a\0\x12\r\n\x07Decimal\
+    \x10E\x1a\0\x12\x0c\n\x06Divide\x10F\x1a\0\x12\x0c\n\x06Equals\x10G\x1a\
+    \0\x12\x11\n\x0bNumpadEnter\x10H\x1a\0\x12\x0c\n\x06RShift\x10I\x1a\0\
+    \x12\x0e\n\x08RControl\x10J\x1a\0\x12\n\n\x04RAlt\x10K\x1a\0\x12\x10\n\n\
+    CtrlAltDel\x10d\x1a\0\x12\x10\n\nLockScreen\x10e\x1a\0\x1a\0*F\n\x0cKeyb\
+    oardMode\x12\x0c\n\x06Legacy\x10\0\x1a\0\x12\t\n\x03Map\x10\x01\x1a\0\
+    \x12\x0f\n\tTranslate\x10\x02\x1a\0\x12\n\n\x04Auto\x10\x03\x1a\0\x1a\0*\
+    v\n\x0fClipboardFormat\x12\n\n\x04Text\x10\0\x1a\0\x12\t\n\x03Rtf\x10\
+    \x01\x1a\0\x12\n\n\x04Html\x10\x02\x1a\0\x12\x0f\n\tImageRgba\x10\x15\
+    \x1a\0\x12\x0e\n\x08ImagePng\x10\x16\x1a\0\x12\x0e\n\x08ImageSvg\x10\x17\
+    \x1a\0\x12\r\n\x07Special\x10\x1f\x1a\0\x1a\0*R\n\x08FileType\x12\t\n\
+    \x03Dir\x10\x01\x1a\0\x12\r\n\x07DirLink\x10\x02\x1a\0\x12\x0e\n\x08DirD\
+    rive\x10\x03\x1a\0\x12\n\n\x04File\x10\x04\x1a\0\x12\x0e\n\x08FileLink\
+    \x10\x05\x1a\0\x1a\0*<\n\nPermission\x12\x0e\n\x08Keyboard\x10\x01\x1a\0\
+    \x12\x0f\n\tClipboard\x10\x02\x1a\0\x12\x0b\n\x05Audio\x10\x03\x1a\0\x1a\
+    \0*E\n\x0cImageQuality\x12\x0c\n\x06NotSet\x10\0\x1a\0\x12\t\n\x03Low\
+    \x10\x02\x1a\0\x12\x0e\n\x08Balanced\x10\x03\x1a\0\x12\n\n\x04Best\x10\
+    \x04\x1a\0\x1a\0*1\n\nBoolOption\x12\x0c\n\x06NotSet\x10\0\x1a\0\x12\x08\
+    \n\x02No\x10\x01\x1a\0\x12\t\n\x03Yes\x10\x02\x1a\0\x1a\0B\0b\x06proto3\
 ";
 
 /// `FileDescriptorProto` object which was a source for this generated file
@@ -12988,6 +13345,7 @@ pub fn file_descriptor() -> ::protobuf::reflect::FileDescriptor {
         messages.push(CursorPosition::generated_message_descriptor_data());
         messages.push(Hash::generated_message_descriptor_data());
         messages.push(Clipboard::generated_message_descriptor_data());
+        messages.push(MultiClipboards::generated_message_descriptor_data());
         messages.push(FileEntry::generated_message_descriptor_data());
         messages.push(FileDirectory::generated_message_descriptor_data());
         messages.push(ReadDir::generated_message_descriptor_data());
@@ -13024,6 +13382,7 @@ pub fn file_descriptor() -> ::protobuf::reflect::FileDescriptor {
         let mut enums = ::std::vec::Vec::new();
         enums.push(ControlKey::generated_enum_descriptor_data());
         enums.push(KeyboardMode::generated_enum_descriptor_data());
+        enums.push(ClipboardFormat::generated_enum_descriptor_data());
         enums.push(FileType::generated_enum_descriptor_data());
         enums.push(Permission::generated_enum_descriptor_data());
         enums.push(ImageQuality::generated_enum_descriptor_data());

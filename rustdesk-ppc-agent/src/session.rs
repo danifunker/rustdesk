@@ -102,6 +102,15 @@ const IDLE_PROBE_INTERVAL: std::time::Duration = std::time::Duration::from_milli
 /// Longest a peer goes without an exact frame. See the settle repaint.
 const KEYFRAME_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// How often to ask the pasteboard whether anyone has copied anything.
+///
+/// A poll rather than a notification because the Pasteboard Manager has no
+/// callback: `PasteboardSynchronize` reporting `kPasteboardModified` is the
+/// whole mechanism, and it is one call that touches no text. Half a second is
+/// below what anyone notices between copying on the G5 and pasting on the
+/// client, and it is nothing against a frame.
+const CLIPBOARD_POLL: std::time::Duration = std::time::Duration::from_millis(500);
+
 const TEST_DELAY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
 const TEST_DELAY_STALE: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -212,6 +221,7 @@ fn msg_name(m: &Message) -> &'static str {
         Some(message::Union::pointer_device_event(_)) => "pointer_device_event",
         Some(message::Union::screenshot_request(_)) => "screenshot_request",
         Some(message::Union::screenshot_response(_)) => "screenshot_response",
+        Some(message::Union::multi_clipboards(_)) => "multi_clipboards",
         None => "<empty or unknown field>",
     }
 }
@@ -898,6 +908,20 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
     #[cfg_attr(not(all(target_os = "macos", not(no_vpx))), allow(unused_mut))]
     let mut screenshot_requested: Option<(String, i32)> = None;
 
+    // Clipboard. `Sync` remembers the last text that crossed in either
+    // direction, which is what stops our own write coming straight back as a
+    // change and bouncing between the two machines for ever.
+    let mut clip_sync = crate::clipboard::Sync::new();
+    let mut clip_last_poll = std::time::Instant::now();
+    // Said once per session rather than per poll: on a machine where the agent
+    // was not started from the LaunchAgent this is every session, for ever.
+    if !crate::clipboard::available() {
+        log::info!(
+            "clipboard unavailable: the pasteboard needs the Aqua session, so start the \
+             agent from deploy/com.rustdesk.ppc-agent.plist rather than over ssh"
+        );
+    }
+
     macro_rules! pump_input {
         () => { pump_input!(true) };
         ($wait:expr) => {{
@@ -908,6 +932,7 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
                 &mut delay_outstanding,
                 &mut refresh_requested,
                 &mut screenshot_requested,
+                &mut clip_sync,
                 &mut injector,
                 &mut cursor_tracker,
                 &mut last_peer_input,
@@ -919,6 +944,7 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
                 &mut delay_outstanding,
                 &mut refresh_requested,
                 &mut screenshot_requested,
+                &mut clip_sync,
             )?;
             if !alive {
                 return Ok(());
@@ -1057,6 +1083,21 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
             peer.send(&m)?;
         }
 
+        // Has anyone copied anything on the G5? `PasteboardSynchronize` answers
+        // that in one call, which is why it is the poll rather than reading the
+        // text every pass and comparing it.
+        if clip_last_poll.elapsed() >= CLIPBOARD_POLL {
+            clip_last_poll = std::time::Instant::now();
+            if crate::clipboard::changed() == Some(true) {
+                if let Some(t) = crate::clipboard::get() {
+                    if let Some(t) = clip_sync.offer(t) {
+                        log::debug!("sending {} bytes of clipboard text", t.len());
+                        peer.send(&crate::clipboard::outgoing(&t))?;
+                    }
+                }
+            }
+        }
+
         #[cfg(target_os = "macos")]
         {
             let s = crate::cursor::seed();
@@ -1085,6 +1126,7 @@ fn drain_input(
     delay_outstanding: &mut bool,
     refresh_requested: &mut bool,
     screenshot_requested: &mut Option<(String, i32)>,
+    clip_sync: &mut crate::clipboard::Sync,
     #[cfg(target_os = "macos")] injector: &mut crate::input::Injector,
     #[cfg(target_os = "macos")] cursor_tracker: &mut crate::cursor::Tracker,
     #[cfg(target_os = "macos")] last_peer_input: &mut std::time::Instant,
@@ -1190,6 +1232,25 @@ fn drain_input(
                                 crate::cursor::SUPPRESS_AFTER_INPUT_MS + 1,
                             );
                     }
+                }
+            }
+            // The peer's clipboard. At the version we report it always arrives
+            // as `multi_clipboards` (field 28) and never as `clipboard` (16);
+            // both are decoded because the older one costs nothing and an older
+            // peer would use it. See `crate::clipboard` for the rest, including
+            // why the content is really zstd.
+            Some(ref u @ message::Union::clipboard(_))
+            | Some(ref u @ message::Union::multi_clipboards(_)) => {
+                match crate::clipboard::incoming_text(u) {
+                    Some(t) => {
+                        log::debug!("peer clipboard: {} bytes of text", t.len());
+                        if clip_sync.accept(t.clone()) && !crate::clipboard::set(&t) {
+                            log::debug!("could not write the clipboard; see clipboard::available");
+                        }
+                    }
+                    // A copy with no text in it: an image, or a flavour we do
+                    // not carry. Dropping it is the documented scope.
+                    None => log::debug!("peer clipboard had no text this agent can use"),
                 }
             }
             // The peer's screenshot button, offered to anything claiming 1.4.0 or
