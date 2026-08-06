@@ -503,8 +503,94 @@ route to that gesture needs the peer to be Android), but fixed: the three button
 
 ## 12. Rendezvous registration
 
-Planned: a private, self-hosted rendezvous server. Two things in the current
-code are shaped by its absence and should change when it arrives.
+**The server is up and proven, 2026-08-06.** That was the precondition for any
+agent work: a self-hosted hbbs/hbbr pair reached by a known-good peer — an
+Ubuntu 24.04 box running RustDesk 1.4.9 — over cellular, serving a full AV1
+session. Until a stock client could do it there was no point writing agent code,
+because any failure could have been either end. Deployment specifics
+(hostnames, keys, container config) are configuration and deliberately not
+recorded here.
+
+Three faults had to be cleared, and the useful part is that they were
+**independent**. Only the first was in the original diagnosis, and the third was
+not a fault at all but a bad measurement:
+
+| what was wrong | how it showed | what fixed it |
+|---|---|---|
+| hbbs in Docker **bridge** mode with published ports | every peer's source address read as the bridge gateway `172.18.0.1` | `network_mode: host` on both containers |
+| the peer advertised a **LAN relay address** | `create_relay … relay_server: <lan ip>` then `deadline has elapsed` | a publicly resolvable relay name, via hbbs `-r` or the peer's own `relay-server` |
+| NAT type measured **SYMMETRIC** | forces relay on every path, including LAN | artifact of `docker-proxy`; re-measured ASYMMETRIC once bridge mode was gone |
+
+The first is worth understanding rather than just fixing, because it explains
+why LAN worked throughout and only remote failed. hbbs decides "same intranet"
+by comparing the two peers' source IPs **for equality** (`same_intranet` in
+`rendezvous_server.rs`). Collapse every peer onto one gateway address and that
+test is unconditionally true, so hbbs told every caller to expect a local
+connection. On the LAN the local addresses peers report about themselves happen
+to be correct, so the wrong verdict was harmless there and fatal everywhere
+else.
+
+The third is a caution about instruments. `docker-proxy` opens its own
+connection to the container with a fresh ephemeral port each time, and the NAT
+test is precisely a check that two connections from one local port arrive with
+the same source port. It could not have returned anything but SYMMETRIC. The
+same shape as `fb-vigil` in §1d keeping awake the display it was asking about.
+
+### Websocket is not available, and that settles the transport
+
+The client can collapse the whole protocol onto `wss://host/ws/id` and
+`/ws/relay` behind an ordinary reverse proxy — `check_ws` in
+`hbb_common/src/websocket.rs`, enabled by the `allow-websocket` option, with
+`wss` chosen only when `api-server` starts with `https`. It works as far as the
+handshake: a proxy fronting hbbs `:21118` and hbbr `:21119` returns `101` and
+the client connects.
+
+Then registration fails, every time, in about two milliseconds:
+
+```text
+Client handshake done.
+unknown RegisterPkResponse
+WebSocket protocol error: Connection reset without closing handshake
+```
+
+**The OSS server does not implement it.** `handle_tcp` — which is what the
+websocket loop calls — answers `RegisterPk` with `NOT_SUPPORT` and returns
+`false`, which closes the connection (`rendezvous_server.rs:577`). Real
+registration exists only in the UDP handler. There is exactly one occurrence of
+`NOT_SUPPORT` in the whole server: no flag, no env var, no build option. The
+client's own tooltip says so — *"NOTE: RustDesk server OSS doesn't include this
+feature"* — and the misleading log line is the client's, since `_ =>` catches
+`ID_EXISTS`, `TOO_FREQUENT`, `INVALID_ID_FORMAT`, `NOT_SUPPORT` and
+`SERVER_ERROR` alike.
+
+This is the good outcome for the G5. Websocket would have meant a websocket
+client **and** TLS on Mac OS X 10.5, against a five-crate dependency list with
+no async runtime. The native protocol needs neither.
+
+### Remote connections are relay-only, structurally
+
+Not a tuning problem and not the symmetric-NAT guess. The rendezvous server sits
+behind the same NAT as the peers it serves, so their registration traffic
+hairpins at the router and never crosses the WAN — no external mapping is ever
+created, and hbbs can only record what it sees, which is a private address. It
+therefore cannot hand a remote caller anything reachable, and the punch always
+fails over to relay. Measured: a direct listen, then relay 1.2 s later, then a
+working session.
+
+So the agent's `RequestRelay` path is the one that carries every off-network
+peer, and `FetchLocalAddr` carries the LAN ones. **`PunchHoleRequest` NAT
+traversal is not needed** — which is the bulk of the protocol's complexity, and
+what this item guessed from the start for the wrong reason.
+
+### The work
+
+`RegisterPeer` and `RegisterPk` to udp 21116, a heartbeat to stay listed, and
+answering `FetchLocalAddr` and `RequestRelay` by connecting back. No local
+`relay-server` setting is needed: hbbs advertises one to peers that do not set
+their own, and `get_relay_server` prefers the local option only when present.
+
+Two things in the current code are shaped by the server's absence and should
+change now that it exists.
 
 **What discovery advertises.** `lan.rs` puts our *IP address* in the
 `PeerDiscovery` id, because the client only connects directly when the id is
@@ -516,12 +602,8 @@ id survives a DHCP change and works from another subnet. The line is marked.
 client connecting by IP never starts the `signed_id`/`public_key` exchange --
 see the module header. A peer arriving via rendezvous *does*, which is what
 `--secure` already implements, so that path exists and is tested but is not the
-default.
-
-The registration itself is the work: `RegisterPeer` and `RegisterPk` to udp
-21116, a heartbeat to stay listed, and answering `PunchHoleRequest` /
-`FetchLocalAddr` by connecting back. A private server on a LAN can skip most of
-the NAT traversal, which is the bulk of the protocol's complexity.
+default. The server's own relay requests carry `secure: true`, so this becomes
+the normal path rather than an option.
 
 ## 3. Audio
 

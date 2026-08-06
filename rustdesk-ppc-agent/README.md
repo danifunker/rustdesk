@@ -11,8 +11,8 @@ and clipboard text (see "Where the agent has to run" below — the clipboard is
 the one feature that constrains it).
 It reports itself as **1.4.5**, which is a capability declaration rather than a
 label — see `REPORTED_VERSION` in `src/session.rs`. See
-[`docs/BACKLOG.md`](docs/BACKLOG.md) for what is missing — notably audio,
-clipboard and multi-monitor.
+[`docs/BACKLOG.md`](docs/BACKLOG.md) for what is missing — notably audio and
+rendezvous registration.
 
 ## Connecting to it
 
@@ -193,4 +193,5 @@ python3 -c "from PIL import Image; im=Image.open('/tmp/out/display.png'); \
 | `src/lan.rs` | answers the UDP discovery broadcast |
 | `probes/` | C programs establishing the hardware floor |
 | `docs/videoperformance.md` | what was measured, and why the design follows |
+| `docs/performance-plan.md` | what is left to do about speed, and what each would buy |
 | `docs/BACKLOG.md` | what is missing |
