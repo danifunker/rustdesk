@@ -88,15 +88,27 @@ restart_agent() {
     echo "# soak-video: cold-start rounds via $LAUNCH, idle minutes: $WAITS"
     echo "# each round: restart the agent, touch nothing for N minutes, connect once"
     echo "# looking for: a blind session -- frames=0, or \"video unavailable\" in the agent log"
-    echo "# columns: time  idle(min)  pid  frames  keyframes  first-frame  fresh-base-address"
+    echo "# columns: time  idle(min)  warm  pid  frames  keyframes  first-frame  fresh-base-address"
 } >> "$LOG"
 
 for wait_min in $WAITS; do
     restart_agent || { echo "restart failed" >> "$LOG"; continue; }
     FIRST_PID=$(ssh "$HOST" 'ps -axo pid,comm | awk "\$2 ~ /rustdesk-agent/ {print \$1; exit}"')
 
+    # Optionally serve one session *before* the idle. Untested variable, and a
+    # plausible one: a cold-start round never builds a Capturer at all before
+    # waiting, so it cannot catch a fault that needs one to have been created
+    # and dropped first. The report does not say no peer had ever connected --
+    # only that every peer after the failure got no picture.
+    if [ "${SOAK_WARM:-0}" = "1" ]; then
+        timeout 40 "$CLIENT" "$ADDR" "$PASS" >/dev/null 2>&1
+        warm="warm"
+    else
+        warm="cold"
+    fi
+
     # Nothing at all for the whole wait. No ssh, no connection, no probe: the
-    # point is an agent that nobody has spoken to since it started.
+    # point is an agent that nobody has spoken to since.
     sleep $(( wait_min * 60 ))
 
     now=$(date +%H:%M:%S)
@@ -120,8 +132,8 @@ for wait_min in $WAITS; do
     restarted=""
     [ "$pid" != "$FIRST_PID" ] && restarted="  <-- AGENT RESTARTED (was $FIRST_PID)"
 
-    line=$(printf "%s  %4d  %-6s  %-14s %-3s %-22s %s%s" \
-        "$now" "$up" "$pid" "$frames" "${keys:-?}" "${firstf:-?}" "${fresh:-?}" "$restarted")
+    line=$(printf "%s  %4d %-4s %-6s  %-14s %-3s %-22s %s%s" \
+        "$now" "$up" "$warm" "$pid" "$frames" "${keys:-?}" "${firstf:-?}" "${fresh:-?}" "$restarted")
 
     # The agent's own account is the better detector now that it retries every
     # five seconds: a transient failure recovers mid-session, so the peer may
