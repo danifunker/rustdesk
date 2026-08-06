@@ -85,6 +85,15 @@ is a plausible story rather than a disassembled one. Two guesses at the
 mechanism have already been wrong (a missing prototype, then store merging),
 so treat the pass name as the finding and the explanation as unfinished.
 
+**It happened again, in a different file, and confirms the flag is doing real
+work.** `probes/clipwatch.c` -- CoreFoundation calls and string compares, no
+floating point at all -- was built at plain `-O2` out of habit and died on its
+first loop iteration, leaving a crash report and one line of output. Rebuilt
+with `-fno-gcse`, nothing else changed, it ran for its full 240 ticks. So the
+miscompile is not specific to double arithmetic over file-scope statics, which
+was the shape of the first instance; it is broader than that, and every shim
+this project ships carries the flag for good reason.
+
 Nothing currently shipping is known to be affected -- `convert_shim.c` is
 checked byte-for-byte against the Rust reference on a real frame by
 `--probe-display`, and the vpx and input shims have run for hours -- but the
@@ -411,11 +420,44 @@ Two things that had to be established rather than assumed:
 A shape that cannot be read falls back to the built-in arrow rather than to no
 pointer at all.
 
-## 6. Clipboard (built; needs the agent moved into the Aqua session)
+## ~~6. Clipboard~~ (done, both directions, confirmed against a real client)
 
-Text, both directions. Everything is written, host-tested and deployed, and it
-does nothing at all until the agent is started from the LaunchAgent — which is
-the finding, not an oversight.
+Text, both directions, working. The agent must be started from the LaunchAgent,
+and the one command that does it works from an ordinary ssh login:
+
+```
+~/rustdesk-ctl            # deploy/agent-ctl.sh, installed on the G5
+```
+
+**`launchctl -S Aqua` is the whole trick, and it is not in Leopard's usage
+text.** Plain `launchctl load` filters by the *caller's* session type, so from
+ssh it finds a plist marked `LimitLoadToSessionType Aqua`, matches nothing, and
+says `nothing found to load` — which is true and says nothing about what to do.
+`-S Aqua` names the session to load *into*, and the job then starts inside the
+GUI session with the window server and the pasteboard. `unload` needs it too, or
+it reports `nothing found to unload` and leaves the agent running. This cost an
+evening; it is one flag.
+
+A dead end worth not repeating: an ssh login's `launchctl list` **does** contain
+the GUI applications, with Carbon PSN labels like `[0x0-0xd70d7].com.apple.dock`.
+That looks like proof of being in the GUI session and is not. `pbpaste`
+succeeding is the test that distinguishes them.
+
+Verified rather than inferred, since "no error in the log" is not evidence:
+
+* **Mac → peer.** A separate application copied on the G5 (`pbcopy`, run in the
+  Aqua session), the agent noticed and sent it, and `probe_client` received
+  `"typed-on-the-g5-2136"` via `multi_clipboards`.
+* **peer → Mac.** `probe_client` sent two markers, and `probes/clipwatch.c` —
+  an independent process reading the real pasteboard — found each of them on it.
+* **Both directions against a real client**, confirmed by the user.
+
+`clipwatch` also settled the polling question. `PasteboardSynchronize` reports
+`kPasteboardModified` correctly when *another* client writes, but **not on the
+first synchronise in a process** — so whatever was already on the G5's clipboard
+when a peer connected would never be offered. The first poll of each session now
+ignores the flag and reads the text, which is what upstream does at session
+start.
 
 **The pasteboard needs the Aqua session, and capture is no guide to that.**
 `CGDisplayBaseAddress` works perfectly over ssh, so it was reasonable to expect
