@@ -46,9 +46,25 @@ static const char *stamp(void)
     return buf;
 }
 
+/* Always writes `out`, even when it returns nothing.
+ *
+ * It did not, and that was a real bug in this file rather than in the
+ * compiler: both the "no items" and "no text flavour" paths returned without
+ * touching `out`, and the caller then ran `strcmp` over an uninitialised
+ * 1024-byte stack buffer. strcmp walks until it finds a NUL, and off the end of
+ * the mapping if it does not -- which is exactly the SIGBUS this crashed with,
+ * inside strcmp, reading address 0.
+ *
+ * Rebuilding with -fno-gcse made it stop, which is what sent the diagnosis to
+ * the compiler. That is the signature of a codegen change *masking* undefined
+ * behaviour -- a different stack layout leaves a zero byte within reach -- and
+ * not of a miscompile. See docs/BACKLOG.md item 1e.
+ */
 static int read_text(PasteboardRef pb, char *out, int cap)
 {
     ItemCount n = 0, i;
+    if (cap > 0)
+        out[0] = 0;
     if (PasteboardGetItemCount(pb, &n) != noErr)
         return -1;
     for (i = 1; i <= n; i++) {

@@ -78,21 +78,64 @@ Bisected to a single pass. Of the obvious candidates, only one avoids it:
 -O2 -fno-gcse              survives
 ```
 
-So there *is* a narrower flag than dropping the file to `-O1`. What has not
-been established is the mechanism -- GCSE moves and combines loads, and
-PowerPC faults on a misaligned wide access where x86 would not care, but that
-is a plausible story rather than a disassembled one. Two guesses at the
-mechanism have already been wrong (a missing prototype, then store merging),
-so treat the pass name as the finding and the explanation as unfinished.
+So there *is* a narrower flag than dropping the file to `-O1`.
 
-**It happened again, in a different file, and confirms the flag is doing real
-work.** `probes/clipwatch.c` -- CoreFoundation calls and string compares, no
-floating point at all -- was built at plain `-O2` out of habit and died on its
-first loop iteration, leaving a crash report and one line of output. Rebuilt
-with `-fno-gcse`, nothing else changed, it ran for its full 240 ticks. So the
-miscompile is not specific to double arithmetic over file-scope statics, which
-was the shape of the first instance; it is broader than that, and every shim
-this project ships carries the flag for good reason.
+### The mechanism, disassembled at last (2026-08-06)
+
+**A register is read on a path where it was never written.** Not a misaligned
+access, which is what this section used to guess. That guess is now the *third*
+wrong one, after a missing prototype and store merging — the section's own
+warning was right, and the way to stop guessing was `-S`.
+
+`probes/clipwatch.c` compiled both ways, and every mention of `r22` — which
+holds `&cur`, i.e. `r1+1096`:
+
+```text
+-fno-gcse (works)          -O2 (crashes)
+134: addi r22,r1,1096      209: mr   r3,r22     <- used
+154: mr   r6,r22           235: mr   r10,r22    <- used
+166: mr   r3,r22           248: mr   r4,r22     <- used
+191: mr   r10,r22          271: addi r22,r1,1096   (block L18)
+209: mr   r4,r22           280: addi r22,r1,1096   (block L32)
+```
+
+At `-O2` the address computation exists only in `L18` and `L32`, which are the
+two *early-return* paths of `read_text` (`return -1` and `return 0`). The
+success path does `CFDataGetBytes`, stores `out[len] = 0`, calls `CFRelease`,
+and **falls through into `L4`**, which immediately does `mr r3,r22` and calls
+`strcmp`. Nothing on that path ever writes r22, so `strcmp` receives whatever
+the callee-saved register happened to hold. Here that was near zero:
+
+```text
+EXC_BAD_ACCESS (SIGBUS), KERN_PROTECTION_FAILURE at 0x0
+0  libSystem.B.dylib  strcmp + 192
+1  clipwatch          main + 572
+```
+
+With `-fno-gcse` there is a single definition in the entry block, dominating
+every use, which is what the source means.
+
+**How a real bug in the same file was ruled out.** `read_text` returned on two
+paths without writing `out`, so the caller ran `strcmp` over an uninitialised
+buffer — genuine undefined behaviour, and a tidy explanation for a crash inside
+`strcmp`. It was wrong: fixing it changed nothing, and the rebuilt binary
+produced a byte-identical crash at the same offsets with the same registers.
+That is what turned the diagnosis back to the compiler and made the `-S` diff
+worth doing. The UB was fixed anyway.
+
+Neither the diagnosis nor the flag changes what ships — `NO_MISCOMPILE` has been
+on every shim since the first instance — but it does settle what the flag is
+protecting against, and it raises the value of the reference checks below:
+this class of failure produces a wrong *pointer*, so it can just as easily
+corrupt quietly as crash.
+
+**It happened again, in a different file.** `probes/clipwatch.c` -- CoreFoundation
+calls and string compares, no floating point at all -- was built at plain `-O2`
+out of habit and died on its first loop iteration. Rebuilt with `-fno-gcse`,
+nothing else changed, it ran for its full 240 ticks. So the miscompile is not
+specific to double arithmetic over file-scope statics, which was the shape of
+the first instance. It is broader than that, and the mechanism below explains
+why the two look nothing alike.
 
 Nothing currently shipping is known to be affected -- `convert_shim.c` is
 checked byte-for-byte against the Rust reference on a real frame by
@@ -103,13 +146,10 @@ next arithmetic-heavy shim is a coin toss. Worth doing:
   converter measures 21 ms with it against 20 ms without, which is noise, so
   all three shims now carry it (`NO_MISCOMPILE` in `build.rs`). The worry that
   GCSE was worth keeping did not survive measuring it.
-- Still open: **why**. The pass name is empirical; nobody has disassembled the
-  faulting instruction. This said "worth doing only if a second miscompile
-  appears" — **and one has** (`clipwatch.c`, above), so by its own condition
-  this is now live rather than hypothetical. What would settle it: build the
-  reduced case with `-S` at `-O2` and at `-O2 -fno-gcse`, diff the two, and look
-  at the access GCSE moved. One disassembly, and the explanation stops being a
-  plausible story about misaligned wide loads.
+- ~~Still open: **why**~~ **Answered** — see the section above. GCSE sinks an
+  address computation into some predecessors of a join block and not others,
+  leaving a register read on a path that never wrote it. One `-S` diff settled
+  what three rounds of reasoning had got wrong.
 - **Verify C shims against a reference on the target**,
   the way the converter is. That check is what makes a miscompile survivable,
   and it is cheaper than understanding the compiler.
