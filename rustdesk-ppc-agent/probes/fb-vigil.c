@@ -27,8 +27,18 @@
  * business as usual also prints a line beginning "CHANGE", so a whole night can
  * be read with grep.
  *
- *   PPC_HOST=ppctiger probes/run.sh fb-vigil      # foreground, ctrl-C to stop
- *   ~/ppc-probes/fb-vigil 15 > ~/fb-vigil.log 2>&1 &
+ * **Polling this in a loop prevents the thing it is looking for.** Left running
+ * at a 15-second period it kept the display awake for 33 minutes against a
+ * `displaysleep 10`, and `ioreg -c IOHIDSystem` explained why: HIDIdleTime was
+ * resetting to zero every tick, so the idle timer never reached ten minutes.
+ * Something in these CoreGraphics calls counts as user activity. So the loop
+ * mode is for watching a session that is already awake, and the *sleep*
+ * question is answered by `fb-sleepwatch.sh`, which waits with `ioreg` alone --
+ * touching nothing -- and runs this once, in one-shot mode, at the moment the
+ * display has actually gone down.
+ *
+ *   ~/ppc-probes/fb-vigil 0     # one tick and exit -- what the watcher uses
+ *   ~/ppc-probes/fb-vigil 15    # loop; keeps the display awake, see above
  */
 #include <ApplicationServices/ApplicationServices.h>
 #include <setjmp.h>
@@ -150,6 +160,10 @@ int main(int argc, char **argv)
         prev_asleep = asleep;
         prev_null = (fresh == NULL);
         prev_fault = (hr == -1);
+        /* One-shot: the caller is a watcher that has already decided this is an
+         * interesting moment, and looping here would end the moment. */
+        if (period <= 0)
+            break;
         if (++tick % 40 == 0)
             printf("-- %s still running, %lu ticks --\n", stamp(), tick);
         sleep(period);
