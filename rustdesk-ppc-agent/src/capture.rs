@@ -226,7 +226,22 @@ fn hash_bytes(buf: &[u8], seed: u32) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{hash_bytes, sample_row, PROBE_PHASES, PROBE_WINDOW, PROBE_WINDOW_STEP};
+    use super::{ago, hash_bytes, sample_row, PROBE_PHASES, PROBE_WINDOW, PROBE_WINDOW_STEP};
+
+    /// The one log line that will explain backlog item 1d if it happens to
+    /// somebody rather than to a probe, so its awkward cases are worth pinning:
+    /// a stamp that was never set, and a clock that has gone backwards, which a
+    /// G5 that has been off for a while routinely has.
+    #[test]
+    fn ago_reports_never_rather_than_a_wrapped_duration() {
+        assert_eq!(ago(0, 1_000), "never", "an unset stamp never happened");
+        assert_eq!(ago(0, 0), "never");
+        // now < stamp: u32 subtraction here would report ~136 years.
+        assert_eq!(ago(1_000, 500), "never", "a clock that went backwards");
+        assert_eq!(ago(1_000, 1_000), "0s ago");
+        assert_eq!(ago(1_000, 1_660), "660s ago");
+        assert_eq!(ago(1, u32::MAX), format!("{}s ago", u32::MAX - 1));
+    }
 
     /// Sample and checksum a row exactly as `dirty_bands` does.
     fn hash_row(line: &[u8], seed: u32) -> u32 {
@@ -379,6 +394,47 @@ pub struct Capturer {
     scratch: Vec<u8>,
 }
 
+/// When this process last built a `Capturer` successfully, and when it first
+/// tried, as unix seconds. Zero means it has not happened yet.
+///
+/// Here because backlog item 1d has been seen once, in real use, and not since
+/// -- not by any probe written for it. The most likely place it turns up again
+/// is somebody's session rather than an experiment, so the log line it produces
+/// has to carry the two numbers nobody can reconstruct afterwards: how long this
+/// process had been running, and whether it had *ever* had a working capture.
+/// "It worked for an hour and then stopped" and "it never worked" have entirely
+/// different causes and produced the same message.
+///
+/// `AtomicU32` rather than `U64` on purpose: this is a 32-bit PowerPC target.
+/// Unix seconds fit until 2106.
+#[cfg(target_os = "macos")]
+static FIRST_TRY: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+#[cfg(target_os = "macos")]
+static LAST_OK: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+#[cfg(target_os = "macos")]
+fn unix_now() -> u32 {
+    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        Ok(d) => d.as_secs() as u32,
+        Err(_) => 0,
+    }
+}
+
+/// "1234s ago", or "never", for a stamp that may not have been set.
+///
+/// Not gated on the platform, so the awkward cases can be tested on the host: a
+/// stamp of zero means it never happened, and a G5 that has been off for a while
+/// often has a wrong wall clock, which can make `now` earlier than the stamp.
+/// Reporting a wrapped duration in the one log line that explains a rare failure
+/// would be a poor way to find out about `u32` subtraction.
+fn ago(stamp: u32, now: u32) -> String {
+    if stamp == 0 || now < stamp {
+        "never".to_owned()
+    } else {
+        format!("{}s ago", now - stamp)
+    }
+}
+
 #[cfg(target_os = "macos")]
 impl Capturer {
     /// Build a capturer, or say precisely why not.
@@ -399,10 +455,31 @@ impl Capturer {
             let bytes_per_row = CGDisplayBytesPerRow(display);
             let base = CGDisplayBaseAddress(display);
 
+            let now = unix_now();
+            let _ = FIRST_TRY.compare_exchange(
+                0,
+                now,
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+
             if bpp != 32 || base.is_null() || width == 0 || height == 0 {
+                // Everything about the state, on one line, including the two
+                // things that cannot be recovered afterwards: how long this
+                // process has been at it, and whether capture ever worked in it.
+                // A process that captured happily for an hour and then stopped
+                // has a different fault from one that never could.
                 log::warn!(
-                    "capture unavailable: display {} reads {}x{}, {} bpp, stride {}, base {:?}",
-                    display, width, height, bpp, bytes_per_row, base
+                    "capture unavailable: display {} reads {}x{}, {} bpp, stride {}, base {:?}; \
+                     first tried {}, last succeeded {}",
+                    display,
+                    width,
+                    height,
+                    bpp,
+                    bytes_per_row,
+                    base,
+                    ago(FIRST_TRY.load(std::sync::atomic::Ordering::Relaxed), now),
+                    ago(LAST_OK.load(std::sync::atomic::Ordering::Relaxed), now)
                 );
             }
             // Zero is not a colour mode. It is what the window server reports
@@ -426,6 +503,7 @@ impl Capturer {
             if bytes_per_row < width * 4 {
                 return Err("stride is narrower than the display it describes");
             }
+            LAST_OK.store(now, std::sync::atomic::Ordering::Relaxed);
             Ok(Self {
                 display,
                 width,
