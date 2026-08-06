@@ -50,15 +50,42 @@ CLIENT="$HERE/target/debug/examples/probe_client"
 
 [ -x "$CLIENT" ] || { echo "build it first: cargo build --example probe_client" >&2; exit 1; }
 
+# How the agent is started, which is a variable and not a detail.
+#
+# The original incident predates the LaunchAgent, so it happened to an agent
+# started by `build-ppc.sh deploy` under a detached `screen` whose ssh had since
+# closed. That is a different session lifecycle from the Aqua session, and this
+# project has been caught twice by exactly that difference -- item 9, and the
+# clipboard's -4960. With the reported case (cold start, 11 minutes, first peer)
+# coming back clean twice under launchd, the launch method is the next thing to
+# change rather than the idle time.
+#
+#   SOAK_LAUNCH=launchd   the Aqua session, how the agent runs now
+#   SOAK_LAUNCH=screen    detached screen from a closing ssh, how it ran then
+LAUNCH="${SOAK_LAUNCH:-launchd}"
+
 restart_agent() {
-    ssh "$HOST" 'launchctl unload -S Aqua ~/Library/LaunchAgents/com.rustdesk.ppc-agent.plist >/dev/null 2>&1
-                 sleep 3; rm -f ~/agent.log
-                 launchctl load -w -S Aqua ~/Library/LaunchAgents/com.rustdesk.ppc-agent.plist >/dev/null 2>&1
-                 sleep 4'
+    if [ "$LAUNCH" = "screen" ]; then
+        # launchd first, or KeepAlive restarts its copy and the two fight over
+        # the port. The ssh closing at the end of this is deliberate: it is what
+        # the original agent's session did.
+        ssh "$HOST" 'launchctl unload -S Aqua ~/Library/LaunchAgents/com.rustdesk.ppc-agent.plist >/dev/null 2>&1
+                     screen -S rdagent -X quit >/dev/null 2>&1; sleep 2
+                     ps -axo pid,comm | awk "\$2 ~ /rustdesk-agent/ {print \$1}" | while read p; do kill -9 $p; done
+                     rm -f ~/agent.log
+                     screen -dmS rdagent bash -c "~/rustdesk-agent --port 21118 -vv > ~/agent.log 2>&1"
+                     sleep 4'
+    else
+        ssh "$HOST" 'screen -S rdagent -X quit >/dev/null 2>&1
+                     launchctl unload -S Aqua ~/Library/LaunchAgents/com.rustdesk.ppc-agent.plist >/dev/null 2>&1
+                     sleep 3; rm -f ~/agent.log
+                     launchctl load -w -S Aqua ~/Library/LaunchAgents/com.rustdesk.ppc-agent.plist >/dev/null 2>&1
+                     sleep 4'
+    fi
 }
 
 {
-    echo "# soak-video: cold-start rounds, idle minutes: $WAITS"
+    echo "# soak-video: cold-start rounds via $LAUNCH, idle minutes: $WAITS"
     echo "# each round: restart the agent, touch nothing for N minutes, connect once"
     echo "# looking for: a blind session -- frames=0, or \"video unavailable\" in the agent log"
     echo "# columns: time  idle(min)  pid  frames  keyframes  first-frame  fresh-base-address"
