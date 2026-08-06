@@ -18,14 +18,24 @@
 #     geometry, do nothing at all, then ask for the base address -- and is clean
 #     at 2, 5, 11 and 20 minutes.
 #
-# So stop theorising and reproduce it. This connects a real peer on a cadence
-# close to the reported one and records what arrives, for as long as it takes.
-# Each cycle also runs a *fresh* one-shot check on the G5, because the original
-# report's sharpest detail is that a new process read the framebuffer fine at
-# the moment the old one could not -- if that holds here, the fault is the
-# process and not the machine, and the fix is to rebuild the Capturer.
+# So stop theorising and reproduce it, with a peer, against the real agent.
 #
-#   PPC_HOST=ppctiger probes/soak-video.sh [cycles] [gap-seconds]
+# **Cold start, then wait, then one peer.** That ordering is the experiment and
+# it took a wrong version to see why. The first draft connected every ten
+# minutes from t=0, which cannot reproduce the report however long it runs: the
+# agent is never idle from a cold start, because the connection at t=0 has
+# already exercised CoreGraphics and every one after it keeps the connection
+# warm. The same mistake as fb-vigil's polling keeping the display awake, one
+# level up. What was reported is an agent that started, sat with **no peer at
+# all** for eleven minutes, and failed on the first one to arrive.
+#
+# So each round restarts the agent for a clean t=0, waits the given number of
+# minutes touching nothing, and then connects exactly once. Each round also
+# runs a *fresh* one-shot check on the G5 at that moment, because the report's
+# sharpest detail is that a new process read the framebuffer fine while the old
+# one could not -- if that holds here the fault is the process, not the machine.
+#
+#   PPC_HOST=ppctiger probes/soak-video.sh 11 25 45 90 ...   # idle minutes
 #
 # Watch it with:  tail -f /tmp/soak-video.log
 set -u
@@ -33,33 +43,37 @@ set -u
 HOST="${PPC_HOST:-ppctiger}"
 ADDR="${PPC_ADDR:-192.168.99.116:21118}"
 PASS="${PPC_PASS:-ppctest123}"
-CYCLES="${1:-48}"
-GAP="${2:-600}"
+WAITS="${@:-11 25 45 90 180}"
 LOG="${SOAK_LOG:-/tmp/soak-video.log}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CLIENT="$HERE/target/debug/examples/probe_client"
 
 [ -x "$CLIENT" ] || { echo "build it first: cargo build --example probe_client" >&2; exit 1; }
 
-# A known starting point. Without this the clock starts at whenever the agent
-# happened to be launched, and "eleven minutes" means nothing.
-echo "restarting the agent for a known t=0 ..."
-ssh "$HOST" 'launchctl unload -S Aqua ~/Library/LaunchAgents/com.rustdesk.ppc-agent.plist >/dev/null 2>&1
-             sleep 3; rm -f ~/agent.log
-             launchctl load -w -S Aqua ~/Library/LaunchAgents/com.rustdesk.ppc-agent.plist >/dev/null 2>&1
-             sleep 4' || exit 1
-START=$(date +%s)
-FIRST_PID=$(ssh "$HOST" 'ps -axo pid,comm | awk "\$2 ~ /rustdesk-agent/ {print \$1; exit}"')
+restart_agent() {
+    ssh "$HOST" 'launchctl unload -S Aqua ~/Library/LaunchAgents/com.rustdesk.ppc-agent.plist >/dev/null 2>&1
+                 sleep 3; rm -f ~/agent.log
+                 launchctl load -w -S Aqua ~/Library/LaunchAgents/com.rustdesk.ppc-agent.plist >/dev/null 2>&1
+                 sleep 4'
+}
 
 {
-    echo "# soak-video: $CYCLES cycles, ${GAP}s apart, agent pid $FIRST_PID"
-    echo "# looking for: a blind session -- frames=0, or "video unavailable" in the agent log"
-    echo "# columns: time  up(min)  pid  frames  keyframes  first-frame  fresh-base-address"
+    echo "# soak-video: cold-start rounds, idle minutes: $WAITS"
+    echo "# each round: restart the agent, touch nothing for N minutes, connect once"
+    echo "# looking for: a blind session -- frames=0, or \"video unavailable\" in the agent log"
+    echo "# columns: time  idle(min)  pid  frames  keyframes  first-frame  fresh-base-address"
 } >> "$LOG"
 
-for i in $(seq 1 "$CYCLES"); do
+for wait_min in $WAITS; do
+    restart_agent || { echo "restart failed" >> "$LOG"; continue; }
+    FIRST_PID=$(ssh "$HOST" 'ps -axo pid,comm | awk "\$2 ~ /rustdesk-agent/ {print \$1; exit}"')
+
+    # Nothing at all for the whole wait. No ssh, no connection, no probe: the
+    # point is an agent that nobody has spoken to since it started.
+    sleep $(( wait_min * 60 ))
+
     now=$(date +%H:%M:%S)
-    up=$(( ($(date +%s) - START) / 60 ))
+    up="$wait_min"
 
     out=$(timeout 40 "$CLIENT" "$ADDR" "$PASS" 2>/dev/null)
     frames=$(echo "$out" | sed -n 's/.*video frames *: \([0-9]*\).*/\1/p')
@@ -107,6 +121,5 @@ for i in $(seq 1 "$CYCLES"); do
         } >> "$LOG"
     fi
 
-    [ "$i" -lt "$CYCLES" ] && sleep "$GAP"
 done
 echo "# soak finished" >> "$LOG"
