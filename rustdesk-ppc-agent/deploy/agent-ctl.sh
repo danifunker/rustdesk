@@ -94,11 +94,17 @@ report() {
     fi
 
     if in_aqua; then
-        say "clipboard    : this session CAN reach the pasteboard"
+        say "this shell   : IS the GUI (Aqua) session -- launchctl will work here"
     else
-        say "clipboard    : this session CANNOT reach the pasteboard"
-        say "               -- you are over ssh, or not in the GUI session."
-        say "               Run this from Terminal.app on the G5 itself."
+        say "this shell   : is NOT the GUI session (over ssh, or a detached"
+        say "               screen). launchctl load would find nothing to load,"
+        say "               and a clipboard started from here would not work."
+    fi
+    # Whether the *agent* has the clipboard is a different question from whether
+    # this shell does, and the answer is in its own log -- it says so once per
+    # session, when a peer connects.
+    if [ -f "$LOG" ] && grep -q "clipboard unavailable" "$LOG" 2>/dev/null; then
+        say "agent said   : clipboard unavailable (it was not started in Aqua)"
     fi
 
     # The same code the agent links, if the probes were copied across.
@@ -119,11 +125,27 @@ start)
         say "  scp rustdesk-ppc-agent/deploy/$LABEL.plist ppctiger:~/Library/LaunchAgents/"
         exit 1
     }
+    # Refuse rather than warn. Going on from here produces launchctl's
+    # "nothing found to load", which is true and unhelpful: it means the plist
+    # is LimitLoadToSessionType Aqua and this session is not Aqua, and nothing
+    # in that sentence says what to do about it.
     if ! in_aqua; then
-        say "WARNING: this session cannot reach the pasteboard, so it is not the"
-        say "         GUI session. launchctl will accept the load and start"
-        say "         nothing. Open Terminal.app on the G5 and run this there."
+        say "This shell is not the GUI (Aqua) session, so launchctl here would"
+        say "load nothing and say \"nothing found to load\". Not attempting it."
         echo
+        say "Two ways on, in order of how little they disturb:"
+        say ""
+        say "  1. Run this script from a Terminal window on the G5's own screen"
+        say "     -- physically, or through screen sharing. Not over ssh."
+        say ""
+        say "  2. Log out of the G5 and log back in. The plist is already"
+        say "     installed and enabled, and RunAtLoad starts it at every"
+        say "     login, so no launchctl command is needed at all."
+        echo
+        say "Either way, check afterwards with:  ~/rustdesk-ctl status"
+        say "The agent still runs perfectly over ssh without any of this --"
+        say "the clipboard is the only thing that needs the Aqua session."
+        exit 1
     fi
     stop_screen_agent
     launchctl unload "$PLIST" >/dev/null 2>&1
