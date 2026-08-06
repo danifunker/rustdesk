@@ -104,14 +104,28 @@ next arithmetic-heavy shim is a coin toss. Worth doing:
   all three shims now carry it (`NO_MISCOMPILE` in `build.rs`). The worry that
   GCSE was worth keeping did not survive measuring it.
 - Still open: **why**. The pass name is empirical; nobody has disassembled the
-  faulting instruction. Worth doing only if a second miscompile appears, since
-  the flag costs nothing and the check below catches the class rather than the
-  instance.
+  faulting instruction. This said "worth doing only if a second miscompile
+  appears" — **and one has** (`clipwatch.c`, above), so by its own condition
+  this is now live rather than hypothetical. What would settle it: build the
+  reduced case with `-S` at `-O2` and at `-O2 -fno-gcse`, diff the two, and look
+  at the access GCSE moved. One disassembly, and the explanation stops being a
+  plausible story about misaligned wide loads.
 - **Verify C shims against a reference on the target**,
   the way the converter is. That check is what makes a miscompile survivable,
   and it is cheaper than understanding the compiler.
 
-## 1d. Video is given up on for the whole session if it fails once (recovery done, cause open)
+## ~~1d. Video is given up on for the whole session if it fails once~~ (closed 2026-08-06)
+
+**Closed by decision, with the recovery done and the cause unfound.** Not closed
+because it was explained — it was not. The reasoning: the retry turns the
+symptom from "every peer gets no picture until someone restarts the agent" into
+at most five seconds, and nine hours of trying could not make it happen again.
+Chasing a cause that will not reproduce is worth less than being ready for it,
+and the agent is now ready — see "How to pick this up" below for exactly what it
+will print.
+
+Reopen on the next real occurrence, which is when there will finally be
+something to go on.
 
 `Video::new` runs at login, and if `Capturer::new` fails the session logs
 "serving input only" and never tries again. Seen for real: an agent that had
