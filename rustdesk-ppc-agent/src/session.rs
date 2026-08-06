@@ -932,6 +932,7 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
     // change and bouncing between the two machines for ever.
     let mut clip_sync = crate::clipboard::Sync::new();
     let mut clip_last_poll = std::time::Instant::now();
+    let mut clip_first_poll = true;
     // Said once per session rather than per poll: on a machine where the agent
     // was not started from the LaunchAgent this is every session, for ever.
     if !crate::clipboard::available() {
@@ -1107,7 +1108,17 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
         // text every pass and comparing it.
         if clip_last_poll.elapsed() >= CLIPBOARD_POLL {
             clip_last_poll = std::time::Instant::now();
-            if crate::clipboard::changed() == Some(true) {
+            // The first poll of a session ignores the flag. `kPasteboardModified`
+            // reports changes made by *another* client since our last
+            // synchronise, and measured behaviour is that the first
+            // synchronise in a process reports nothing at all -- so whatever is
+            // already on the G5's clipboard when a peer connects would never be
+            // offered, and the peer would have to wait for someone to copy
+            // something new. Upstream syncs at session start for the same
+            // reason. Once per session, so it costs nothing.
+            let force = clip_first_poll;
+            clip_first_poll = false;
+            if force || crate::clipboard::changed() == Some(true) {
                 if let Some(t) = crate::clipboard::get() {
                     if let Some(t) = clip_sync.offer(t) {
                         log::debug!("sending {} bytes of clipboard text", t.len());

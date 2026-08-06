@@ -53,12 +53,31 @@ it is worth stating plainly:
 | the LaunchAgent, i.e. the Aqua session | works | yes |
 | fully detached (`&`, `nohup`) | **no** — 0x0 display, input only | no |
 
-So **capture is no guide to the clipboard**. If you want clipboard sync, the
-agent has to come from `deploy/com.rustdesk.ppc-agent.plist`, and that has to be
-loaded from Terminal.app *on the G5* — an ssh session reaches a different
-launchd. Only one agent may hold port 21118; see the plist's own header.
+Note the third row can be reached *from* the first: `launchctl -S Aqua` loads
+into the GUI session from an ssh shell. Where the launch is requested and where
+the job ends up are different questions.
 
-Without it everything else works and the agent says so once per session:
+So **capture is no guide to the clipboard**. For clipboard sync the agent has to
+come from `deploy/com.rustdesk.ppc-agent.plist`, and one command does it from
+anywhere, ssh included:
+
+```bash
+ssh ppctiger '~/rustdesk-ctl'          # deploy/agent-ctl.sh, installed there
+ssh ppctiger '~/rustdesk-ctl status'
+ssh ppctiger '~/rustdesk-ctl stop'     # KeepAlive means killing it is not enough
+```
+
+The flag that makes that possible is **`launchctl -S Aqua`**, which is not in
+Leopard's `launchctl load` usage text: plain `launchctl load` filters by the
+*caller's* session type, so from ssh it matches an Aqua-only plist against
+nothing and says `nothing found to load`. `-S Aqua` names the session to load
+*into*. `unload` needs it too.
+
+Only one agent may hold port 21118 — `~/rustdesk-ctl stop` before
+`build-ppc.sh deploy`, or the two take turns failing to bind.
+
+Started any other way, everything except the clipboard works and the agent says
+so once per session:
 
 ```text
 INFO clipboard unavailable: the pasteboard needs the Aqua session, ...

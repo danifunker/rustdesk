@@ -215,6 +215,15 @@ fn main() {
     let (mut control_at, mut refresh_at) = (None, None);
     let mut shot_at: Option<f64> = None;
     let mut shot: Option<(f64, String, Vec<u8>)> = None;
+    // The clipboard round trip needs two runs, because the agent suppresses the
+    // echo of what it was just sent -- which is the whole point of `Sync`. Run
+    // one sends a marker and the agent writes it to the Mac pasteboard; run two
+    // is a fresh session with no memory, so the agent reads the pasteboard and
+    // sends it back. Getting run one's marker back on run two proves the text
+    // went through the real pasteboard and not through anything in this process.
+    let clip_send = std::env::var("PROBE_CLIP").ok();
+    let mut got_clip: Option<(&str, String)> = None;
+    let mut clip_sent_at: Option<f64> = None;
     while start.elapsed() < Duration::from_secs(15) {
         match recv(&mut s, &mut ch) {
             Ok(msg) => match msg.union {
@@ -234,6 +243,20 @@ fn main() {
                     }
                     _ => other += 1,
                 },
+                // Whatever is on the G5's clipboard. Proving this arrives is the
+                // only way to check the pasteboard from off the machine: pbpaste
+                // fails everywhere the agent can be reached from.
+                Some(ref u @ message::Union::clipboard(_))
+                | Some(ref u @ message::Union::multi_clipboards(_)) => {
+                    let carrier = match u {
+                        message::Union::clipboard(_) => "clipboard (16)",
+                        _ => "multi_clipboards (28)",
+                    };
+                    match rustdesk_ppc_agent::clipboard::incoming_text(u) {
+                        Some(t) => got_clip = Some((carrier, t)),
+                        None => println!("  <- {} with no text in it", carrier),
+                    }
+                }
                 Some(message::Union::screenshot_response(r)) => {
                     let at = shot_at.map(|t| start.elapsed().as_secs_f64() - t).unwrap_or(0.0);
                     shot = Some((at, r.msg, r.data.to_vec()));
@@ -278,6 +301,16 @@ fn main() {
             refresh_at = Some(start.elapsed().as_secs_f64());
             println!("  sent Misc::refresh_video_display(0)  <- the refresh button at 1.2.4+");
         }
+        if clip_sent_at.is_none() && start.elapsed() > Duration::from_secs(10) {
+            clip_sent_at = Some(start.elapsed().as_secs_f64());
+            if let Some(text) = clip_send.as_deref() {
+                // Addressed the way the agent addresses us: it reads our version
+                // to choose, and we claim the same modern one a real client does.
+                let m = rustdesk_ppc_agent::clipboard::outgoing(text, "1.4.5", "Linux");
+                send(&mut s, &mut ch, &m).ok();
+                println!("  sent clipboard \"{}\"", text);
+            }
+        }
         if shot_at.is_none() && start.elapsed() > Duration::from_secs(11) {
             let mut req = ScreenshotRequest::new();
             req.display = 0;
@@ -319,6 +352,14 @@ fn main() {
             Some(d) if d <= WINDOW => println!("  {} -> keyframe after {:.2}s", what, d),
             _ => println!("  {} -> no keyframe within {:.1}s", what, WINDOW),
         }
+    }
+
+    match &got_clip {
+        Some((carrier, t)) => println!("  clipboard    -> received via {}: \"{}\"", carrier, t),
+        None => println!("  clipboard    -> nothing arrived from the G5"),
+    }
+    if let Some(sent) = clip_send.as_deref() {
+        println!("  (sent \"{}\"; run again to see whether it comes back)", sent);
     }
 
     // The screenshot is written out rather than merely counted: whether the

@@ -2,10 +2,19 @@
 #
 # Start, stop and check the agent as a LaunchAgent, from the G5 itself.
 #
-# This exists because one step cannot be done over ssh: an ssh login reaches a
-# different launchd from the logged-in GUI ("Aqua") session, and the plist is
-# LimitLoadToSessionType Aqua. Loading it from the wrong place appears to work
-# and starts nothing.
+# It works from anywhere, including ssh, because of `launchctl -S Aqua`.
+#
+# That flag is the whole trick and it is **not in Leopard's `launchctl load`
+# usage text**, which is why the obvious command fails: plain `launchctl load`
+# from an ssh login filters by the caller's own session type, finds a plist
+# marked `LimitLoadToSessionType Aqua`, matches nothing, and says "nothing found
+# to load". `-S Aqua` names the session type to load into, and the job then
+# starts inside the GUI session with the window server *and the pasteboard*.
+# Verified: a probe started this way reports `PasteboardCreate = 0`, and the
+# clipboard round-trips both directions.
+#
+# `unload` needs `-S Aqua` for the same reason, or it says "nothing found to
+# unload" and leaves the agent running.
 #
 # Why bother, when `build-ppc.sh deploy` starts the agent perfectly well over
 # ssh: **the clipboard only works from the Aqua session.** PasteboardCreate
@@ -17,7 +26,7 @@
 #     scp rustdesk-ppc-agent/deploy/agent-ctl.sh ppctiger:~/rustdesk-ctl
 #     ssh ppctiger 'chmod +x ~/rustdesk-ctl'
 #
-# Use, in Terminal.app **on the G5**:
+# Use, from anywhere -- ssh is fine:
 #     ~/rustdesk-ctl            # start it, and say whether the clipboard works
 #     ~/rustdesk-ctl status
 #     ~/rustdesk-ctl stop
@@ -93,12 +102,14 @@ report() {
         say "listening    : no (the lines in $LOG are from an earlier run)"
     fi
 
+    # Which session *this shell* is in no longer decides anything -- `-S Aqua`
+    # does -- but it is worth showing, because it is the difference between what
+    # this shell can do by hand and what the agent can do.
     if in_aqua; then
-        say "this shell   : IS the GUI (Aqua) session -- launchctl will work here"
+        say "this shell   : IS the GUI session (pbpaste works here)"
     else
-        say "this shell   : is NOT the GUI session (over ssh, or a detached"
-        say "               screen). launchctl load would find nothing to load,"
-        say "               and a clipboard started from here would not work."
+        say "this shell   : is not the GUI session, which is fine: -S Aqua"
+        say "               loads the agent into it regardless"
     fi
     # Whether the *agent* has the clipboard is a different question from whether
     # this shell does, and the answer is in its own log -- it says so once per
@@ -125,33 +136,17 @@ start)
         say "  scp rustdesk-ppc-agent/deploy/$LABEL.plist ppctiger:~/Library/LaunchAgents/"
         exit 1
     }
-    # Refuse rather than warn. Going on from here produces launchctl's
-    # "nothing found to load", which is true and unhelpful: it means the plist
-    # is LimitLoadToSessionType Aqua and this session is not Aqua, and nothing
-    # in that sentence says what to do about it.
+    # No session check here any more. `-S Aqua` names the session to load
+    # into, so this works from ssh as well as from a GUI terminal -- which was
+    # the whole difficulty, and cost an evening of "nothing found to load".
     if ! in_aqua; then
-        say "This shell is not the GUI (Aqua) session, so launchctl here would"
-        say "load nothing and say \"nothing found to load\". Not attempting it."
-        echo
-        say "Two ways on, in order of how little they disturb:"
-        say ""
-        say "  1. Run this script from a Terminal window on the G5's own screen"
-        say "     -- physically, or through screen sharing. Not over ssh."
-        say ""
-        say "  2. Log out of the G5 and log back in. The plist is already"
-        say "     installed and enabled, and RunAtLoad starts it at every"
-        say "     login, so no launchctl command is needed at all."
-        echo
-        say "Either way, check afterwards with:  ~/rustdesk-ctl status"
-        say "The agent still runs perfectly over ssh without any of this --"
-        say "the clipboard is the only thing that needs the Aqua session."
-        exit 1
+        say "(running from outside the GUI session; -S Aqua handles that)"
     fi
     stop_screen_agent
-    launchctl unload "$PLIST" >/dev/null 2>&1
+    launchctl unload -S Aqua "$PLIST" >/dev/null 2>&1
     kill_stragglers
     sleep 1
-    if launchctl load -w "$PLIST"; then
+    if launchctl load -w -S Aqua "$PLIST"; then
         say "loaded"
     else
         say "launchctl load failed"
@@ -159,14 +154,15 @@ start)
     fi
     sleep 3
     report
-    if is_loaded && [ -n "`agent_pids`" ] && in_aqua; then
+    if is_loaded && [ -n "`agent_pids`" ]; then
         echo "  Ready. Connect with 192.168.99.116 in the client's ID field."
-        echo "  Copy something on the G5 and paste it on the client to check the clipboard."
+        echo "  Copy something on the G5 and paste it on the client, and the other"
+        echo "  way round, to check the clipboard."
     fi
     ;;
 stop)
     echo "--- stopping the agent ---"
-    launchctl unload "$PLIST" >/dev/null 2>&1 && say "unloaded from launchd"
+    launchctl unload -S Aqua "$PLIST" >/dev/null 2>&1 && say "unloaded from launchd"
     stop_screen_agent
     kill_stragglers
     sleep 1
@@ -175,8 +171,51 @@ stop)
 status)
     report
     ;;
+diag)
+    # Everything needed to tell why `launchctl load` did what it did, in one
+    # paste. `nothing found to load` has several causes that look identical from
+    # the outside, and guessing between them costs a round trip each.
+    echo "--- diag ---"
+    say "user         : `whoami`   HOME=$HOME"
+    say "tty          : `tty 2>/dev/null`"
+    say "console owner: `ls -l /dev/console | awk '{print $3}'`"
+
+    if in_aqua; then
+        say "pbpaste      : works -> this shell can reach the pasteboard"
+    else
+        say "pbpaste      : FAILS  -> this shell cannot reach the pasteboard"
+    fi
+
+    # A second, independent read on which launchd this is. The GUI session's
+    # launchd has the desktop's own agents in it; a login shell's has a handful.
+    n=`launchctl list 2>/dev/null | wc -l | tr -d ' '`
+    say "launchctl list: $n entries"
+    # Not a session test: on Leopard an ssh login's launchctl lists the GUI
+    # applications too, with Carbon PSN labels like [0x0-0xd70d7].com.apple.dock.
+    # Believing otherwise sent one investigation down the wrong path. pbpaste
+    # above is the test that actually distinguishes them.
+    say "  gui apps    : `launchctl list 2>/dev/null | grep -c '^\[0x'` with PSN labels" 
+    say "ours loaded  : `launchctl list 2>/dev/null | grep -c "$LABEL"`"
+
+    if [ -f "$PLIST" ]; then
+        say "plist        : `ls -l "$PLIST" | awk '{print $5" bytes, "$6" "$7" "$8}'`"
+        say "  parses     : `plutil -lint "$PLIST" 2>&1 | sed 's|.*: ||'`"
+        say "  session    : `grep -A1 LimitLoadToSessionType "$PLIST" | tail -1 | sed 's/[<>]/ /g' | awk '{print $2}'`"
+        say "  Disabled   : `grep -c Disabled "$PLIST"` (want 0; 1 means launchctl -w turned it off)"
+    else
+        say "plist        : MISSING at $PLIST"
+    fi
+    say "binary       : `ls -l "$BIN" 2>/dev/null | awk '{print $5" bytes"}' || echo MISSING`"
+
+    echo
+    say "what launchctl actually says:"
+    launchctl load -w -S Aqua "$PLIST" 2>&1 | sed 's/^/    /'
+    say "(exit $?)"
+    echo
+    say "Paste all of the above back."
+    ;;
 *)
-    echo "usage: $0 [start|stop|status]"
+    echo "usage: $0 [start|stop|status|diag]"
     exit 2
     ;;
 esac
