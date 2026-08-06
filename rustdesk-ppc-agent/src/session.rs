@@ -249,6 +249,11 @@ pub struct Peer {
     chan: Option<SecureChannel>,
     pub name: String,
     pub id: String,
+    /// What the peer claims to be, from `LoginRequest` fields 11 and 13. Empty
+    /// from anything old enough not to send them, which readers must treat as
+    /// the oldest possible peer rather than the newest.
+    pub version: String,
+    pub platform: String,
 }
 
 impl Peer {
@@ -325,7 +330,14 @@ pub struct Identity {
 /// and moves on to the next peer.
 pub fn serve(stream: TcpStream, ident: &Identity) -> io::Result<()> {
     stream.set_nodelay(true).ok();
-    let mut peer = Peer { stream, chan: None, name: String::new(), id: String::new() };
+    let mut peer = Peer {
+        stream,
+        chan: None,
+        name: String::new(),
+        id: String::new(),
+        version: String::new(),
+        platform: String::new(),
+    };
 
     log::info!("session start: {}", peer.stream.peer_addr().map(|a| a.to_string()).unwrap_or_default());
 
@@ -408,9 +420,16 @@ pub fn serve(stream: TcpStream, ident: &Identity) -> io::Result<()> {
         };
         peer.name = lr.my_name.clone();
         peer.id = lr.my_id.clone();
+        // What the peer says it is. Load-bearing in the same way our own claim
+        // is, only pointing the other way: `clipboard::peer_takes_multi` reads
+        // it to avoid sending a message the peer's vintage cannot decode. Both
+        // fields are backported; an old client leaves them empty, which every
+        // reader treats as "assume the least".
+        peer.version = lr.version.clone();
+        peer.platform = lr.my_platform.clone();
         log::debug!(
-            "step 4: login_request from '{}' (id '{}'), password {} bytes",
-            peer.name, peer.id, lr.password.len()
+            "step 4: login_request from '{}' (id '{}'), version '{}' platform '{}', password {} bytes",
+            peer.name, peer.id, peer.version, peer.platform, lr.password.len()
         );
 
         if ident.password.is_empty() {
@@ -1092,7 +1111,8 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
                 if let Some(t) = crate::clipboard::get() {
                     if let Some(t) = clip_sync.offer(t) {
                         log::debug!("sending {} bytes of clipboard text", t.len());
-                        peer.send(&crate::clipboard::outgoing(&t))?;
+                        let msg = crate::clipboard::outgoing(&t, &peer.version, &peer.platform);
+                        peer.send(&msg)?;
                     }
                 }
             }
@@ -1297,10 +1317,12 @@ pub fn listen(addr: &str, ident: &Identity) -> io::Result<()> {
 
 /// Upstream's version-to-number arithmetic, from `hbb_common::get_version_number`.
 ///
-/// Reimplemented rather than imported because the whole point is to check what
-/// *the client* will compute from our string, using the client's own rule.
-#[cfg(test)]
-fn version_number(v: &str) -> i64 {
+/// Reimplemented rather than imported because the whole point is to apply the
+/// client's own rule. It is used in both directions: the test below checks what
+/// a client will compute from the version *we* claim, and `clipboard` checks
+/// what *the peer* claims in `LoginRequest.version` before choosing a message it
+/// may not understand.
+pub(crate) fn version_number(v: &str) -> i64 {
     let mut parts = v.split('-');
     let mut n: i64 = 0;
     if let Some(head) = parts.next() {
@@ -1430,6 +1452,8 @@ mod tests {
             chan: None,
             name: String::new(),
             id: String::new(),
+            version: String::new(),
+            platform: String::new(),
         };
 
         // 1. SignedId -> verify with the agent's public key, take its ephemeral pk
@@ -1540,6 +1564,8 @@ mod tests {
             chan: None,
             name: String::new(),
             id: String::new(),
+            version: String::new(),
+            platform: String::new(),
         };
         // Send nothing, exactly as a direct-IP client does; the first thing we
         // must see is an unencrypted `hash`.
@@ -1603,6 +1629,8 @@ mod tests {
             chan: None,
             name: String::new(),
             id: String::new(),
+            version: String::new(),
+            platform: String::new(),
         };
         let hash = match c.recv().unwrap().union {
             Some(message::Union::hash(h)) => h,

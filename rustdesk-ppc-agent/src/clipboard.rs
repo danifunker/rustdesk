@@ -150,12 +150,34 @@ pub fn incoming_text(msg: &message::Union) -> Option<String> {
     }
 }
 
-/// The message to send a peer for `text`.
+/// Does this peer understand `MultiClipboards`?
 ///
-/// Sent as `MultiClipboards` because that is what a client claiming our version
-/// would send, and what its own receive path is built around; a single
-/// `Clipboard` is still accepted in the other direction for older peers.
-pub fn outgoing(text: &str) -> Message {
+/// Upstream's `is_support_multi_clipboard`, reimplemented rather than guessed,
+/// because the guess would be wrong in the interesting direction. **The version
+/// gate runs both ways**: the client picks what to send from what we claim, and
+/// we have to pick from what it claims, which arrives in `LoginRequest.version`
+/// (field 11, backported). Sending field 28 to a 1.2 client would be a clipboard
+/// that vanishes, and it would look exactly like the clipboard not working.
+///
+/// An empty version is an old or unknown peer and gets the old field. So does an
+/// empty platform, which is upstream's own rule.
+pub fn peer_takes_multi(version: &str, platform: &str) -> bool {
+    if crate::session::version_number(version) < crate::session::version_number("1.3.0") {
+        return false;
+    }
+    if platform.is_empty() || platform == "iOS" {
+        return false;
+    }
+    if platform == "Android"
+        && crate::session::version_number(version) < crate::session::version_number("1.3.3")
+    {
+        return false;
+    }
+    true
+}
+
+/// One `Clipboard` holding `text`, compressed if that helps.
+fn entry(text: &str) -> Clipboard {
     let mut c = Clipboard::new();
     c.format = ClipboardFormat::Text.into();
     match compress(text.as_bytes()) {
@@ -168,10 +190,19 @@ pub fn outgoing(text: &str) -> Message {
             c.content = text.as_bytes().to_vec().into();
         }
     }
-    let mut m = MultiClipboards::new();
-    m.clipboards.push(c);
+    c
+}
+
+/// The message to send this peer for `text`, in the carrier it understands.
+pub fn outgoing(text: &str, version: &str, platform: &str) -> Message {
     let mut msg = Message::new();
-    msg.set_multi_clipboards(m);
+    if peer_takes_multi(version, platform) {
+        let mut m = MultiClipboards::new();
+        m.clipboards.push(entry(text));
+        msg.set_multi_clipboards(m);
+    } else {
+        msg.set_clipboard(entry(text));
+    }
     msg
 }
 
@@ -320,11 +351,15 @@ mod tests {
 
     /// Short strings do not compress, and saying they did would make the peer
     /// try to inflate a plain string.
+    /// A modern desktop peer, which is what almost every session is.
+    fn modern(text: &str) -> Message {
+        outgoing(text, "1.4.5", "Mac OS")
+    }
+
     #[test]
     fn text_too_short_to_help_is_not_marked_compressed() {
         assert!(compress(b"hi").is_none());
-        let msg = outgoing("hi");
-        match msg.union {
+        match modern("hi").union {
             Some(message::Union::multi_clipboards(m)) => {
                 assert_eq!(m.clipboards.len(), 1);
                 assert!(!m.clipboards[0].compress);
@@ -337,9 +372,60 @@ mod tests {
     #[test]
     fn what_we_send_is_what_we_would_read_back() {
         for t in ["hi", &long_text(), "unicode: ✂ 📋 é"] {
-            let msg = outgoing(t);
-            assert_eq!(incoming_text(msg.union.as_ref().unwrap()).as_deref(), Some(t));
+            for (v, p) in [("1.4.5", "Mac OS"), ("1.2.0", "Windows"), ("", "")] {
+                let msg = outgoing(t, v, p);
+                assert_eq!(
+                    incoming_text(msg.union.as_ref().unwrap()).as_deref(),
+                    Some(t),
+                    "round trip failed for a {:?}/{:?} peer",
+                    v,
+                    p
+                );
+            }
         }
+    }
+
+    // -- what the peer can actually decode ------------------------------------
+
+    /// The version gate runs in both directions, and this is the direction that
+    /// is easy to forget: sending `MultiClipboards` to a peer older than 1.3.0
+    /// is a clipboard that silently vanishes, and it looks exactly like the
+    /// clipboard not working.
+    #[test]
+    fn an_older_peer_gets_the_field_it_understands() {
+        let old = outgoing("hello", "1.2.0", "Windows");
+        assert!(
+            matches!(old.union, Some(message::Union::clipboard(_))),
+            "a 1.2.0 peer must be sent field 16"
+        );
+        let new = outgoing("hello", "1.3.0", "Windows");
+        assert!(
+            matches!(new.union, Some(message::Union::multi_clipboards(_))),
+            "a 1.3.0 peer takes field 28"
+        );
+    }
+
+    /// A peer that sends neither field is old enough not to have them, so it is
+    /// assumed to be the oldest thing we support rather than the newest.
+    #[test]
+    fn a_peer_that_says_nothing_is_assumed_old() {
+        assert!(!peer_takes_multi("", ""));
+        assert!(matches!(
+            outgoing("hello", "", "").union,
+            Some(message::Union::clipboard(_))
+        ));
+        // A version without a platform is still not enough: upstream excludes
+        // an empty platform explicitly.
+        assert!(!peer_takes_multi("1.4.5", ""));
+    }
+
+    /// Upstream's two exclusions, mirrored rather than reasoned about.
+    #[test]
+    fn the_platform_exclusions_match_upstream() {
+        assert!(!peer_takes_multi("1.4.5", "iOS"), "iOS never takes multi");
+        assert!(!peer_takes_multi("1.3.0", "Android"), "Android needs 1.3.3");
+        assert!(peer_takes_multi("1.3.3", "Android"));
+        assert!(peer_takes_multi("1.4.5", "Linux"));
     }
 
     /// Both carriers, because the agent claims a version where only one of them

@@ -59,6 +59,14 @@ message LoginRequest {
     FileTransfer file_transfer = 7;
     PortForward port_forward = 8;
   }
+  // Fields 11 and 13, backported. The version gates run in both directions:
+  // this agent picks what to *send* by what the peer understands, exactly as
+  // the client picks by what we claim. Without them a modern client's clipboard
+  // reply would be addressed to a peer whose capabilities we had guessed.
+  // `my_platform` is what upstream's `is_support_multi_clipboard` reads
+  // alongside the version, and iOS is the case it excludes.
+  string version = 11;
+  string my_platform = 13;
 }
 
 message ChatMessage { string text = 1; }
