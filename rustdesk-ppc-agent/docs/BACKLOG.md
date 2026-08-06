@@ -480,9 +480,24 @@ AltiVec was the next rung and is **not worth taking**: it would save ~10 ms of a
 [`performance-plan.md`](performance-plan.md) §4 — there is no cheap lever left,
 and half resolution was offered and turned down.
 
-## 8. Multi-monitor
+## 8. Multi-monitor (deferred indefinitely)
 
 `PeerInfo` reports a single display and capture only reads the main one.
+
+**Deferred by decision, 2026-08-05: there is no second monitor to plug into the
+G5.** Not declined on merit — it would simply be built against nothing, and
+every part of it (which display is current, `SwitchDisplay`, per-display
+refresh) is the kind of thing this project has repeatedly found to be wrong in
+ways only real hardware shows. Reopen if a monitor appears.
+
+Worth knowing it is already handled where it costs nothing to handle: the
+`refresh_video_display` index is logged and ignored because there is one
+display, and the client's follow-cursor and follow-window toggles stay hidden
+because they require `pi.displays.length > 1` (§11a).
+
+The speculative "tiles as displays" idea in
+[`performance-plan.md`](performance-plan.md) §9 shares machinery with this but
+is not blocked by it — it declares tiles of one real screen.
 
 ## ~~9. Running as a service~~ (done, with the session question answered)
 
@@ -498,10 +513,18 @@ with no video. A detached `screen` session keeps enough of the login session
 that capture keeps working after ssh closes, which is what `build-ppc.sh deploy`
 now uses.
 
-## 10. Upstream the mrustc fixes
+## 10. Upstream the mrustc fixes (held, not abandoned)
 
 Branch `ppc-upstream` in the mrustc tree holds the two required fixes (semver
 pre-release in `CARGO_PKG_VERSION`, and the Darwin/PowerPC union alignment cap),
 both based on `upstream/master` and independently useful. `ppc-async-fixes` holds
 five async fixes that this agent does not need but which move mrustc materially
 closer to compiling tokio-era code.
+
+**Not proposing them yet, by decision, 2026-08-05: there is no fully working
+tree to propose them from.** A patch to someone else's compiler is a claim that
+it works, and the honest version of that claim needs a build that stands on its
+own rather than one wired to a particular G5 and a particular set of
+`/opt/local` libraries. The fixes are small and stable; the cost of holding them
+is nil, and the cost of sending them early is a maintainer's time and a
+reputation for noise.
