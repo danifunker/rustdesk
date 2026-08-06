@@ -416,15 +416,17 @@ pointer at all.
 Phase 2 by decision. `Clipboard` message exists in the proto; the Mac side is
 `NSPasteboard`/`PasteboardCreate`.
 
-## 7. Conversion speed
+## ~~7. Conversion speed~~ (done)
 
-`argb_to_i420` is ~185 ms against 14 ms for hand-written C at `-O2`. Ranked
-options in [`videoperformance.md`](videoperformance.md#5-conversion-cost): move
-it into a C shim as the other hot paths already are, `get_unchecked` in the hot
-loop, raising the C optimisation level, or AltiVec. Note capture (351 ms)
-dominates, so this is worth less than it looks — see
-[`performance-plan.md`](performance-plan.md) for where it sits against
-everything else.
+`argb_to_i420` was ~185 ms in Rust and is **20 ms** in `convert_shim.c`, with
+`--probe-display` comparing the planes byte for byte against the Rust reference
+on a real frame every time it runs. The same move was made again for the
+screenshot packer: 557 ms to 17.
+
+AltiVec was the next rung and is **not worth taking**: it would save ~10 ms of a
+405 ms full-screen frame, 333 of which is the VRAM read. See
+[`performance-plan.md`](performance-plan.md) §4 — there is no cheap lever left,
+and half resolution was offered and turned down.
 
 ## 8. Multi-monitor
 
