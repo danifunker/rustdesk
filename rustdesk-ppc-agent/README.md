@@ -6,7 +6,9 @@ Blocking I/O, no async runtime, 5 direct dependencies. Built with mrustc; see
 exists rather than a port of `src/server/`.
 
 Status: connects, authenticates and streams VP8 to a real client, with keyboard,
-mouse, trackpad scrolling, the real pointer shape, LAN discovery and screenshots.
+mouse, trackpad scrolling, the real pointer shape, LAN discovery, screenshots
+and clipboard text (see "Where the agent has to run" below — the clipboard is
+the one feature that constrains it).
 It reports itself as **1.4.5**, which is a capability declaration rather than a
 label — see `REPORTED_VERSION` in `src/session.rs`. See
 [`docs/BACKLOG.md`](docs/BACKLOG.md) for what is missing — notably audio,
@@ -38,6 +40,29 @@ here that is this agent, which always listens.)
 
 The G5 also answers the UDP broadcast on 21119 that populates a client's
 local-network list, so it can be picked from there instead of typed (`src/lan.rs`).
+
+### Where the agent has to run
+
+Three contexts, and they are not equivalent — this cost real debugging twice, so
+it is worth stating plainly:
+
+| started from | window server | clipboard |
+|---|---|---|
+| ssh login | works | **no** (`PasteboardCreate` → -4960) |
+| detached `screen` (what `build-ppc.sh deploy` uses) | works | **no** |
+| the LaunchAgent, i.e. the Aqua session | works | yes |
+| fully detached (`&`, `nohup`) | **no** — 0x0 display, input only | no |
+
+So **capture is no guide to the clipboard**. If you want clipboard sync, the
+agent has to come from `deploy/com.rustdesk.ppc-agent.plist`, and that has to be
+loaded from Terminal.app *on the G5* — an ssh session reaches a different
+launchd. Only one agent may hold port 21118; see the plist's own header.
+
+Without it everything else works and the agent says so once per session:
+
+```text
+INFO clipboard unavailable: the pasteboard needs the Aqua session, ...
+```
 
 ### Other commands
 
@@ -144,6 +169,7 @@ python3 -c "from PIL import Image; im=Image.open('/tmp/out/display.png'); \
 | `src/convert.rs`, `src/convert_shim.c` | ARGB → I420, and ARGB → PNG scanlines |
 | `src/encode.rs`, `src/vpx_shim.c` | VP8 via libvpx |
 | `src/png.rs` | PNG for `ScreenshotResponse`, via the system zlib |
+| `src/clipboard.rs`, `src/clipboard_shim.c` | clipboard text, via libzstd and the Pasteboard Manager |
 | `src/input.rs` | Quartz Event Services injection |
 | `src/lan.rs` | answers the UDP discovery broadcast |
 | `probes/` | C programs establishing the hardware floor |
