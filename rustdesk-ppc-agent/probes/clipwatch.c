@@ -15,8 +15,22 @@
  *   - does a change made by another application report modified?
  *   - does our own write report modified on the next tick?
  *
- * Install: see deploy/probe-in-aqua.plist. Copy something on the G5 while it
- * runs, and look for the tick where the text changes.
+ * Install: see deploy/probe-in-aqua.plist, which is the generic way to run any
+ * probe in that session. Copy something on the G5 while this runs and look for
+ * the tick where the text changes.
+ *
+ * Build it with **-fno-gcse**: the first build of this file was at plain -O2 and
+ * died on its first loop iteration, which is docs/BACKLOG.md item 1e happening
+ * a second time in a file with no floating point in it.
+ *
+ * What it established, for anyone who does not need to re-run it:
+ *
+ *   - `PasteboardCreate = 0` from a LaunchAgent, so that session really does
+ *     have the pasteboard, and the write path lands: markers pushed through the
+ *     agent showed up here on the real clipboard.
+ *   - kPasteboardModified fires when *another* client writes -- but **not on
+ *     the first synchronise in a process**, which is why the agent now reads
+ *     the text outright on the first poll of a session.
  */
 #include <ApplicationServices/ApplicationServices.h>
 #include <stdio.h>
