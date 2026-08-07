@@ -227,10 +227,29 @@ mismatch with the rebuild command above, rather than letting dyld say "Bad CPU
 type in executable". A 7450 build (cpusubtype 10) also runs on a G5, so one
 build covers both if you would rather not keep two.
 
-Two other caveats. The C shims are compiled *on* a PowerPC Mac by the remote-cc
+**AltiVec is not a worry on a G4**: every 74xx has it — it is the feature that
+defines the G4, present on the 7400, 7410, 7447/7447A, 7448, 7450 and 7455,
+across the whole line from the Power Mac to the Mac mini. No G3 has it.
+
+Where the AltiVec actually is, though, is not where this section used to say.
+`-maltivec` in `PPC_CPU_FLAGS` emits **nothing** from our own code: gcc does not
+auto-vectorise without `-ftree-vectorize`, which is `-O3`, and the shims build
+at `-O2`. Measured — the same loop compiles to 0 AltiVec instructions at `-O2
+-maltivec` and 10 at `-O3 -ftree-vectorize`. The 42,117 AltiVec instructions in
+the agent are **libvpx's**, whose hand-written VP8 kernels account for 53,648 of
+them in the archive; everything else (libsodium, libzstd, libyuv, libgcc) has
+only a handful of `lvx`/`stvx`/`vxor`, which is vector-register save and restore
+in prologues.
+
+So a **G3 would founder on libvpx, not on the shims**. libvpx here is built with
+runtime CPU detection (`vp8_machine_specific_config`, and the `_rtcd` tables are
+in the archive), so it may well select its generic C paths on a chip without
+AltiVec rather than trapping — but that is an inference from symbol names and
+nobody has tried it. Treat a G3 as unexplored rather than as ruled out.
+
+One other caveat: the C shims are compiled *on* a PowerPC Mac by the remote-cc
 wrapper, so a G4 build still needs a PowerPC machine to build on — the G5 does
-fine, being the same toolchain with different flags. And a **G3 will not work**:
-the shims are built with AltiVec, which no G3 has. That is a port, not a flag.
+fine, being the same toolchain with different flags.
 
 ## Why this port has no audio
 
