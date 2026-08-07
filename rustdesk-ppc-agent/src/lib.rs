@@ -29,7 +29,6 @@ pub mod input;
 pub mod lan;
 pub mod crypto;
 pub mod frame;
-pub mod audio;
 pub mod png;
 pub mod rendezvous;
 pub mod session;

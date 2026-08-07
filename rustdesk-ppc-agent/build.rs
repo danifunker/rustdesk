@@ -60,28 +60,6 @@ fn main() {
         .compile("clipboardshim");
     println!("cargo:rerun-if-changed=src/clipboard_shim.c");
 
-    // Opus. The encoder is four calls, and going through `magnum-opus` would
-    // add a bindgen build step that mrustc has to transpile for the host before
-    // the agent compiles at all. Headers vendored for the same reason vpx's are.
-    cc::Build::new()
-        .file("src/opus_shim.c")
-        .flag(NO_MISCOMPILE)
-        .include("opus-include")
-        .opt_level(2)
-        .compile("opusshim");
-    println!("cargo:rustc-link-lib=static=opus");
-    println!("cargo:rerun-if-changed=src/opus_shim.c");
-
-    // Sound capture. In C because AUHAL wants a real-time callback and an
-    // AudioBufferList, and because 10.5 predates AudioComponentFindNext -- the
-    // Component Manager is the only way to a HAL unit here.
-    cc::Build::new()
-        .file("src/audio_shim.c")
-        .flag(NO_MISCOMPILE)
-        .opt_level(2)
-        .compile("audioshim");
-    println!("cargo:rerun-if-changed=src/audio_shim.c");
-
     // Quartz injection. In C because CGPoint crosses the API by value, and a
     // 16-byte two-double struct is where the 32-bit PowerPC calling convention
     // diverges from a naive extern "C" declaration.
