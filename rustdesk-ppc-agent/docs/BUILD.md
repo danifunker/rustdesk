@@ -23,11 +23,26 @@ Rosetta. Two reasons, in order of importance:
 * **Rosetta refuses anything requiring a G5.** A `ppc970`-stamped binary cannot
   run under it at all, so targeting the G5 would rule out Intel Macs running
   10.6 with Rosetta installed — see "Mac OS X 10.6" below.
-* **The G5 build buys nothing measurable.** Both were run on a G5 and timed with
-  `--probe-display`: the colour conversion is 16-17 ms either way, because it is
-  a C shim and the frame is dominated by the VRAM read. libvpx, libsodium,
-  libyuv and libopus are all already generic `ppc` — the encoder, which is the
-  real CPU cost, is identical in both.
+* **The G5 build buys ~3 ms on an idle poll and nothing on a frame.** Both were
+  run on the G5 and compared directly, five `--probe-display` runs each,
+  alternating:
+
+  | | `argb->rgb` | `argb->i420` | idle change-detection probe |
+  |---|---|---|---|
+  | G4 build | 16-17 ms | 20 ms | 106 ms (106,106,106,106,107) |
+  | G5 build | 16-17 ms | 19-20 ms | 103 ms (103,103,103,105,110) |
+
+  The two conversions — the frame path — are indistinguishable, which figures:
+  they are C shims, and libvpx, libsodium, libyuv and libopus are all already
+  generic `ppc`, so the encoder is *literally the same object code* in both.
+  The change-detection probe is consistently ~3 ms (3%) slower on the G4 build,
+  which is real rather than noise; it is integer sampling across the framebuffer
+  and is where `-mpowerpc64` plausibly helps. That is 3 ms on the cost paid when
+  nothing is happening, and under 1% of a ~405 ms full-screen frame.
+
+  Whole sessions were compared the same way, two rounds alternating: 16 frames
+  and 2 keyframes every time, first frame 0.83-0.91 s on both, and the
+  screenshots byte-identical within each round — same pixels in, same bytes out.
 
 **The G4 build was then run on the G5 through a whole session**, rather than
 being reasoned about: secure handshake, login, 16 video frames with 2 keyframes,
