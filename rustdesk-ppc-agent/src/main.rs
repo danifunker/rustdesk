@@ -1,8 +1,9 @@
 //! `rustdesk-agent` — the controlled side, for PowerPC Mac OS X 10.4/10.5.
 //!
-//! Direct-IP only: a peer connects to this machine's address and port, so no
-//! rendezvous/ID server is needed. Its identity is the Ed25519 public key
-//! printed by `--show-key`, which the peer must know out of band.
+//! Two ways in. A peer connects directly to this machine's address and port,
+//! identifying us by the Ed25519 public key `--show-key` prints, which it must
+//! know out of band; or, with `--server` set, we register with a rendezvous
+//! server and a peer connects by ID from anywhere. See `rendezvous`.
 
 use std::process::exit;
 
@@ -29,6 +30,7 @@ OPTIONS:
     --show-key       print the public key a peer needs, and exit
     --probe-display  report what the framebuffer looks like, and exit
     --probe-live     watch the framebuffer for change and self-test the mouse
+    --probe-audio [S]  self-test the Opus codec, then capture for S seconds (5)
     --probe-keys [X Y]  click at X,Y to take focus, type, photograph (~/keys.ppm)
     --server HOST    register with this rendezvous server and exit. HOST or
                      HOST:PORT (default port 21116). Persisted, so the agent
@@ -60,6 +62,7 @@ fn main() {
     let (mut show_id, mut show_key, mut probe) = (false, false, false);
     let mut probe_live = false;
     let mut probe_keys = false;
+    let mut probe_audio_secs: Option<u64> = None;
     let mut probe_keys_at: Option<(i32, i32)> = None;
     let mut level = log::LevelFilter::Info;
     let mut secure = false;
@@ -98,6 +101,12 @@ fn main() {
             "--probe-display" => {
                 probe = true;
                 i += 1;
+            }
+            "--probe-audio" => {
+                // Optional duration; a few seconds is enough to see the rate.
+                let secs = argv.get(i + 1).and_then(|v| v.parse::<u64>().ok());
+                probe_audio_secs = Some(secs.unwrap_or(5));
+                i += if secs.is_some() { 2 } else { 1 };
             }
             "--probe-live" => {
                 probe_live = true;
@@ -198,6 +207,10 @@ fn main() {
     }
     if probe_live {
         probe_live_fn();
+        return;
+    }
+    if let Some(secs) = probe_audio_secs {
+        probe_audio(secs);
         return;
     }
     if probe_keys {
@@ -440,6 +453,154 @@ fn probe_display() {
 #[cfg(not(target_os = "macos"))]
 fn probe_display() {
     println!("--probe-display is only meaningful on macOS");
+}
+
+/// What the audio path can be checked for without anyone listening.
+///
+/// Two independent halves, because they fail for different reasons and a
+/// machine with nothing plugged into line-in would otherwise make the codec
+/// look untested:
+///
+/// * **The codec**, driven with a synthetic tone. Proves libopus links, encodes
+///   and decodes on this hardware, at the frame size the session will use.
+/// * **The device**, read for a few seconds. Proves the AUHAL opened, the
+///   format is the one Opus needs, and says whether anything is actually
+///   audible -- which no amount of code can decide on its own.
+#[cfg(target_os = "macos")]
+fn probe_audio(seconds: u64) {
+    use rustdesk_ppc_agent::audio::*;
+
+    println!("format   : {} Hz, {} channels, {} ms frames", SAMPLE_RATE, CHANNELS, FRAME_MS);
+    println!("frame    : {} samples/channel, {} interleaved floats", FRAME_SAMPLES, FRAME_FLOATS);
+
+    // --- the codec, on a signal we control --------------------------------
+    let mut enc = match Encoder::new() {
+        Ok(e) => e,
+        Err(e) => {
+            println!("encoder  : FAILED -- {}", e);
+            return;
+        }
+    };
+    // 440 Hz at half scale, the same in both channels.
+    let mut tone = vec![0.0f32; FRAME_FLOATS];
+    for i in 0..FRAME_SAMPLES {
+        let s = (i as f64 * 2.0 * std::f64::consts::PI * 440.0 / SAMPLE_RATE as f64).sin() as f32;
+        tone[i * CHANNELS] = s * 0.5;
+        tone[i * CHANNELS + 1] = s * 0.5;
+    }
+    let packet = match enc.encode(&tone) {
+        Ok(p) => p.to_vec(),
+        Err(e) => {
+            println!("encoder  : FAILED -- {}", e);
+            return;
+        }
+    };
+    println!("encoder  : ok, 440 Hz tone -> {} byte packet", packet.len());
+
+    match Decoder::new() {
+        Ok(mut dec) => {
+            let mut back = vec![0.0f32; FRAME_FLOATS];
+            match dec.decode(&packet, &mut back) {
+                Ok(n) => {
+                    let rms_in = rms(&tone);
+                    let rms_out = rms(&back[..n * CHANNELS]);
+                    println!(
+                        "round trip: {} samples/channel back, rms {:.4} in -> {:.4} out",
+                        n, rms_in, rms_out
+                    );
+                    // Opus is lossy, so this is a sanity band rather than an
+                    // equality: a codec that is working keeps the level, and one
+                    // that is not returns silence or noise.
+                    let ok = n == FRAME_SAMPLES && rms_out > rms_in * 0.5 && rms_out < rms_in * 2.0;
+                    println!("codec    : {}", if ok { "PASS" } else { "SUSPECT -- level is wrong" });
+                }
+                Err(e) => println!("round trip: FAILED -- {}", e),
+            }
+        }
+        Err(e) => println!("decoder  : FAILED -- {}", e),
+    }
+
+    // --- the device --------------------------------------------------------
+    let mut cap = match Capture::open() {
+        Ok(c) => c,
+        Err(e) => {
+            println!("capture  : unavailable -- {}", e);
+            println!("           (the codec result above still stands)");
+            return;
+        }
+    };
+    println!("capture  : open at {} Hz, {} channels", cap.rate, cap.channels);
+    match cap.hw_format() {
+        Some((r, c)) => println!("hardware : {} Hz, {} channels on the device side", r, c),
+        None => println!("hardware : could not be read"),
+    }
+
+    let mut framer = Framer::new();
+    let mut buf = vec![0.0f32; FRAME_FLOATS * 8];
+    let (mut frames, mut bytes, mut peak, mut sum, mut n) = (0usize, 0usize, 0.0f32, 0.0f64, 0usize);
+    let start = std::time::Instant::now();
+    while start.elapsed().as_secs() < seconds {
+        let got = cap.read(&mut buf);
+        if got == 0 {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            continue;
+        }
+        for s in &buf[..got] {
+            let a = s.abs();
+            if a > peak {
+                peak = a;
+            }
+            sum += (*s as f64) * (*s as f64);
+            n += 1;
+        }
+        framer.push(&buf[..got], |frame| {
+            if let Ok(p) = enc.encode(frame) {
+                frames += 1;
+                bytes += p.len();
+            }
+        });
+    }
+    let secs = start.elapsed().as_secs_f64();
+    println!(
+        "captured : {} samples in {:.1}s ({:.0} per channel per second, want {})",
+        n,
+        secs,
+        n as f64 / secs / CHANNELS as f64,
+        SAMPLE_RATE
+    );
+    println!(
+        "level    : peak {:.4}, rms {:.4} -- {}",
+        peak,
+        if n > 0 { (sum / n as f64).sqrt() } else { 0.0 },
+        if peak > 0.0001 { "something is audible" } else { "SILENT (nothing plugged in?)" }
+    );
+    println!(
+        "encoded  : {} frames, {} bytes, {:.1} kbit/s",
+        frames,
+        bytes,
+        if secs > 0.0 { bytes as f64 * 8.0 / secs / 1000.0 } else { 0.0 }
+    );
+    println!("overruns : {}", cap.overruns());
+    let (cbs, errs, last) = cap.stats();
+    println!("callbacks: {}, failed renders: {}, last OSStatus: {}", cbs, errs, last);
+    if cbs == 0 {
+        println!("           -> the unit is not running at all");
+    } else if errs > 0 && frames == 0 {
+        println!("           -> the unit runs but every render fails; format mismatch");
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn rms(v: &[f32]) -> f32 {
+    if v.is_empty() {
+        return 0.0;
+    }
+    (v.iter().map(|s| (*s as f64) * (*s as f64)).sum::<f64>() / v.len() as f64).sqrt() as f32
+}
+
+#[cfg(not(target_os = "macos"))]
+fn probe_audio(_seconds: u64) {
+    println!("--probe-audio is only meaningful on macOS");
 }
 
 /// Time each encoder tuning against a still frame and a small change, and
