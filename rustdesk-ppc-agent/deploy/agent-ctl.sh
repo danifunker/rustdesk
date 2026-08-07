@@ -56,7 +56,9 @@ agent_pids() {
 }
 
 is_loaded() {
-    launchctl list 2>/dev/null | grep -q "$LABEL"
+    # Exact match: the settings app's launchd label contains this one -- see
+    # deploy/agent-helper.sh. A substring test is true whenever it is open.
+    launchctl list 2>/dev/null | awk -v l="$LABEL" '$NF == l { f = 1 } END { exit !f }' 
 }
 
 # Everything holding port 21118 that launchd does not know about: the detached
@@ -198,7 +200,7 @@ diag)
     # Believing otherwise sent one investigation down the wrong path. pbpaste
     # above is the test that actually distinguishes them.
     say "  gui apps    : `launchctl list 2>/dev/null | grep -c '^\[0x'` with PSN labels" 
-    say "ours loaded  : `launchctl list 2>/dev/null | grep -c "$LABEL"`"
+    say "ours loaded  : `launchctl list 2>/dev/null | awk -v l="$LABEL" '$NF == l { f = 1 } END { exit !f }'  && echo yes || echo no`"
 
     if [ -f "$PLIST" ]; then
         say "plist        : `ls -l "$PLIST" | awk '{print $5" bytes, "$6" "$7" "$8}'`"

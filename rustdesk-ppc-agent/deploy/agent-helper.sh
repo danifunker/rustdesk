@@ -49,7 +49,14 @@ ctl() {
 }
 
 is_installed() { [ -x "$BIN" ] && [ -f "$PLIST" ]; }
-is_running()   { launchctl list 2>/dev/null | grep -q "$LABEL"; }
+# Exact match on the label, not a substring. `launchctl list` prints
+# PID<TAB>status<TAB>label, and the settings app registers itself as
+# "[0x0-...].com.rustdesk.ppc-agent.settings" -- which CONTAINS the agent's
+# label, so `grep -q "$LABEL"` is true whenever the window is merely open. That
+# made Stop report "It is still running" every time, and the Start/Stop buttons
+# read the wrong state. The app's bundle id being a prefix of the job label is
+# allowed; code that cannot tell them apart is not.
+is_running()   { launchctl list 2>/dev/null | awk -v l="$LABEL" '$NF == l { f = 1 } END { exit !f }' ; }
 
 # ---------------------------------------------------------------------------
 # Commands invoked from the AppleScript by `do shell script`.
