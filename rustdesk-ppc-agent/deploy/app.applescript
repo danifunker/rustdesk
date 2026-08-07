@@ -1,6 +1,6 @@
--- "RustDesk Agent.app" -- the whole user interface.
+-- "Agent for RustDesk PPC.app" -- the whole user interface.
 --
--- Compiled by deploy/bundle.sh with `osacompile -o "RustDesk Agent.app"`, which
+-- Compiled by deploy/bundle.sh with `osacompile -o "Agent for RustDesk PPC.app"`, which
 -- produces a real application: Apple's own applet Mach-O as the executable,
 -- with this script inside. Everything that touches the system is a
 -- `do shell script` call into Contents/Resources/agent-helper.sh, so the shell
@@ -34,7 +34,7 @@ on run
     repeat
         set statusText to sh(h & " status")
         set menuText to sh(h & " menu")
-        set choice to choose from list splitLines(menuText) with prompt statusText with title "RustDesk Agent" OK button name "Choose" cancel button name "Quit"
+        set choice to choose from list splitLines(menuText) with prompt statusText with title "Agent for RustDesk PPC" OK button name "Choose" cancel button name "Quit"
         if choice is false then exit repeat
         set act to item 1 of choice
 
@@ -102,17 +102,17 @@ on sh(cmd)
 end sh
 
 on note_(msg)
-    display dialog msg buttons {"OK"} default button 1 with title "RustDesk Agent"
+    display dialog msg buttons {"OK"} default button 1 with title "Agent for RustDesk PPC"
 end note_
 
 on confirm_(msg)
-    set r to display dialog msg buttons {"Cancel", "Yes"} default button 1 with title "RustDesk Agent"
+    set r to display dialog msg buttons {"Cancel", "Yes"} default button 1 with title "Agent for RustDesk PPC"
     return (button returned of r) is "Yes"
 end confirm_
 
 on askText(prompt_, current)
     try
-        set r to display dialog prompt_ default answer current buttons {"Cancel", "Save"} default button 2 with title "RustDesk Agent"
+        set r to display dialog prompt_ default answer current buttons {"Cancel", "Save"} default button 2 with title "Agent for RustDesk PPC"
         return text returned of r
     on error number -128
         return false
@@ -121,7 +121,7 @@ end askText
 
 on askHidden(prompt_)
     try
-        set r to display dialog prompt_ default answer "" with hidden answer buttons {"Cancel", "Save"} default button 2 with title "RustDesk Agent"
+        set r to display dialog prompt_ default answer "" with hidden answer buttons {"Cancel", "Save"} default button 2 with title "Agent for RustDesk PPC"
         return text returned of r
     on error number -128
         return false

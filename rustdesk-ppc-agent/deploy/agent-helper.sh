@@ -73,8 +73,11 @@ status)
     key="$(conf_get server_key)";        [ -n "$key" ] && key="(set)" || key="(none)"
     if [ -n "$(conf_get password)" ]; then pw="(set)"; else pw="NOT SET - nobody can connect"; fi
     ip="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo '?')"
-    printf 'Status:      %s\nID:          %s\nThis Mac:    %s\nPassword:    %s\nID server:   %s\nRelay:       %s\nServer key:  %s' \
-        "$st" "$id" "$ip" "$pw" "$srv" "$rly" "$key"
+    # Which CPU this copy was built for. The G4 and G5 downloads carry the same
+    # app name, so without this there is nothing on screen to tell them apart.
+    arch="$(cat "$RES/BUILD-ARCH" 2>/dev/null || echo '?')"
+    printf 'Status:      %s\nID:          %s\nThis Mac:    %s\nPassword:    %s\nID server:   %s\nRelay:       %s\nServer key:  %s\nBuilt for:   %s' \
+        "$st" "$id" "$ip" "$pw" "$srv" "$rly" "$key" "$arch"
     ;;
 menu)
     # The action list, which depends on what is installed. Newline separated;

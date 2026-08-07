@@ -55,6 +55,12 @@ case "$SUBTYPE" in
     0)   ARCH=ppc ;;
     *)   ARCH="ppc-subtype$SUBTYPE" ;;
 esac
+case "$ARCH" in
+    g5)  ARCH_LABEL="G5" ;;
+    g4)  ARCH_LABEL="G4" ;;
+    g3)  ARCH_LABEL="G3" ;;
+    *)   ARCH_LABEL="$ARCH" ;;
+esac
 STAGE_REMOTE="/tmp/rd-bundle-$$"
 NAME="rustdesk-agent-$ARCH"
 TARBALL="$OUT_DIR/$NAME.tar.gz"
@@ -79,7 +85,7 @@ APP_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$HERE/Cargo.toml" | head -1)
 # is a stub that pulls in libgcc_s.1.1 and libgcc_ehs.1.1 -- a one-level copy
 # produces a bundle that links and then fails to load.
 # ---------------------------------------------------------------------------
-ssh "$HOST" "STAGE='$STAGE_REMOTE' NAME='$NAME' APP_VERSION='$APP_VERSION' bash -s" <<'REMOTE'
+ssh "$HOST" "STAGE='$STAGE_REMOTE' NAME='$NAME' APP_VERSION='$APP_VERSION' ARCH_LABEL='$ARCH_LABEL' bash -s" <<'REMOTE'
 set -euo pipefail
 rm -rf "$STAGE"
 
@@ -94,7 +100,7 @@ rm -rf "$STAGE"
 # anything. osacompile produces a real application with Apple's own Mach-O
 # executable, which has neither problem. See app.applescript's header.
 mkdir -p "$STAGE/$NAME"
-APP="$STAGE/$NAME/RustDesk Agent.app"
+APP="$STAGE/$NAME/Agent for RustDesk PPC.app"
 osacompile -o "$APP" /tmp/app.applescript \
     || { echo "error: the app's AppleScript does not compile" >&2; exit 1; }
 
@@ -108,14 +114,24 @@ cp /tmp/install.sh "$D/install.sh"
 cp /tmp/agent-ctl.sh "$D/rustdesk-ctl"
 cp /tmp/com.rustdesk.ppc-agent.plist.in "$D/com.rustdesk.ppc-agent.plist.in"
 cp /tmp/agent-helper.sh "$D/agent-helper.sh"
+# Written rather than worked out at runtime: the app should be able to say which
+# CPU it carries without re-deriving it from the Mach-O header on the target.
+printf '%s' "$ARCH_LABEL" > "$D/BUILD-ARCH"
 chmod +x "$D/rustdesk-agent" "$D/install.sh" "$D/rustdesk-ctl" "$D/agent-helper.sh"
 
 # osacompile names every applet "Applet". Give it ours.
-defaults write "$APP/Contents/Info" CFBundleName "RustDesk Agent"
-defaults write "$APP/Contents/Info" CFBundleDisplayName "RustDesk Agent"
-defaults write "$APP/Contents/Info" CFBundleIdentifier "com.rustdesk.ppc-agent.settings"
-defaults write "$APP/Contents/Info" CFBundleShortVersionString "$APP_VERSION"
-defaults write "$APP/Contents/Info" CFBundleVersion "$APP_VERSION"
+# -string on every one of these: without it `defaults` parses the value as a
+# plist expression, and "0.1.0 (G5)" fails with "Could not parse".
+defaults write "$APP/Contents/Info" CFBundleName -string "Agent for RustDesk PPC"
+defaults write "$APP/Contents/Info" CFBundleDisplayName -string "Agent for RustDesk PPC"
+defaults write "$APP/Contents/Info" CFBundleIdentifier -string "com.rustdesk.ppc-agent.settings"
+defaults write "$APP/Contents/Info" CFBundleVersion -string "$APP_VERSION"
+# The G4 and G5 builds are separate downloads with the same app name, so the CPU
+# goes in the version string and in Get Info: once both are dragged out of their
+# folders there is otherwise nothing to tell them apart, and installing the
+# wrong one only fails at install time.
+defaults write "$APP/Contents/Info" CFBundleShortVersionString -string "$APP_VERSION ($ARCH_LABEL)"
+defaults write "$APP/Contents/Info" CFBundleGetInfoString -string "$APP_VERSION for $ARCH_LABEL"
 plutil -lint "$APP/Contents/Info.plist" >/dev/null \
     || { echo "error: Info.plist is malformed after editing" >&2; exit 1; }
 
@@ -242,9 +258,10 @@ cat <<EOM
 
 To install on a PowerPC Mac:
     scp $TARBALL user@mac:~/
-    then on the Mac: untar it, drag "RustDesk Agent" where you want it,
-    and double-click it. It offers to install the background service.
+    then on the Mac: untar it, drag "Agent for RustDesk PPC" into
+    /Applications (or anywhere), and double-click it. It offers to
+    install the background service.
 
 Or headless, over ssh:
-    ssh user@mac "tar xzf $NAME.tar.gz && sh '$NAME/RustDesk Agent.app/Contents/Resources/install.sh' --yes --password <pw>"
+    ssh user@mac "tar xzf $NAME.tar.gz && sh '$NAME/Agent for RustDesk PPC.app/Contents/Resources/install.sh' --yes --password <pw>"
 EOM
