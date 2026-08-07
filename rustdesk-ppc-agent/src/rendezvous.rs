@@ -192,6 +192,14 @@ fn run(reg: &Registration, ident: &Identity) -> io::Result<()> {
                     pk.uuid = reg.uuid.clone();
                     pk.pk = reg.public_key.clone();
                     send(&socket, |m| m.set_register_pk(pk))?;
+                } else if !registered {
+                    // The server already had our key, so it will never ask for
+                    // it again and no RegisterPkResponse is coming. Saying so
+                    // here matters: without it a restart against a server that
+                    // remembers us logs "registering" and then nothing at all,
+                    // which reads exactly like a hang.
+                    registered = true;
+                    log::info!("rendezvous: registered, reachable as id {}", reg.id);
                 }
             }
             Some(rendezvous_message::Union::register_pk_response(r)) => {
@@ -515,9 +523,39 @@ fn uuid_v4() -> String {
 // Upstream's `hbb_common::AddrMangle`, which folds a v4 address and a
 // microsecond timestamp together so a socket address is not plainly visible in
 // a datagram. Reimplemented rather than imported: the agent does not depend on
-// hbb_common, and the encoding is nine lines. Byte-for-byte identical to both
-// the 1.1.8 and the current version -- only a v6 branch was added since, which
-// this agent has no way to use.
+// hbb_common, and the encoding is nine lines. The wire format is byte-for-byte
+// identical to both the 1.1.8 and the current version -- only a v6 branch was
+// added since, which this agent has no way to use.
+//
+// **Upstream computes this in `u128`; we use two `u64` halves, and that is not
+// a stylistic choice.** 32-bit PowerPC gcc has no `__int128`, so mrustc emits a
+// software `uint128_t` -- `struct { uint64_t lo, hi; }` -- and the byte-swap
+// that `u128::to_le_bytes` owes a big-endian machine does not survive it. The
+// first build to reach the G5 decoded a peer at `192.168.99.153` as
+// `0.128.63.223`, while the same bytes on x86 decoded correctly.
+//
+// That was survivable in the relay paths, which pass `socket_addr` through as
+// opaque bytes, and fatal in the local-network one, which re-encodes both the
+// peer's address and our own -- so the caller would have been handed nonsense
+// to dial. The intermediate value needs 82 bits, so the arithmetic is done as
+// an explicit (hi, lo) pair: every operation is then native on any target, and
+// `u64::to_le_bytes` is the only endian-sensitive step left.
+//
+// `mangle_matches_the_wire_format` pins this with a vector computed
+// independently, which is the test that would have caught it.
+
+/// Split the 82-bit intermediate into the two halves the wire format wants.
+///
+/// `v = ((ip + tm) << 49) | (tm << 17) | (port + (tm & 0xFFFF))`, where the top
+/// term needs 33 bits and so straddles bit 64.
+fn mangle_parts(ip: u32, port: u16, tm: u32) -> (u64, u64) {
+    let a = ip as u64 + tm as u64; // <= 2^33
+    let p = port as u64 + (tm as u64 & 0xFFFF); // <= 0x1FFFE, 17 bits
+    // `a << 49` keeps only a's low 15 bits in `lo`; the rest lands in `hi`.
+    let lo = p | ((tm as u64) << 17) | (a << 49);
+    let hi = a >> 15;
+    (hi, lo)
+}
 
 /// Encode a v4 address. A v6 address yields an empty vector, which the server
 /// treats as absent, rather than a v6 encoding the 1.1.8 proto cannot express.
@@ -526,14 +564,16 @@ fn mangle_encode(addr: SocketAddr) -> Vec<u8> {
         SocketAddr::V4(v4) => v4,
         SocketAddr::V6(_) => return Vec::new(),
     };
-    let tm = (SystemTime::now()
+    let tm = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::ZERO)
-        .as_micros() as u32) as u128;
-    let ip = u32::from_le_bytes(v4.ip().octets()) as u128;
-    let port = v4.port() as u128;
-    let v = ((ip + tm) << 49) | (tm << 17) | (port + (tm & 0xFFFF));
-    let bytes = v.to_le_bytes();
+        .as_micros() as u32;
+    let ip = u32::from_le_bytes(v4.ip().octets());
+    let (hi, lo) = mangle_parts(ip, v4.port(), tm);
+
+    let mut bytes = [0u8; 16];
+    bytes[..8].copy_from_slice(&lo.to_le_bytes());
+    bytes[8..].copy_from_slice(&hi.to_le_bytes());
     let mut trailing_zeroes = 0;
     for b in bytes.iter().rev() {
         if *b == 0 {
@@ -558,10 +598,18 @@ fn mangle_decode(bytes: &[u8]) -> SocketAddr {
     }
     let mut padded = [0u8; 16];
     padded[..bytes.len()].copy_from_slice(bytes);
-    let number = u128::from_le_bytes(padded);
-    let tm = (number >> 17) & (u32::MAX as u128);
-    let ip = (((number >> 49).wrapping_sub(tm)) as u32).to_le_bytes();
-    let port = (number & 0xFFFFFF).wrapping_sub(tm & 0xFFFF);
+    let mut half = [0u8; 8];
+    half.copy_from_slice(&padded[..8]);
+    let lo = u64::from_le_bytes(half);
+    half.copy_from_slice(&padded[8..]);
+    let hi = u64::from_le_bytes(half);
+
+    // The mirror of `mangle_parts`: `tm` is bits 17..49, and the top term
+    // straddles bit 64, so it is reassembled from both halves.
+    let tm = (lo >> 17) & (u32::MAX as u64);
+    let a = (lo >> 49) | (hi << 15);
+    let ip = (a.wrapping_sub(tm) as u32).to_le_bytes();
+    let port = (lo & 0xFFFFFF).wrapping_sub(tm & 0xFFFF);
     SocketAddr::V4(SocketAddrV4::new(
         Ipv4Addr::new(ip[0], ip[1], ip[2], ip[3]),
         port as u16,
@@ -584,6 +632,35 @@ mod tests {
             let a: SocketAddr = addr.parse().unwrap();
             assert_eq!(mangle_decode(&mangle_encode(a)), a, "{}", addr);
         }
+    }
+
+    /// The wire format, pinned against a vector computed independently of this
+    /// code. A round-trip test cannot catch a byte-order fault -- it agrees
+    /// with itself -- and that is exactly the fault the first PowerPC build
+    /// had, decoding a peer at 192.168.99.153 as 0.128.63.223. See the note
+    /// above `mangle_parts`.
+    #[test]
+    fn mangle_matches_the_wire_format() {
+        let bytes = [
+            0xf6, 0xa8, 0xf0, 0xac, 0x68, 0x24, 0x70, 0xfe, 0x2f, 0x0d, 0x01,
+        ];
+        assert_eq!(
+            mangle_decode(&bytes),
+            "192.168.99.116:21118".parse::<SocketAddr>().unwrap()
+        );
+
+        // And the encoder produces those same bytes for that address at the
+        // timestamp they were generated with.
+        let (hi, lo) = mangle_parts(
+            u32::from_le_bytes([192, 168, 99, 116]),
+            21118,
+            0x1234_5678,
+        );
+        let mut out = [0u8; 16];
+        out[..8].copy_from_slice(&lo.to_le_bytes());
+        out[8..].copy_from_slice(&hi.to_le_bytes());
+        assert_eq!(&out[..bytes.len()], &bytes[..]);
+        assert!(out[bytes.len()..].iter().all(|b| *b == 0), "trailing padding");
     }
 
     /// Port 0 and address 0 encode to all-zero bytes, which the trailing-zero
