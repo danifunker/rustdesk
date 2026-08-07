@@ -165,13 +165,17 @@ need nothing.) So there are two steps — bundle, then install:
 ./deploy/bundle.sh                   # produces target/rustdesk-agent-g5.tar.gz
 ```
 
-**There is one download.** It is built for the G4 (`cpusubtype` 10 / `ppc7400`)
-and runs on a G4, on a G5, and under Rosetta — which is why it targets the older
-CPU rather than the faster one: **Rosetta refuses anything requiring a G5**, and
-the G5 build was measured to buy nothing. Both were timed on a G5 with
-`--probe-display`: the colour conversion is 16-17 ms either way, because it is a
-C shim and the frame is dominated by the VRAM read, while libvpx and every
-static library are already generic `ppc`. See [`docs/BUILD.md`](docs/BUILD.md).
+**There is one download, and the agent inside it picks its own CPU.** The agent
+is a universal Mach-O with a `ppc7400` and a `ppc970` slice, graded by the
+kernel at `exec` — a G5 runs the G5 build, a G4 runs the G4 build, and Rosetta
+(which refuses anything requiring a G5) takes the 7400 slice. Nothing is chosen
+at install time. The app says which: *Built for: G4 and G5 (this Mac runs the G5
+build)*.
+
+The settings app itself is a single generic binary, because it is a window that
+shells out to a script — only the agent is worth fusing. What the G5 slice
+actually buys is ~3 ms on an idle poll and nothing on a frame; the measurements
+are in [`docs/BUILD.md`](docs/BUILD.md).
 
 A G3 will not work: the shims and libvpx use AltiVec, which no G3 has.
 
