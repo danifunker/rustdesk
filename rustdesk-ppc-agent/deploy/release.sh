@@ -2,16 +2,21 @@
 #
 # Build, package and verify release artifacts. Run on the host; needs the G5.
 #
-#   ./deploy/release.sh                     # one build, for every supported Mac
-#   ./deploy/release.sh --arch "g5 g4 universal"   # the variants, if ever needed
+#   ./deploy/release.sh                     # one download: universal
+#   ./deploy/release.sh --arch g4           # a single-CPU build, if ever needed
 #
-# ONE ARTIFACT, TARGETING THE OLDEST HARDWARE THIS SUPPORTS. The G5 build was
-# measured against the G4 one on a G5 and buys nothing: the colour conversion is
-# a C shim that times the same either way (16-17 ms both), libvpx and every
-# static library are already generic ppc, and the frame is dominated by the VRAM
-# read. Meanwhile a G5-stamped binary is strictly worse in one way that matters
-# -- Rosetta on 10.6 refuses anything requiring a G5 -- so G4 is not a
-# compromise, it is the correct target.
+# ONE ARTIFACT, AND THE AGENT INSIDE IT IS UNIVERSAL. The .app carries a fat
+# agent binary with a ppc7400 and a ppc970 slice, and the kernel grades them at
+# exec -- so a G5 runs the G5 build, a G4 runs the G4 build, and Rosetta (which
+# refuses anything requiring a G5) takes the 7400 slice. Nothing is chosen at
+# install time and there is no launcher; see deploy/make-universal.sh.
+#
+# The settings app itself is a single generic-ppc binary and stays that way: it
+# is a window that shells out to a script, so which CPU it was tuned for cannot
+# matter. Only the agent is worth fusing.
+#
+# The g4/g5 builds are prerequisites of the universal one and are built
+# automatically; ask for them by name only if you want them as artifacts too.
 #   ./deploy/release.sh --version 0.2.0
 #   ./deploy/release.sh --skip-build        # re-package what is already built
 #
@@ -39,7 +44,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HOST="${PPC_HOST:-ppctiger}"
 export SSH_AUTH_SOCK="${SSH_AUTH_SOCK:-/tmp/ssh-agent-ppc.sock}"
 
-ARCHES="g4"
+ARCHES="universal"
 VERSION=""
 SKIP_BUILD=0
 ALLOW_DIRTY=0
@@ -128,7 +133,22 @@ fi
 REL="$HERE/target/release/$VERSION"
 mkdir -p "$REL"
 
-echo "releasing $VERSION from $GIT_REF, for: $ARCHES"
+# The universal artifact is a fuse of the two thin builds, so it needs them
+# built whether or not they are wanted as downloads. Kept apart because a
+# prerequisite is not an artifact: building g4 and g5 must not put them in the
+# release directory unless they were asked for.
+BUILDS=""
+for a in $ARCHES; do
+    case "$a" in
+        universal) BUILDS="$BUILDS g4 g5" ;;
+        *)         BUILDS="$BUILDS $a" ;;
+    esac
+done
+BUILDS="$(echo "$BUILDS" | tr ' ' '\n' | sort -u | tr '\n' ' ')"
+
+echo "releasing $VERSION from $GIT_REF"
+echo "  artifacts: $ARCHES"
+echo "  builds:    $BUILDS"
 echo
 
 # Host-side tests first. They cover the protocol decisions, and they are free
@@ -141,36 +161,10 @@ else
 fi
 echo
 
-for arch in $ARCHES; do
-    # The universal build is not a compile: it fuses the two that came before,
-    # so it must run last and it reuses their verification rather than
-    # repeating it. `otool` on a fat file disassembles one slice, so the
-    # instruction scan genuinely cannot be redone here -- which is why the g4
-    # slice is checked as a thin binary above, before it is fused.
-    if [ "$arch" = "universal" ]; then
-        echo "=============================================================="
-        echo "  universal   (fuses the g4 and g5 builds)"
-        echo "=============================================================="
-        for need in g4 g5; do
-            [ -f "$HERE/target/ppc-$need/rustdesk-agent" ] || {
-                echo "error: universal needs the $need build; run without --arch" >&2; exit 1; }
-        done
-        OUT="$HERE/target/ppc-universal"
-        ./deploy/make-universal.sh "$HERE/target/ppc-g4/rustdesk-agent" \
-                                   "$HERE/target/ppc-g5/rustdesk-agent" \
-                                   "$OUT/rustdesk-agent" | sed 's/^/  /'
-        echo "  bundling ..."
-        PPC_BIN="$OUT/rustdesk-agent" PPC_BUNDLE_OUT="$HERE/target" ./deploy/bundle.sh | sed 's/^/    /'
-        SRC_TAR="$HERE/target/rustdesk-agent-universal.tar.gz"
-        [ -f "$SRC_TAR" ] || { echo "error: bundle.sh produced no $SRC_TAR" >&2; exit 1; }
-        _tarname="$REL/rustdesk-agent-$VERSION$(name_suffix universal).tar.gz"
-        mv "$SRC_TAR" "$_tarname"
-        echo "  -> $(basename "$_tarname")"
-        make_dmg universal "$_tarname"
-        echo
-        continue
-    fi
-
+# ---------------------------------------------------------------------------
+# Compile and verify each CPU. Artifacts come afterwards.
+# ---------------------------------------------------------------------------
+for arch in $BUILDS; do
     CPU="$(flags_for "$arch")"
     WANT_SUBTYPE="$(subtype_for "$arch")"
     [ -n "$CPU" ] || { echo "error: unknown arch '$arch'" >&2; exit 1; }
@@ -222,6 +216,30 @@ for arch in $ARCHES; do
             exit 1
         fi
         echo "    no 64-bit instructions: this will run on a $arch"
+    fi
+
+    echo
+done
+
+# ---------------------------------------------------------------------------
+# Package what was actually asked for.
+# ---------------------------------------------------------------------------
+for arch in $ARCHES; do
+    echo "=============================================================="
+    echo "  packaging $arch"
+    echo "=============================================================="
+
+    if [ "$arch" = "universal" ]; then
+        # Fusing, not compiling. It reuses the two builds' verification rather
+        # than repeating it: `otool` on a fat file disassembles one slice, so
+        # the instruction scan genuinely cannot be redone here -- which is why
+        # the g4 slice is scanned as a thin binary above, before it is fused.
+        BIN="$HERE/target/ppc-universal/rustdesk-agent"
+        ./deploy/make-universal.sh "$HERE/target/ppc-g4/rustdesk-agent" \
+                                   "$HERE/target/ppc-g5/rustdesk-agent" \
+                                   "$BIN" | sed 's/^/  /'
+    else
+        BIN="$HERE/target/ppc-$arch/rustdesk-agent"
     fi
 
     echo "  bundling ..."

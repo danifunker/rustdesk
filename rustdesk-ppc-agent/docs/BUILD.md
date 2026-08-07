@@ -14,50 +14,56 @@ Everything below is about getting to the point where that command works.
 
 ---
 
-## One build, targeting the oldest hardware
+## One download, and the agent inside picks its own CPU
 
-There is a single artifact and it is compiled for the **G4** (`-mcpu=7450`,
-which stamps `cpusubtype` 10 / `ppc7400`). It runs on a G4, on a G5, and under
-Rosetta. Two reasons, in order of importance:
+There is a single artifact. The **agent** in it is a universal Mach-O with a
+`ppc7400` and a `ppc970` slice, and the kernel grades them at `exec`: a G5 runs
+the G5 build, a G4 runs the G4 build, and Rosetta — which refuses anything
+requiring a G5 — takes the 7400 slice. Nothing is chosen at install time and
+there is no launcher script. Measured, not assumed: a fat binary whose two
+slices print their own names prints the G5 one on the G5, each slice extracted
+with `lipo -thin` prints what it claims, and in the shipped agent the `ppc970`
+slice holds 340,714 64-bit instructions against the `ppc7400` slice's zero — so
+they are genuinely different builds rather than one relabelled.
 
-* **Rosetta refuses anything requiring a G5.** A `ppc970`-stamped binary cannot
-  run under it at all, so targeting the G5 would rule out Intel Macs running
-  10.6 with Rosetta installed — see "Mac OS X 10.6" below.
-* **The G5 build buys ~3 ms on an idle poll and nothing on a frame.** Both were
-  run on the G5 and compared directly, five `--probe-display` runs each,
-  alternating:
+The app reports which one the machine is using: *Built for: G4 and G5 (this Mac
+runs the G5 build)*.
 
-  | | `argb->rgb` | `argb->i420` | idle change-detection probe |
-  |---|---|---|---|
-  | G4 build | 16-17 ms | 20 ms | 106 ms (106,106,106,106,107) |
-  | G5 build | 16-17 ms | 19-20 ms | 103 ms (103,103,103,105,110) |
+**The settings app is a single generic `ppc7400` binary and stays that way.** It
+is a window that shells out to a script, so which CPU it was tuned for cannot
+matter. Only the agent is worth fusing, and fusing it doubles the download —
+8 MB against 4.
 
-  The two conversions — the frame path — are indistinguishable, which figures:
-  they are C shims, and libvpx, libsodium, libyuv and libopus are all already
-  generic `ppc`, so the encoder is *literally the same object code* in both.
-  The change-detection probe is consistently ~3 ms (3%) slower on the G4 build,
-  which is real rather than noise; it is integer sampling across the framebuffer
-  and is where `-mpowerpc64` plausibly helps. That is 3 ms on the cost paid when
-  nothing is happening, and under 1% of a ~405 ms full-screen frame.
+### What the G5 slice is worth
 
-  Whole sessions were compared the same way, two rounds alternating: 16 frames
-  and 2 keyframes every time, first frame 0.83-0.91 s on both, and the
-  screenshots byte-identical within each round — same pixels in, same bytes out.
+Small, and worth having only because it is free. Both builds were run on the G5
+and compared directly, five `--probe-display` runs each, alternating:
 
-**The G4 build was then run on the G5 through a whole session**, rather than
-being reasoned about: secure handshake, login, 16 video frames with 2 keyframes,
-first frame 0.87 s, the 1.2.4+ refresh button producing a keyframe in 0.72 s
-with the control correctly producing none, and a 1920x1080 screenshot in 0.75 s.
-`--probe-display` on the same binary reports the C colour shim byte-identical to
-the Rust reference for both `argb->rgb` and `argb->i420`. Those numbers match
-what the G5 build has always produced.
+| | `argb->rgb` | `argb->i420` | idle change-detection probe |
+|---|---|---|---|
+| G4 build | 16-17 ms | 20 ms | 106 ms (106,106,106,106,107) |
+| G5 build | 16-17 ms | 19-20 ms | 103 ms (103,103,103,105,110) |
 
-The G5 and universal (fat, `lipo`-fused) paths still work and are one flag
-away — `--arch "g5 g4 universal"` — but nothing needs them, and each extra
-variant is another download for someone to pick wrongly.
+The two conversions — the frame path — are indistinguishable, which figures:
+they are C shims, and libvpx, libsodium, libyuv and libopus are all already
+generic `ppc`, so **the encoder is literally the same object code in both**. The
+change-detection probe is consistently ~3 ms (3%) slower on the G4 build, which
+is real rather than noise; it is integer sampling across the framebuffer, where
+`-mpowerpc64` plausibly helps. That is 3 ms on the cost paid when nothing is
+happening, and under 1% of a ~405 ms full-screen frame.
+
+Whole sessions were compared the same way, two rounds alternating: 16 frames and
+2 keyframes every time, first frame 0.83-0.91 s on both, and the screenshots
+byte-identical within each round.
+
+So the G4 build alone would have been perfectly serviceable — but since the
+choice costs nothing at runtime, the G5 keeps its 3 ms.
 
 **A G3 will not work.** The shims and libvpx use AltiVec, which no G3 has. See
 `BACKLOG.md` §13.
+
+**Single-CPU builds** are still one flag away — `--arch g4` or `--arch g5` — and
+produce a thin binary. Nothing needs them.
 
 ---
 
@@ -77,7 +83,7 @@ Four more steps are Darwin's alone and equally not portable:
 | step | tool | why it cannot move |
 |---|---|---|
 | relocating the bundled libraries | `install_name_tool`, `otool` | cctools; no Linux build here |
-| fusing the G4 and G5 builds | `lipo` | same |
+| fusing the G4 and G5 agent builds | `lipo` | same |
 | compiling the settings app | Apple `gcc` + Cocoa | Objective-C against 10.5 frameworks |
 | building the disk image | `hdiutil` + the Finder | HFS+ image, and the window layout is set by AppleScript |
 

@@ -173,7 +173,15 @@ say "mrustc at $MRUSTC_DIR"
 # One standard library per CPU, and they are not interchangeable: a G5 libcore
 # is full of 64-bit instructions that trap on a G4. Check the ones this run
 # needs before spending fifteen minutes finding out.
-WANT="${ARCHES:-g5 g4 universal}"
+# `universal` is a fuse of the g4 and g5 builds, so it needs both standard
+# libraries even though it is one artifact.
+WANT=""
+for a in ${ARCHES:-universal}; do
+    case "$a" in
+        universal) WANT="$WANT g4 g5" ;;
+        *)         WANT="$WANT $a" ;;
+    esac
+done
 for a in $WANT; do
     case "$a" in
         g5|g4|g3)
