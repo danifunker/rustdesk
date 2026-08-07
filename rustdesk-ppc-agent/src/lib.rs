@@ -30,6 +30,7 @@ pub mod lan;
 pub mod crypto;
 pub mod frame;
 pub mod png;
+pub mod rendezvous;
 pub mod session;
 pub mod sys;
 pub mod zstd_frame;

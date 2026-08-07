@@ -33,14 +33,17 @@ pub const DIRECT_PORT: u16 = 21118;
 
 /// What this machine answers with.
 pub struct Announcement {
-    /// The agent's own RustDesk id. Only used to recognise our own broadcast --
-    /// what we *advertise* is an IP address, for the reason in `serve`.
+    /// The agent's own RustDesk id. Used to recognise our own broadcast, and --
+    /// when `registered` -- as what we advertise. See `serve`.
     pub id: String,
     pub hostname: String,
     pub username: String,
     /// Where the agent is actually listening. Discovery can only advertise a
     /// machine reachable on `DIRECT_PORT`; see `serve`.
     pub port: u16,
+    /// Whether a rendezvous server can resolve `id`. Decides which of the two
+    /// things `serve` advertises, and nothing else.
+    pub registered: bool,
 }
 
 /// Which of our addresses routes towards `peer`.
@@ -63,7 +66,11 @@ pub fn serve(me: Announcement) {
     // A machine that appears in the list and then refuses to connect is worse
     // than one that never appears: the failure looks like a broken agent rather
     // than a configuration it cannot express.
-    if me.port != DIRECT_PORT {
+    //
+    // Only a concern when we advertise an address. A registered agent
+    // advertises its id, and the port it listens on stops mattering -- the
+    // rendezvous server arranges the connection.
+    if !me.registered && me.port != DIRECT_PORT {
         log::warn!(
             "lan discovery disabled: the agent is on port {}, and a discovered \
              peer can only be dialled on {}",
@@ -106,34 +113,36 @@ pub fn serve(me: Announcement) {
             // would put us in a conversation with ourselves.
             continue;
         }
-        // **The id must be our IP address, not the agent's RustDesk id.**
+        // **What we advertise has to be something the client can dial.**
         //
-        // It is what the client dials, and it only connects directly when the
-        // id *is* an IP (`client.rs`: `if is_ip_str(peer)`). Given anything
-        // else it asks a rendezvous server to resolve it -- and this agent is
-        // registered with none, so the machine appeared in the list and then
-        // failed to connect, with nothing arriving here to show for it.
+        // The client connects directly only when the id *is* an IP
+        // (`client.rs`: `if is_ip_str(peer)`). Given anything else it asks a
+        // rendezvous server to resolve it. So which answer is correct depends
+        // entirely on whether we are registered with one:
         //
-        // Reporting the address is also the honest answer for a direct-IP-only
-        // agent: it is the only place we can actually be reached. The hostname
-        // still identifies the machine in the client's list.
+        // * **Registered** -- advertise `me.id`. It is the better answer: an id
+        //   survives a DHCP lease expiring and works from another subnet,
+        //   neither of which an address does.
+        // * **Not registered** -- advertise the address. It is the only place
+        //   we can actually be reached, and advertising an unresolvable id is
+        //   what once made the machine appear in the list and then refuse to
+        //   connect, with nothing arriving here to show for it.
         //
-        // **This is the line to change when a rendezvous server exists.** Once
-        // the agent registers with one, `me.id` becomes resolvable and is the
-        // better answer: an id survives a DHCP lease expiring and works from
-        // another subnet, neither of which an address does. Until then it
-        // resolves nowhere, and advertising it is what made the machine appear
-        // in the list and then refuse to connect.
-        let ip = match local_ip_towards(from) {
-            Some(ip) => ip.to_string(),
-            None => {
-                log::debug!("lan discovery: no route back to {}, not answering", from);
-                continue;
+        // The hostname identifies the machine in the client's list either way.
+        let advertised = if me.registered {
+            me.id.clone()
+        } else {
+            match local_ip_towards(from) {
+                Some(ip) => ip.to_string(),
+                None => {
+                    log::debug!("lan discovery: no route back to {}, not answering", from);
+                    continue;
+                }
             }
         };
         let mut pong = PeerDiscovery::new();
         pong.cmd = "pong".to_owned();
-        pong.id = ip;
+        pong.id = advertised;
         pong.hostname = me.hostname.clone();
         pong.username = me.username.clone();
         pong.platform = "Mac OS".to_owned();

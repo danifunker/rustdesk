@@ -108,6 +108,38 @@ impl Config {
         self.get("salt").unwrap_or_default().to_owned()
     }
 
+    /// The machine identifier a rendezvous server pins our id to.
+    ///
+    /// **It must never change.** hbbs stores the first uuid it sees for an id
+    /// and answers `UUID_MISMATCH` to anything else for ever after, so a
+    /// regenerated uuid does not re-register, it locks us out. Upstream derives
+    /// this from hardware; a persisted random value is equivalent and avoids
+    /// depending on Leopard's identifiers, exactly as `id` does.
+    pub fn uuid(&mut self) -> Vec<u8> {
+        if let Some(hex) = self.get("uuid") {
+            if let Some(b) = hex_decode(hex) {
+                if !b.is_empty() {
+                    return b;
+                }
+            }
+        }
+        let mut b = vec![0u8; 16];
+        sodiumoxide::randombytes::randombytes_into(&mut b);
+        self.set("uuid", &hex_encode(&b));
+        let _ = self.store();
+        b
+    }
+
+    /// The rendezvous server to register with, if one is configured.
+    pub fn rendezvous_server(&self) -> String {
+        self.get("rendezvous_server").unwrap_or_default().to_owned()
+    }
+
+    pub fn set_rendezvous_server(&mut self, s: &str) -> io::Result<()> {
+        self.set("rendezvous_server", s);
+        self.store()
+    }
+
     pub fn password(&self) -> String {
         self.get("password").unwrap_or_default().to_owned()
     }
@@ -194,6 +226,33 @@ mod tests {
         let (pk2, sk2) = c2.key_pair();
         assert_eq!(pk2.0, pk.0, "public key must persist");
         assert_eq!(sk2.0[..], sk.0[..], "secret key must persist");
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// The whole point of the field: a uuid that moves locks the agent out of
+    /// its own id, permanently, with `UUID_MISMATCH`.
+    #[test]
+    fn uuid_is_stable_across_reloads() {
+        let mut c = tmp_cfg();
+        let path = c.path.clone();
+        let u = c.uuid();
+        assert_eq!(u.len(), 16);
+        assert_ne!(u, vec![0u8; 16], "must not be all zeroes");
+        assert_eq!(c.uuid(), u, "stable within one instance");
+        assert_eq!(Config::load(path.clone()).uuid(), u, "stable across a reload");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn rendezvous_server_roundtrips() {
+        let mut c = tmp_cfg();
+        let path = c.path.clone();
+        assert_eq!(c.rendezvous_server(), "");
+        c.set_rendezvous_server("rustdesk.example.org").unwrap();
+        assert_eq!(
+            Config::load(path.clone()).rendezvous_server(),
+            "rustdesk.example.org"
+        );
         let _ = std::fs::remove_file(path);
     }
 

@@ -18,6 +18,7 @@ USAGE:
     rustdesk-agent [--listen ADDR] [--port N]
     rustdesk-agent --password PASS
     rustdesk-agent --show-id | --show-key
+    rustdesk-agent --server HOST | --no-server
     rustdesk-agent --probe-display
 
 OPTIONS:
@@ -29,6 +30,11 @@ OPTIONS:
     --probe-display  report what the framebuffer looks like, and exit
     --probe-live     watch the framebuffer for change and self-test the mouse
     --probe-keys [X Y]  click at X,Y to take focus, type, photograph (~/keys.ppm)
+    --server HOST    register with this rendezvous server and exit. HOST or
+                     HOST:PORT (default port 21116). Persisted, so the agent
+                     registers on every start after this. Makes the machine
+                     reachable by ID from anywhere, not just by IP on this LAN.
+    --no-server      stop registering, and exit
     --config PATH    config file (default ~/.rustdesk-ppc-agent.conf)
     --secure         require the signed_id/public_key exchange. OFF by default:
                      a client connecting by IP does not take part, and enabling
@@ -57,6 +63,9 @@ fn main() {
     let mut probe_keys_at: Option<(i32, i32)> = None;
     let mut level = log::LevelFilter::Info;
     let mut secure = false;
+    // `None` leaves whatever is in the config; `Some("")` is how --no-server
+    // clears it, which a plain absent flag must not do.
+    let mut set_server: Option<String> = None;
 
     let mut i = 0;
     while i < argv.len() {
@@ -129,6 +138,14 @@ fn main() {
                 secure = true;
                 i += 1;
             }
+            "--server" => {
+                set_server = Some(need(i));
+                i += 2;
+            }
+            "--no-server" => {
+                set_server = Some(String::new());
+                i += 1;
+            }
             "-h" | "--help" => usage(),
             _ => usage(),
         }
@@ -152,6 +169,18 @@ fn main() {
             exit(1);
         });
         println!("password set");
+        return;
+    }
+    if let Some(s) = set_server {
+        cfg.set_rendezvous_server(&s).unwrap_or_else(|e| {
+            eprintln!("error: could not save config: {}", e);
+            exit(1);
+        });
+        if s.is_empty() {
+            println!("rendezvous server cleared; the agent is direct-IP only");
+        } else {
+            println!("rendezvous server set to {}", s);
+        }
         return;
     }
     if show_id {
@@ -196,10 +225,30 @@ fn main() {
         height,
         secure,
     };
+    let server = cfg.rendezvous_server();
     println!("agent id  : {}", ident.id);
     println!("public key: {}", base64(&pk.0));
     println!("display   : {}x{}", width, height);
     println!("mode      : {}", if secure { "secure (peer must know our key)" } else { "direct-IP, UNENCRYPTED" });
+    println!("server    : {}", if server.is_empty() { "none -- direct IP only".to_owned() } else { server.clone() });
+
+    // Register with a rendezvous server, so the agent is reachable by id from
+    // anywhere rather than only by address on this subnet. Its own thread: see
+    // `rendezvous` for why, and for what a peer arriving that way looks like.
+    //
+    // A peer that arrives through the server always takes part in the key
+    // exchange, so those sessions are encrypted whatever `--secure` says; the
+    // flag governs the direct-IP listener, where the client does not.
+    if !server.is_empty() {
+        let reg = rustdesk_ppc_agent::rendezvous::Registration {
+            server: server.clone(),
+            id: ident.id.clone(),
+            uuid: cfg.uuid(),
+            public_key: pk.0.to_vec(),
+        };
+        let ident = ident.clone();
+        std::thread::spawn(move || rustdesk_ppc_agent::rendezvous::serve(reg, ident));
+    }
 
     // Answer the broadcast that populates a client's local-network list. Its
     // own thread: see `lan` for why it is not in the session loop.
@@ -209,6 +258,7 @@ fn main() {
             hostname: ident.hostname.clone(),
             username: std::env::var("USER").unwrap_or_else(|_| "admin".to_owned()),
             port,
+            registered: !server.is_empty(),
         };
         std::thread::spawn(move || rustdesk_ppc_agent::lan::serve(me));
     }

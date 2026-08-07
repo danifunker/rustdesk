@@ -170,7 +170,9 @@ const MAX_LOGIN_ATTEMPTS: u32 = 10;
 /// would silently have moved the client onto paths this agent does not
 /// implement, with no error anywhere. Pinned here, and guarded by a test that
 /// encodes exactly which gates have been earned.
-const REPORTED_VERSION: &str = "1.4.5";
+/// Also sent to the rendezvous server in `LocalAddr` and `RelayResponse`, which
+/// is how the *server* decides what we understand -- see `rendezvous`.
+pub(crate) const REPORTED_VERSION: &str = "1.4.5";
 
 /// Is there anything to read without waiting?
 ///
@@ -328,6 +330,10 @@ impl Peer {
 
 /// Everything the session needs from configuration, resolved once at startup so
 /// the per-connection path does no I/O of its own.
+///
+/// `Clone` because `rendezvous` runs each peer on its own thread and sets
+/// `secure` per connection: the route the peer took decides it, not us.
+#[derive(Clone)]
 pub struct Identity {
     pub id: String,
     pub salt: String,
