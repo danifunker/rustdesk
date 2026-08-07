@@ -23,6 +23,16 @@ export SSH_AUTH_SOCK="${SSH_AUTH_SOCK:-/tmp/ssh-agent-ppc.sock}"
 export PPC_HOST="$HOST"   # the remote cc/ar wrappers read this, not $HOST
 export PPC_CPU_FLAGS="${PPC_CPU_FLAGS:--mcpu=970 -maltivec}"
 
+export PPC_JOBS="${PPC_JOBS:-2}"
+# Where the toolchain lives, so this is not wired to one person's home
+# directory. build-release.sh checks each of them before it starts anything.
+export MRUSTC_DIR="${MRUSTC_DIR:-$HOME/repos/mrustc}"
+export PPC_TOOLS_DIR="${PPC_TOOLS_DIR:-$HOME/repos/rusty-backup}"
+# On the *Mac*: the static libraries the agent links.
+export PPC_LIBS_DIR="${PPC_LIBS_DIR:-/Users/admin/ppc-libs/lib}"
+export PPC_SHIM="${PPC_SHIM:-$PPC_TOOLS_DIR/rb-cli-ppc/shim/ppc-compat.c}"
+export PPC_LDFLAGS="${PPC_LDFLAGS:--L/opt/local/lib -L$PPC_LIBS_DIR -latomic -lMacportsLegacySupport -lgcc_s.1 -lsodium -lvpx}"
+
 # The Rust standard library has to match the CPU the agent is built for, and
 # this used to be a hardcoded `-g5` path.
 #
@@ -43,16 +53,13 @@ esac
 if [ -n "${PPC_STDLIB:-}" ]; then
     STDLIB="$PPC_STDLIB"
 elif [ -n "$STD_TAG" ]; then
-    STDLIB="$HOME/repos/mrustc/output-1.74.0-powerpc-apple-darwin-$STD_TAG"
+    STDLIB="$MRUSTC_DIR/output-1.74.0-powerpc-apple-darwin-$STD_TAG"
 else
     echo "error: cannot tell which standard library suits PPC_CPU_FLAGS='$PPC_CPU_FLAGS'." >&2
     echo "       Set PPC_STDLIB to the matching mrustc output directory." >&2
     exit 1
 fi
 [ -d "$STDLIB" ] || { echo "error: no standard library at $STDLIB" >&2; exit 1; }
-export PPC_JOBS="${PPC_JOBS:-2}"
-export PPC_SHIM="${PPC_SHIM:-$HOME/repos/rusty-backup/rb-cli-ppc/shim/ppc-compat.c}"
-export PPC_LDFLAGS="${PPC_LDFLAGS:--L/opt/local/lib -L/Users/admin/ppc-libs/lib -latomic -lMacportsLegacySupport -lgcc_s.1 -lsodium -lvpx}"
 
 mkdir -p "$OUT"
 
@@ -91,11 +98,11 @@ for shim in "$HERE"/src/*.c; do
     fi
 done
 
-SODIUM_LIB_DIR=/Users/admin/ppc-libs/lib \
-CC_powerpc_apple_darwin="$HOME/repos/rusty-backup/scripts/ppc-cc-remote.py" \
-AR_powerpc_apple_darwin="$HOME/repos/rusty-backup/scripts/ppc-ar-remote.py" \
+SODIUM_LIB_DIR="$PPC_LIBS_DIR" \
+CC_powerpc_apple_darwin="$PPC_TOOLS_DIR/scripts/ppc-cc-remote.py" \
+AR_powerpc_apple_darwin="$PPC_TOOLS_DIR/scripts/ppc-ar-remote.py" \
 MRUSTC_TARGET_VER=1.74 \
-  "$HOME/repos/mrustc/bin/minicargo" "$HERE" \
+  "$MRUSTC_DIR/bin/minicargo" "$HERE" \
   --vendor-dir "$HERE/vendor" \
   --target powerpc-apple-darwin \
   -L "$STDLIB" \
