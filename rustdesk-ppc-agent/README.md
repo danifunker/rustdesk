@@ -183,27 +183,54 @@ plist to its label rather than its path, so a second copy fights the first.
 
 ### Running it on a G4
 
-Yes, with a rebuild — nothing in the agent is G5-specific, but the *binary* is.
-`-mcpu=970` makes the linker stamp the Mach-O `cpusubtype` 100
-(`CPU_SUBTYPE_POWERPC_970`), and a binary stamped that way will not load on a
-G4 at all. Every library it depends on, static and dynamic alike, is already
-generic `ppc`; only the agent's own flags need changing:
+Yes, with a rebuild of the agent — and the dependencies do **not** need one.
 
 ```bash
 PPC_CPU_FLAGS='-mcpu=7450 -maltivec' ./build-ppc.sh
 ./deploy/bundle.sh                       # names the tarball -g4 by itself
 ```
 
-That produces cpusubtype 10 (`7450`), which a G5 will also run, so one G4 build
-covers both if you would rather not keep two. `install.sh` reads the subtype and
-the machine's `machine` output and refuses a mismatch with the command above
-rather than letting dyld say "Bad CPU type in executable".
+The reason it is only the agent is worth stating precisely, because the obvious
+check gives the wrong answer. **The Mach-O `cpusubtype` is not evidence.** It
+records what the linker stamped — 100 (`CPU_SUBTYPE_POWERPC_970`) for the agent,
+generic `ppc` for every library — and says nothing about the instructions
+inside. `deploy/check-cpu-compat.sh` disassembles and counts instead, and what
+it finds is:
 
-Two caveats. The C shims are compiled *on* a PowerPC Mac by the remote-cc
+| | 64-bit ops | `mtocrf` | `lwsync` |
+|---|---|---|---|
+| the agent, `-mcpu=970` | **362,000** | 1,073 | 334 |
+| libvpx, libopus, libsodium, libyuv | none | yes | 15 (vpx) |
+| the 7 bundled dylibs | none | yes | 57 |
+| Apple's Leopard `libSystem.B.dylib` | none | 498 | none |
+
+The decisive column is the first. `-mcpu=970` implies `-mpowerpc64`, so a G5
+build is full of `std`, `ld`, `rldicl`, `mulld` and `fcfid` — 64-bit
+instructions that trap on a G4 — while the dependencies contain **not one**.
+They were built with no `-mcpu` at all (libsodium's and opus's `config.log`
+confirm plain `-g -O2`), so they are already G4 code and only the agent's flags
+need changing.
+
+`mtocrf` appears everywhere including Apple's own `libSystem.B.dylib`, which
+Leopard shipped to every G4 Mac — so it is settled by the strongest evidence
+available: it degrades to `mtcrf` on a pre-2.01 processor, and if it did not, no
+G4 would boot. **`lwsync` is the one loose end.** It is in libvpx, libatomic and
+libgcc_s, it appears in no Apple library scanned, and gcc here never generates
+it from C at any `-mcpu` — so it comes from those libraries' own assembly and a
+rebuild would not obviously remove it. It should execute as a full `sync` on a
+7450 by the reserved-bit rule, which is correct if slower, but that is the
+architecture's promise rather than a measurement. **Nobody has run any of this
+on a G4.**
+
+`install.sh` reads the subtype and the machine's `machine` output and refuses a
+mismatch with the rebuild command above, rather than letting dyld say "Bad CPU
+type in executable". A 7450 build (cpusubtype 10) also runs on a G5, so one
+build covers both if you would rather not keep two.
+
+Two other caveats. The C shims are compiled *on* a PowerPC Mac by the remote-cc
 wrapper, so a G4 build still needs a PowerPC machine to build on — the G5 does
-fine, since it is the same toolchain and only the flags differ. And a **G3 will
-not work**: the shims are built with AltiVec, which no G3 has. That is a real
-port rather than a flag change, and nobody has tried it.
+fine, being the same toolchain with different flags. And a **G3 will not work**:
+the shims are built with AltiVec, which no G3 has. That is a port, not a flag.
 
 ## Why this port has no audio
 
