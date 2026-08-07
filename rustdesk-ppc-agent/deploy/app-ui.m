@@ -138,27 +138,43 @@
 {
     NSMutableString *done = [NSMutableString string];
     NSString *v;
+    /* Counted separately from the text the helper returns. Reporting "nothing
+     * changed" whenever that text came back empty conflated a genuine no-op
+     * with a command that failed silently, which is exactly what happened when
+     * an older installed agent did not know --relay-server. */
+    int changed = 0;
 
     v = [idServerField stringValue];
-    if (![v isEqualToString:[self conf:@"rendezvous_server"]])
+    if (![v isEqualToString:[self conf:@"rendezvous_server"]]) {
+        changed++;
         [done appendString:[self run:[NSArray arrayWithObjects:@"set", @"server", v, nil]]];
+    }
 
     v = [relayField stringValue];
-    if (![v isEqualToString:[self conf:@"relay_server"]])
+    if (![v isEqualToString:[self conf:@"relay_server"]]) {
+        changed++;
         [done appendString:[self run:[NSArray arrayWithObjects:@"set", @"relay", v, nil]]];
+    }
 
     v = [keyField stringValue];
-    if (![v isEqualToString:[self conf:@"server_key"]])
+    if (![v isEqualToString:[self conf:@"server_key"]]) {
+        changed++;
         [done appendString:[self run:[NSArray arrayWithObjects:@"set", @"key", v, nil]]];
+    }
 
     v = [passwordField stringValue];
-    if ([v length] > 0)
+    if ([v length] > 0) {
+        changed++;
         [done appendString:[self run:[NSArray arrayWithObjects:@"set", @"password", v, nil]]];
+    }
 
     [self refresh];
-    if ([[done stringByTrimmingCharactersInSet:
-          [NSCharacterSet whitespaceAndNewlineCharacterSet]] length] == 0)
-        [self alert:@"Nothing was changed."];
+    if (changed == 0)
+        [self alert:@"Nothing was changed \u2014 the fields already match what the agent has."];
+    else if ([[done stringByTrimmingCharactersInSet:
+               [NSCharacterSet whitespaceAndNewlineCharacterSet]] length] == 0)
+        [self alert:@"The agent did not report anything back, so the change may "
+                    @"not have been applied. Try Show Log."];
     else
         [self alert:done];
 }

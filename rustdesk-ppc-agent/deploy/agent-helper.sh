@@ -110,17 +110,39 @@ showlog) tail -25 "$PREFIX/agent.log" 2>/dev/null || echo "No log yet - the agen
 set)
     # $2 = field, $3 = value. Every one of these goes through the agent binary
     # rather than editing the config file, so validation lives in one place.
+    #
+    # The output and exit status are BOTH used, because they used to not be:
+    # this ran the binary with `>/dev/null 2>&1 && echo ...`, so a command that
+    # failed printed nothing and exited 0, and the window reported "Nothing was
+    # changed" for a setting that had silently not been applied. A failure has
+    # to look different from a no-op.
     A="$(agent_bin)"
     field="$2"; value="${3:-}"
     case "$field" in
         password)
             if [ "${#value}" -lt 6 ]; then echo "The password must be at least 6 characters."; exit 0; fi
-            "$A" --password "$value" >/dev/null 2>&1 && echo "Password set." || echo "Could not save it." ;;
+            out="$("$A" --password "$value" 2>&1)"; rc=$? ;;
         server)
-            if [ -z "$value" ]; then "$A" --no-server >/dev/null 2>&1 && echo "Registration turned off; this Mac is reachable by IP only."
-            else "$A" --server "$value" >/dev/null 2>&1 && echo "ID server set to $value." || echo "Could not save it."; fi ;;
-        key)   "$A" --key "$value" >/dev/null 2>&1 && { [ -n "$value" ] && echo "Server key set." || echo "Server key cleared."; } ;;
-        relay) "$A" --relay-server "$value" >/dev/null 2>&1 && { [ -n "$value" ] && echo "Relay server set to $value." || echo "Relay override cleared."; } ;;
+            if [ -z "$value" ]; then out="$("$A" --no-server 2>&1)"; rc=$?
+            else out="$("$A" --server "$value" 2>&1)"; rc=$?; fi ;;
+        key)   out="$("$A" --key "$value" 2>&1)"; rc=$? ;;
+        relay) out="$("$A" --relay-server "$value" 2>&1)"; rc=$? ;;
+        *)     echo "Unknown setting: $field"; exit 0 ;;
+    esac
+    if [ "$rc" -ne 0 ]; then
+        # Usage text is long and unhelpful in a dialog; the first line plus the
+        # likely cause is what someone can act on.
+        echo "Could not set $field."
+        echo "The agent refused it (exit $rc). This usually means the installed"
+        echo "agent is older than this app and does not know that setting yet;"
+        echo "reinstall from the same download as this app."
+        exit 0
+    fi
+    case "$field" in
+        password) echo "Password set." ;;
+        server)   [ -n "$value" ] && echo "ID server set to $value." || echo "Registration turned off; this Mac is reachable by IP only." ;;
+        key)      [ -n "$value" ] && echo "Server key set." || echo "Server key cleared." ;;
+        relay)    [ -n "$value" ] && echo "Relay server set to $value." || echo "Relay override cleared." ;;
     esac
     # A running agent reads its config at startup, so a change means a restart.
     if is_running; then

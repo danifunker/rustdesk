@@ -67,7 +67,14 @@ STAGE_REMOTE="/tmp/rd-bundle-$$"
 NAME="rustdesk-agent-$ARCH"
 TARBALL="$OUT_DIR/$NAME.tar.gz"
 
-echo "bundling $(basename "$BIN") (cpusubtype $SUBTYPE -> $ARCH) via $HOST"
+# Say which binary, and when it was built. The default is target/ppc, while
+# release.sh builds into target/ppc-<arch> -- so an ad-hoc `bundle.sh` after a
+# `release.sh` happily packages whatever `build-ppc.sh` left behind last, which
+# may be days older than the source. That is not hypothetical: it shipped an
+# agent with no --relay-server into an app whose window had a relay field, and
+# the only symptom was the window saying "Nothing was changed".
+echo "bundling $BIN"
+echo "  built $(date -r "$BIN" '+%Y-%m-%d %H:%M'), cpusubtype $SUBTYPE -> $ARCH, via $HOST"
 
 # Everything the target needs that is not the binary itself. Sent first so the
 # remote half is a single ssh round trip.
@@ -231,6 +238,25 @@ if ! ( cd "$D" && ./rustdesk-agent --config "$STAGE/probe.conf" --show-id >/dev/
 fi
 echo "  bundle runs: $( cd "$D" && ./rustdesk-agent --config "$STAGE/probe.conf" --show-id )"
 rm -f "$STAGE/probe.conf" "$STAGE/err"
+
+# Every setting the window drives has to exist in the binary being packaged.
+# This is the check that would have caught the stale-binary case above: the app
+# and the agent ship together, so a flag the helper calls and the agent does not
+# know is a packaging fault, catchable here and nowhere else.
+# `--help` exits 2 (it is the usage path), and this script runs under
+# `set -o pipefail`, so piping it straight into grep reports failure whatever
+# grep found. Capture once, then match.
+AGENT_HELP="$("$D/rustdesk-agent" --help 2>&1 || true)"
+for flag in --password --server --no-server --key --relay-server --show-id --show-key; do
+    echo "$AGENT_HELP" | grep -q -- "$flag" || {
+        echo "error: the agent being packaged does not support $flag." >&2
+        echo "       It is older than this app -- rebuild it before bundling:" >&2
+        echo "         ./build-ppc.sh          (writes target/ppc)" >&2
+        echo "       or pass PPC_BIN=... to bundle the one you meant." >&2
+        exit 1
+    }
+done
+echo "  agent supports every setting the window offers"
 
 # The app's non-interactive half, which is everything except the dialogs: it
 # reads the config, finds the binary and formats the status block. A typo in any
