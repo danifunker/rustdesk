@@ -21,6 +21,10 @@
  * newer than 10.4 API except where noted, because the agent supports Tiger.
  * Cocoa names are the pre-10.12 ones (NSTitledWindowMask, not
  * NSWindowStyleMaskTitled) for the same reason.
+ *
+ * ASCII ONLY IN STRING LITERALS. gcc 4.0.1 compiles as C89, where \uXXXX is not
+ * a universal character name -- it warns and does not encode what was meant. Use
+ * "--" rather than an em dash and so on.
  */
 #import <Cocoa/Cocoa.h>
 
@@ -48,6 +52,8 @@
 }
 - (id)initWithHelper:(NSString *)path;
 - (void)show;
+- (void)about:(id)sender;
+- (void)openProject:(id)sender;
 @end
 
 @implementation AgentController
@@ -170,7 +176,7 @@
 
     [self refresh];
     if (changed == 0)
-        [self alert:@"Nothing was changed \u2014 the fields already match what the agent has."];
+        [self alert:@"Nothing was changed - the fields already match what the agent has."];
     else if ([[done stringByTrimmingCharactersInSet:
                [NSCharacterSet whitespaceAndNewlineCharacterSet]] length] == 0)
         [self alert:@"The agent did not report anything back, so the change may "
@@ -207,6 +213,38 @@
     [self alert:[NSString stringWithFormat:
         @"Someone connecting to this Mac by IP can pin this key:\n\n%@",
         [self run:[NSArray arrayWithObject:@"showkey"]]]];
+}
+
+/* The fork this came from, so someone holding only the .app can find the
+ * source. Shown in About and opened by the button there. */
+#define PROJECT_URL @"https://github.com/danifunker/rustdesk"
+
+- (void)openProject:(id)sender
+{
+    [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:PROJECT_URL]];
+}
+
+- (void)about:(id)sender
+{
+    NSBundle *b = [NSBundle mainBundle];
+    NSString *vers = [[b infoDictionary] objectForKey:@"CFBundleShortVersionString"];
+    NSString *arch = [NSString stringWithContentsOfFile:
+                      [[b resourcePath] stringByAppendingPathComponent:@"BUILD-ARCH"]];
+    if (!arch) arch = @"?";
+
+    NSAlert *a = [[[NSAlert alloc] init] autorelease];
+    [a setMessageText:@"Agent for RustDesk PPC"];
+    [a setInformativeText:[NSString stringWithFormat:
+        @"Version %@\n"
+        @"Built for PowerPC %@, Mac OS X 10.4 and 10.5\n\n"
+        @"A RustDesk agent - the controlled side - for PowerPC Macs, "
+        @"built with mrustc because RustDesk itself needs an async runtime this "
+        @"hardware has no compiler for.\n\n"
+        @"Source and issues:\n%@\n(branch ppc-agent)",
+        (vers ? vers : @"?"), arch, PROJECT_URL]];
+    [a addButtonWithTitle:@"OK"];
+    [a addButtonWithTitle:@"Open GitHub Page"];
+    if ([a runModal] == NSAlertSecondButtonReturn) [self openProject:nil];
 }
 
 /* Asked for, and answered honestly rather than with controls that do nothing.
@@ -371,8 +409,10 @@
 
 /* A menu bar has to be built by hand in a nib-less app, and without one there
  * is no Quit item and no Cmd-Q -- which on 10.5 leaves the user force-quitting
- * a settings window. */
-static void installMenuBar(void)
+ * a settings window. Built after the controller exists so About has something
+ * to target: a menu item whose target is nil goes to the responder chain, and
+ * a plain NSObject controller is not in it. */
+static void installMenuBar(id controller)
 {
     NSMenu *bar = [[[NSMenu alloc] init] autorelease];
     NSMenuItem *appItem = [[[NSMenuItem alloc] init] autorelease];
@@ -380,6 +420,16 @@ static void installMenuBar(void)
     [NSApp setMainMenu:bar];
 
     NSMenu *appMenu = [[[NSMenu alloc] init] autorelease];
+    NSMenuItem *aboutItem = [appMenu addItemWithTitle:@"About Agent for RustDesk PPC"
+                                               action:@selector(about:)
+                                        keyEquivalent:@""];
+    [aboutItem setTarget:controller];
+    [appMenu addItem:[NSMenuItem separatorItem]];
+    NSMenuItem *siteItem = [appMenu addItemWithTitle:@"Project Page on GitHub"
+                                              action:@selector(openProject:)
+                                       keyEquivalent:@""];
+    [siteItem setTarget:controller];
+    [appMenu addItem:[NSMenuItem separatorItem]];
     [appMenu addItemWithTitle:@"Quit Agent for RustDesk PPC"
                        action:@selector(terminate:)
                 keyEquivalent:@"q"];
@@ -390,11 +440,11 @@ int main(int argc, const char *argv[])
 {
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
     [NSApplication sharedApplication];
-    installMenuBar();
 
     NSString *helper = [[[NSBundle mainBundle] resourcePath]
                         stringByAppendingPathComponent:@"agent-helper.sh"];
     AgentController *c = [[AgentController alloc] initWithHelper:helper];
+    installMenuBar(c);
     [NSApp setDelegate:c];
     [c show];
 
