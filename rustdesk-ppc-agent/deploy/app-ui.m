@@ -28,11 +28,13 @@
  */
 #import <Cocoa/Cocoa.h>
 
+#define APP_NAME @"Agent for RustDesk PPC"
+
 /* Rows are laid out from the top down, which reads in the order the window is
  * used; Cocoa's origin is bottom-left, so this converts once rather than making
  * every frame do the arithmetic. */
 #define WIN_W 580.0
-#define WIN_H 496.0
+#define WIN_H 536.0
 #define TOP(y, h) (WIN_H - (y) - (h))
 
 @interface AgentController : NSObject
@@ -49,6 +51,7 @@
     NSButton       *stopButton;
     NSButton       *restartButton;
     NSTextField    *noteField;
+    NSTextField    *closeNote;
 }
 - (id)initWithHelper:(NSString *)path;
 - (void)show;
@@ -99,7 +102,7 @@
 - (void)alert:(NSString *)text
 {
     NSAlert *a = [[[NSAlert alloc] init] autorelease];
-    [a setMessageText:@"Agent for RustDesk PPC"];
+    [a setMessageText:APP_NAME];
     [a setInformativeText:[text stringByTrimmingCharactersInSet:
                            [NSCharacterSet whitespaceAndNewlineCharacterSet]]];
     [a addButtonWithTitle:@"OK"];
@@ -131,6 +134,16 @@
     [startButton setEnabled:(installed && !running)];
     [stopButton setEnabled:(installed && running)];
     [restartButton setEnabled:installed];
+
+    /* Said in terms of what will actually happen, and recomputed here rather
+     * than written once: closing a settings window is the moment someone
+     * wonders whether they have just switched the machine off. */
+    if (!installed)
+        [closeNote setStringValue:@"The agent is not installed; closing changes nothing."];
+    else if (running)
+        [closeNote setStringValue:@"Closing this window leaves the agent running."];
+    else
+        [closeNote setStringValue:@"Closing this window leaves the agent stopped."];
 }
 
 /* ---------------------------------------------------------------- actions */
@@ -208,6 +221,10 @@
 - (void)showLog:(id)sender { [self alert:[self run:[NSArray arrayWithObject:@"showlog"]]]; }
 - (void)refreshAction:(id)sender { [self refresh]; }
 
+/* Quits the settings window only. The agent is a launchd job and is untouched
+ * either way -- which is exactly what the line above the button says. */
+- (void)closeWindow:(id)sender { [NSApp terminate:nil]; }
+
 - (void)showKey:(id)sender
 {
     [self alert:[NSString stringWithFormat:
@@ -233,7 +250,7 @@
     if (!arch) arch = @"?";
 
     NSAlert *a = [[[NSAlert alloc] init] autorelease];
-    [a setMessageText:@"Agent for RustDesk PPC"];
+    [a setMessageText:APP_NAME];
     [a setInformativeText:[NSString stringWithFormat:
         @"Version %@\n"
         @"Built for PowerPC %@, Mac OS X 10.4 and 10.5\n\n"
@@ -309,7 +326,7 @@
                         styleMask:(NSTitledWindowMask | NSClosableWindowMask | NSMiniaturizableWindowMask)
                           backing:NSBackingStoreBuffered
                             defer:NO];
-    [window setTitle:@"Agent for RustDesk PPC"];
+    [window setTitle:APP_NAME];
     [window center];
     NSView *v = [window contentView];
 
@@ -331,10 +348,10 @@
     /* The form. Every setting the agent has, all visible at once. */
     float y = 166;
     struct { NSString *label; NSString *hint; } rows[4] = {
-        { @"Password:",    @"what someone types to connect; leave blank to keep the current one" },
-        { @"ID server:",   @"the same ID Server your clients use; empty means direct IP only" },
-        { @"Relay server:",@"optional; empty means whichever relay the ID server names" },
-        { @"Server key:",  @"the same Key your clients use; only needed if hbbr runs with -k" },
+        { @"Password:",    @"What someone types to connect. Leave blank to keep the current one." },
+        { @"ID server:",   @"The same ID Server your clients use. Empty means direct IP only." },
+        { @"Relay server:",@"Optional. Empty means whichever relay the ID server names." },
+        { @"Server key:",  @"The same Key your clients use. Only needed if hbbr runs with -k." },
     };
     NSTextField **targets[4];
     passwordField = [self fieldAt:NSMakeRect(130, 0, WIN_W - 150, 22) secure:YES];
@@ -391,7 +408,21 @@
     [v addSubview:[self buttonAt:NSMakeRect(148, TOP(y, 28), 130, 28)
                            title:@"Public Key" action:@selector(showKey:)]];
     [v addSubview:[self buttonAt:NSMakeRect(286, TOP(y, 28), 274, 28)
-                           title:@"Why no websocket or API setting?" action:@selector(whyNot:)]];
+                           title:@"Why no websocket or API?" action:@selector(whyNot:)]];
+    y += 42;
+
+    /* A rule, then the close row: everything above acts on the agent, the
+     * button below acts only on this window, and the line says which. */
+    NSBox *rule = [[[NSBox alloc] initWithFrame:NSMakeRect(20, TOP(y, 2), WIN_W - 40, 2)] autorelease];
+    [rule setBoxType:NSBoxSeparator];
+    [v addSubview:rule];
+    y += 12;
+
+    /* One line, truncated rather than wrapped -- as with the field hints. */
+    closeNote = [self labelAt:NSMakeRect(20, TOP(y + 7, 16), WIN_W - 210, 16) text:@"" bold:NO];
+    [v addSubview:closeNote];
+    [v addSubview:[self buttonAt:NSMakeRect(WIN_W - 190, TOP(y, 30), 170, 30)
+                           title:@"Close" action:@selector(closeWindow:)]];
 
     [self refresh];
     return self;
@@ -414,13 +445,19 @@
  * a plain NSObject controller is not in it. */
 static void installMenuBar(id controller)
 {
-    NSMenu *bar = [[[NSMenu alloc] init] autorelease];
-    NSMenuItem *appItem = [[[NSMenuItem alloc] init] autorelease];
+    NSMenu *bar = [[[NSMenu alloc] initWithTitle:APP_NAME] autorelease];
+    /* Both titles are set on purpose. Built from a nib, AppKit knows which menu
+     * is the application menu and puts the app's name on it; built by hand it
+     * does not, and an untitled first menu shows up as a nameless one with
+     * About stranded inside it. */
+    NSMenuItem *appItem = [[[NSMenuItem alloc] initWithTitle:APP_NAME
+                                                     action:NULL
+                                              keyEquivalent:@""] autorelease];
     [bar addItem:appItem];
     [NSApp setMainMenu:bar];
 
-    NSMenu *appMenu = [[[NSMenu alloc] init] autorelease];
-    NSMenuItem *aboutItem = [appMenu addItemWithTitle:@"About Agent for RustDesk PPC"
+    NSMenu *appMenu = [[[NSMenu alloc] initWithTitle:APP_NAME] autorelease];
+    NSMenuItem *aboutItem = [appMenu addItemWithTitle:@"About " APP_NAME
                                                action:@selector(about:)
                                         keyEquivalent:@""];
     [aboutItem setTarget:controller];
@@ -430,7 +467,7 @@ static void installMenuBar(id controller)
                                        keyEquivalent:@""];
     [siteItem setTarget:controller];
     [appMenu addItem:[NSMenuItem separatorItem]];
-    [appMenu addItemWithTitle:@"Quit Agent for RustDesk PPC"
+    [appMenu addItemWithTitle:@"Quit " APP_NAME
                        action:@selector(terminate:)
                 keyEquivalent:@"q"];
     [appItem setSubmenu:appMenu];
