@@ -723,15 +723,24 @@ API server it is. Clearing `key` also skips the check, but the server then
 refuses the client's punch requests with `LICENSE_MISMATCH`, so that is not a
 way out.
 
-**Still to do**, now that the G5 itself is done:
+* ~~**`licence_key`.**~~ **Done.** Field 6 of `RequestRelay`, absent from 1.1.8,
+  backported the way `PeerDiscovery` was and sent unconditionally as upstream
+  does -- an unkeyed relay ignores it. `--key` sets it, stored as `server_key`
+  and deliberately named apart from the agent's own `public_key`/`secret_key`:
+  this one is the *server's*.
 
-* **`licence_key`.** The 1.1.8 proto has no such field in `RequestRelay` (it is
-  field 6, added later). hbbr only checks it when started with `-k`, and an
-  unkeyed relay is the common self-hosted case -- but against a keyed one the
-  relay refuses us and the session never starts. Backporting the field the way
-  `PeerDiscovery` was, plus a key to put in it, is the fix. Worth knowing that
-  **hbbs is keyed even with no `-k`**, because it auto-generates `id_ed25519`
-  and uses the public half; hbbr is not, because it has no such fallback.
+  The failure it prevents is worth recording because it is invisible from here.
+  hbbr rejects a wrong key by **returning** (`make_pair_` in the server's
+  `relay_server.rs`) -- no message back, nothing logged at our end -- so the
+  caller waits on a relay we appear never to have joined, which looks exactly
+  like an agent that is offline. Untested against a keyed relay, because the
+  one here is unkeyed; the code path is the same either way, since the field is
+  always sent.
+
+  Worth knowing that **hbbs is keyed even with no `-k`**, because it
+  auto-generates `id_ed25519` and uses the public half; hbbr is not, because it
+  has no such fallback. The two are configured independently, which is why a
+  working setup can have a keyed hbbs and an unkeyed relay.
 
 Two things in the current code were shaped by the server's absence and have
 changed now that it exists.
@@ -953,11 +962,21 @@ back, sends it to the peer, whose own sync applies it and sends it back for
 ever. `clipboard::Sync` remembers the last text that crossed in either direction
 and drops the echo; both directions are host-tested.
 
-Still to do once someone has switched the launch method over:
+~~Still to do once someone has switched the launch method over:~~ both done.
 
-- Confirm the round trip against a real client, in both directions.
-- Decide whether to honour `OptionMessage.disable_clipboard`, which the agent
-  currently logs and ignores. Cheap, and it is what upstream does.
+- ~~Confirm the round trip against a real client, in both directions.~~ Done.
+- ~~Decide whether to honour `OptionMessage.disable_clipboard`.~~ **Honoured**,
+  in both directions, as upstream gates both on `clipboard_enabled()`: a peer
+  that switched the clipboard off does not expect what it copies to land on the
+  Mac either. Per session, since it is the peer's preference and not ours.
+
+  The part that needed a test rather than a line of code is that **`NotSet`
+  means "no opinion", not "enable"**. A client sends the whole `OptionMessage`
+  whenever any one option changes, so every field it is *not* changing arrives
+  `NotSet` -- read as a value, that would turn the clipboard back on the moment
+  someone touched the image-quality slider. `apply_disable_clipboard` is a
+  function for exactly that reason, and upstream guards it the same way
+  (`connection.rs`: `if q != BoolOption::NotSet`).
 
 ## ~~7. Conversion speed~~ (done)
 
@@ -1019,3 +1038,37 @@ own rather than one wired to a particular G5 and a particular set of
 `/opt/local` libraries. The fixes are small and stable; the cost of holding them
 is nil, and the cost of sending them early is a maintainer's time and a
 reputation for noise.
+
+## ~~13. Installing it on a machine that is not this one~~ (done)
+
+`deploy/bundle.sh` and `deploy/install.sh`. The agent is now installable on any
+PowerPC Mac by someone who has never seen this repository, which it was not
+before: the binary named five MacPorts libraries by absolute path, and the
+LaunchAgent had `/Users/admin` in it twice.
+
+Two things found by doing it that were not obvious from reading:
+
+**The dependency walk has to be transitive.** `libgcc_s.1.dylib` is a stub that
+loads `libgcc_s.1.1.dylib` and `libgcc_ehs.1.1.dylib` from the same directory, so
+a one-level copy produces a bundle that passes `otool -L` and then fails to load
+on the target. `bundle.sh` walks breadth-first and verifies afterwards that
+nothing outside `/usr/lib` and `/System` stayed absolute -- then *runs* the
+result, which is the check that would have caught it either way. Proven with
+`DYLD_PRINT_LIBRARIES=1`: all seven load from the install directory.
+
+**Only one installation per machine, and launchd is why.** The LaunchAgent label
+is fixed, and `launchctl unload` resolves a plist to its *label* rather than to
+its path -- so uninstalling a copy under one prefix stops whichever copy holds
+the label. Found by installing a second copy under a fake `HOME` to test the
+script in isolation, which promptly took over the running agent's label, and
+again when the matching uninstall stopped it. Isolation by `HOME` does not work
+here for a second reason as well: launchd starts the job with the *real* `HOME`,
+so the installed agent reads the real `~/.rustdesk-ppc-agent.conf` however the
+installer was invoked. Test on a different machine, or accept the interruption.
+
+The cpusubtype gate in `install.sh` came out of the same work -- see the README
+section "Running it on a G4". `-mcpu=970` stamps `cpusubtype` 100, which will
+not load on a G4; `-mcpu=7450` stamps 10, which runs on both. Everything else in
+the tree, static libraries included, is already generic `ppc`, so a G4 build is
+one environment variable rather than a port. A G3 is a port: the shims are built
+with AltiVec.

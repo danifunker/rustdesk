@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  TEMPLATE. `deploy/install.sh` substitutes @BIN@, @LOG@ and @PORT@ and writes
+  the result to ~/Library/LaunchAgents/com.rustdesk.ppc-agent.plist. Editing the
+  installed copy is fine; editing this one only affects the next install.
+
+  Run the agent inside the logged-in user's GUI ("Aqua") session.
+
+  **The clipboard is why.** Capture works fine from an ordinary ssh login, so
+  this looks like convenience and is not: PasteboardCreate returns -4960 from an
+  ssh login and from a detached `screen`, and pbcopy and pbpaste fail there too,
+  which is what rules out the API choice -- it is the session. Measured with
+  probes/pasteboard.c and probes/clipshim.c.
+
+  RunAtLoad plus a LaunchAgent in ~/Library/LaunchAgents means this starts at
+  every **login**, and KeepAlive restarts it if it dies. Note login, not boot:
+  a machine sitting at the login window has no agent, so a Mac meant to be
+  reachable unattended needs automatic login turned on in System Preferences ->
+  Accounts -> Login Options.
+
+  **Only one agent at a time.** This and `build-ppc.sh deploy` both bind 21118
+  and interact badly in both directions: a launchd-started agent loses the port
+  to a screen-started one, and `deploy` kills by process name, which kills the
+  launchd copy -- whereupon KeepAlive restarts it and the two take turns failing
+  to bind. `~/rustdesk-ctl stop` before deploying from the host.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.rustdesk.ppc-agent</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>@BIN@</string>
+        <string>--port</string>
+        <string>@PORT@</string>
+        <string>-vv</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Only ever in the GUI session; a background session cannot capture. -->
+    <key>LimitLoadToSessionType</key>
+    <string>Aqua</string>
+
+    <key>StandardOutPath</key>
+    <string>@LOG@</string>
+    <key>StandardErrorPath</key>
+    <string>@LOG@</string>
+</dict>
+</plist>

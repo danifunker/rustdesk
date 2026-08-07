@@ -37,8 +37,11 @@
 
 LABEL=com.rustdesk.ppc-agent
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-BIN="$HOME/rustdesk-agent"
-LOG="$HOME/agent.log"
+# Overridable because `deploy/install.sh` puts the agent in its own directory
+# (the bundled libraries have to sit beside it), while the development G5 has
+# it loose in $HOME. Defaults to the latter so an existing setup is unaffected.
+BIN="${RUSTDESK_AGENT_BIN:-$HOME/rustdesk-agent}"
+LOG="${RUSTDESK_AGENT_LOG:-$HOME/agent.log}"
 
 say() { echo "  $*"; }
 

@@ -1981,6 +1981,7 @@ pub struct RequestRelay {
     pub socket_addr: ::std::vec::Vec<u8>,
     pub relay_server: ::std::string::String,
     pub secure: bool,
+    pub licence_key: ::std::string::String,
     pub conn_type: ::protobuf::ProtobufEnumOrUnknown<ConnType>,
     // special fields
     pub unknown_fields: ::protobuf::UnknownFields,
@@ -2024,6 +2025,11 @@ impl RequestRelay {
             "secure",
             |m: &RequestRelay| { &m.secure },
             |m: &mut RequestRelay| { &mut m.secure },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "licence_key",
+            |m: &RequestRelay| { &m.licence_key },
+            |m: &mut RequestRelay| { &mut m.licence_key },
         ));
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "conn_type",
@@ -2077,6 +2083,12 @@ impl ::protobuf::Message for RequestRelay {
                     }
                     self.secure = is.read_bool()?;
                 },
+                6 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeLengthDelimited {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    self.licence_key = is.read_string()?;
+                },
                 7 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
                         return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
@@ -2110,6 +2122,9 @@ impl ::protobuf::Message for RequestRelay {
         if self.secure != false {
             my_size += 2;
         }
+        if !self.licence_key.is_empty() {
+            my_size += ::protobuf::rt::string_size(6, &self.licence_key);
+        }
         if self.conn_type != ::protobuf::ProtobufEnumOrUnknown::new(ConnType::DEFAULT_CONN) {
             my_size += ::protobuf::rt::enum_or_unknown_size(7, self.conn_type);
         }
@@ -2133,6 +2148,9 @@ impl ::protobuf::Message for RequestRelay {
         }
         if self.secure != false {
             os.write_bool(5, self.secure)?;
+        }
+        if !self.licence_key.is_empty() {
+            os.write_string(6, &self.licence_key)?;
         }
         if self.conn_type != ::protobuf::ProtobufEnumOrUnknown::new(ConnType::DEFAULT_CONN) {
             os.write_enum(7, ::protobuf::ProtobufEnumOrUnknown::value(&self.conn_type))?;
@@ -2168,6 +2186,7 @@ impl ::protobuf::Message for RequestRelay {
             socket_addr: ::std::vec::Vec::new(),
             relay_server: ::std::string::String::new(),
             secure: false,
+            licence_key: ::std::string::String::new(),
             conn_type: ::protobuf::ProtobufEnumOrUnknown::from_i32(0),
             unknown_fields: ::protobuf::UnknownFields::new(),
             cached_size: ::protobuf::rt::CachedSize::new(),
@@ -2183,6 +2202,7 @@ impl ::protobuf::Clear for RequestRelay {
         self.socket_addr.clear();
         self.relay_server.clear();
         self.secure = false;
+        self.licence_key.clear();
         self.conn_type = ::protobuf::ProtobufEnumOrUnknown::new(ConnType::DEFAULT_CONN);
         self.unknown_fields.clear();
     }
@@ -4844,59 +4864,59 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     SMATCH\x10\x03\x1a\0\x12\x15\n\x0fLICENSE_OVERUSE\x10\x04\x1a\0\x1a\0B\t\
     \n\x05union\x12\0:\0\"[\n\x0cConfigUpdate\x12\x18\n\x06serial\x18\x01\
     \x20\x01(\x05R\x06serialB\0\x12/\n\x12rendezvous_servers\x18\x02\x20\x03\
-    (\tR\x11rendezvousServersB\0:\0\"\xc8\x01\n\x0cRequestRelay\x12\x10\n\
+    (\tR\x11rendezvousServersB\0:\0\"\xeb\x01\n\x0cRequestRelay\x12\x10\n\
     \x02id\x18\x01\x20\x01(\tR\x02idB\0\x12\x14\n\x04uuid\x18\x02\x20\x01(\t\
     R\x04uuidB\0\x12!\n\x0bsocket_addr\x18\x03\x20\x01(\x0cR\nsocketAddrB\0\
     \x12#\n\x0crelay_server\x18\x04\x20\x01(\tR\x0brelayServerB\0\x12\x18\n\
-    \x06secure\x18\x05\x20\x01(\x08R\x06secureB\0\x12,\n\tconn_type\x18\x07\
-    \x20\x01(\x0e2\r.hbb.ConnTypeR\x08connTypeB\0:\0\"\xe5\x01\n\rRelayRespo\
-    nse\x12!\n\x0bsocket_addr\x18\x01\x20\x01(\x0cR\nsocketAddrB\0\x12\x14\n\
-    \x04uuid\x18\x02\x20\x01(\tR\x04uuidB\0\x12#\n\x0crelay_server\x18\x03\
-    \x20\x01(\tR\x0brelayServerB\0\x12\x12\n\x02id\x18\x04\x20\x01(\tH\0R\
-    \x02idB\0\x12\x12\n\x02pk\x18\x05\x20\x01(\x0cH\0R\x02pkB\0\x12%\n\rrefu\
-    se_reason\x18\x06\x20\x01(\tR\x0crefuseReasonB\0\x12\x1a\n\x07version\
-    \x18\x07\x20\x01(\tR\x07versionB\0B\t\n\x05union\x12\0:\0\"&\n\x0eSoftwa\
-    reUpdate\x12\x12\n\x03url\x18\x01\x20\x01(\tR\x03urlB\0:\0\"Z\n\x0eFetch\
-    LocalAddr\x12!\n\x0bsocket_addr\x18\x01\x20\x01(\x0cR\nsocketAddrB\0\x12\
-    #\n\x0crelay_server\x18\x02\x20\x01(\tR\x0brelayServerB\0:\0\"\xa4\x01\n\
-    \tLocalAddr\x12!\n\x0bsocket_addr\x18\x01\x20\x01(\x0cR\nsocketAddrB\0\
-    \x12\x1f\n\nlocal_addr\x18\x02\x20\x01(\x0cR\tlocalAddrB\0\x12#\n\x0crel\
-    ay_server\x18\x03\x20\x01(\tR\x0brelayServerB\0\x12\x10\n\x02id\x18\x04\
-    \x20\x01(\tR\x02idB\0\x12\x1a\n\x07version\x18\x05\x20\x01(\tR\x07versio\
-    nB\0:\0\"\xfb\x08\n\x11RendezvousMessage\x12:\n\rregister_peer\x18\x06\
-    \x20\x01(\x0b2\x11.hbb.RegisterPeerH\0R\x0cregisterPeerB\0\x12S\n\x16reg\
-    ister_peer_response\x18\x07\x20\x01(\x0b2\x19.hbb.RegisterPeerResponseH\
-    \0R\x14registerPeerResponseB\0\x12G\n\x12punch_hole_request\x18\x08\x20\
-    \x01(\x0b2\x15.hbb.PunchHoleRequestH\0R\x10punchHoleRequestB\0\x121\n\np\
-    unch_hole\x18\t\x20\x01(\x0b2\x0e.hbb.PunchHoleH\0R\tpunchHoleB\0\x12>\n\
-    \x0fpunch_hole_sent\x18\n\x20\x01(\x0b2\x12.hbb.PunchHoleSentH\0R\rpunch\
-    HoleSentB\0\x12J\n\x13punch_hole_response\x18\x0b\x20\x01(\x0b2\x16.hbb.\
-    PunchHoleResponseH\0R\x11punchHoleResponseB\0\x12A\n\x10fetch_local_addr\
-    \x18\x0c\x20\x01(\x0b2\x13.hbb.FetchLocalAddrH\0R\x0efetchLocalAddrB\0\
-    \x121\n\nlocal_addr\x18\r\x20\x01(\x0b2\x0e.hbb.LocalAddrH\0R\tlocalAddr\
-    B\0\x12@\n\x10configure_update\x18\x0e\x20\x01(\x0b2\x11.hbb.ConfigUpdat\
-    eH\0R\x0fconfigureUpdateB\0\x124\n\x0bregister_pk\x18\x0f\x20\x01(\x0b2\
-    \x0f.hbb.RegisterPkH\0R\nregisterPkB\0\x12M\n\x14register_pk_response\
-    \x18\x10\x20\x01(\x0b2\x17.hbb.RegisterPkResponseH\0R\x12registerPkRespo\
-    nseB\0\x12@\n\x0fsoftware_update\x18\x11\x20\x01(\x0b2\x13.hbb.SoftwareU\
-    pdateH\0R\x0esoftwareUpdateB\0\x12:\n\rrequest_relay\x18\x12\x20\x01(\
-    \x0b2\x11.hbb.RequestRelayH\0R\x0crequestRelayB\0\x12=\n\x0erelay_respon\
-    se\x18\x13\x20\x01(\x0b2\x12.hbb.RelayResponseH\0R\rrelayResponseB\0\x12\
-    A\n\x10test_nat_request\x18\x14\x20\x01(\x0b2\x13.hbb.TestNatRequestH\0R\
-    \x0etestNatRequestB\0\x12D\n\x11test_nat_response\x18\x15\x20\x01(\x0b2\
-    \x14.hbb.TestNatResponseH\0R\x0ftestNatResponseB\0\x12=\n\x0epeer_discov\
-    ery\x18\x16\x20\x01(\x0b2\x12.hbb.PeerDiscoveryH\0R\rpeerDiscoveryB\0B\t\
-    \n\x05union\x12\0:\0\"\xbb\x01\n\rPeerDiscovery\x12\x12\n\x03cmd\x18\x01\
-    \x20\x01(\tR\x03cmdB\0\x12\x12\n\x03mac\x18\x02\x20\x01(\tR\x03macB\0\
-    \x12\x10\n\x02id\x18\x03\x20\x01(\tR\x02idB\0\x12\x1c\n\x08username\x18\
-    \x04\x20\x01(\tR\x08usernameB\0\x12\x1c\n\x08hostname\x18\x05\x20\x01(\t\
-    R\x08hostnameB\0\x12\x1c\n\x08platform\x18\x06\x20\x01(\tR\x08platformB\
-    \0\x12\x14\n\x04misc\x18\x07\x20\x01(\tR\x04miscB\0:\0*T\n\x08ConnType\
-    \x12\x12\n\x0cDEFAULT_CONN\x10\0\x1a\0\x12\x13\n\rFILE_TRANSFER\x10\x01\
-    \x1a\0\x12\x12\n\x0cPORT_FORWARD\x10\x02\x1a\0\x12\t\n\x03RDP\x10\x03\
-    \x1a\0\x1a\0*A\n\x07NatType\x12\x11\n\x0bUNKNOWN_NAT\x10\0\x1a\0\x12\x10\
-    \n\nASYMMETRIC\x10\x01\x1a\0\x12\x0f\n\tSYMMETRIC\x10\x02\x1a\0\x1a\0B\0\
-    b\x06proto3\
+    \x06secure\x18\x05\x20\x01(\x08R\x06secureB\0\x12!\n\x0blicence_key\x18\
+    \x06\x20\x01(\tR\nlicenceKeyB\0\x12,\n\tconn_type\x18\x07\x20\x01(\x0e2\
+    \r.hbb.ConnTypeR\x08connTypeB\0:\0\"\xe5\x01\n\rRelayResponse\x12!\n\x0b\
+    socket_addr\x18\x01\x20\x01(\x0cR\nsocketAddrB\0\x12\x14\n\x04uuid\x18\
+    \x02\x20\x01(\tR\x04uuidB\0\x12#\n\x0crelay_server\x18\x03\x20\x01(\tR\
+    \x0brelayServerB\0\x12\x12\n\x02id\x18\x04\x20\x01(\tH\0R\x02idB\0\x12\
+    \x12\n\x02pk\x18\x05\x20\x01(\x0cH\0R\x02pkB\0\x12%\n\rrefuse_reason\x18\
+    \x06\x20\x01(\tR\x0crefuseReasonB\0\x12\x1a\n\x07version\x18\x07\x20\x01\
+    (\tR\x07versionB\0B\t\n\x05union\x12\0:\0\"&\n\x0eSoftwareUpdate\x12\x12\
+    \n\x03url\x18\x01\x20\x01(\tR\x03urlB\0:\0\"Z\n\x0eFetchLocalAddr\x12!\n\
+    \x0bsocket_addr\x18\x01\x20\x01(\x0cR\nsocketAddrB\0\x12#\n\x0crelay_ser\
+    ver\x18\x02\x20\x01(\tR\x0brelayServerB\0:\0\"\xa4\x01\n\tLocalAddr\x12!\
+    \n\x0bsocket_addr\x18\x01\x20\x01(\x0cR\nsocketAddrB\0\x12\x1f\n\nlocal_\
+    addr\x18\x02\x20\x01(\x0cR\tlocalAddrB\0\x12#\n\x0crelay_server\x18\x03\
+    \x20\x01(\tR\x0brelayServerB\0\x12\x10\n\x02id\x18\x04\x20\x01(\tR\x02id\
+    B\0\x12\x1a\n\x07version\x18\x05\x20\x01(\tR\x07versionB\0:\0\"\xfb\x08\
+    \n\x11RendezvousMessage\x12:\n\rregister_peer\x18\x06\x20\x01(\x0b2\x11.\
+    hbb.RegisterPeerH\0R\x0cregisterPeerB\0\x12S\n\x16register_peer_response\
+    \x18\x07\x20\x01(\x0b2\x19.hbb.RegisterPeerResponseH\0R\x14registerPeerR\
+    esponseB\0\x12G\n\x12punch_hole_request\x18\x08\x20\x01(\x0b2\x15.hbb.Pu\
+    nchHoleRequestH\0R\x10punchHoleRequestB\0\x121\n\npunch_hole\x18\t\x20\
+    \x01(\x0b2\x0e.hbb.PunchHoleH\0R\tpunchHoleB\0\x12>\n\x0fpunch_hole_sent\
+    \x18\n\x20\x01(\x0b2\x12.hbb.PunchHoleSentH\0R\rpunchHoleSentB\0\x12J\n\
+    \x13punch_hole_response\x18\x0b\x20\x01(\x0b2\x16.hbb.PunchHoleResponseH\
+    \0R\x11punchHoleResponseB\0\x12A\n\x10fetch_local_addr\x18\x0c\x20\x01(\
+    \x0b2\x13.hbb.FetchLocalAddrH\0R\x0efetchLocalAddrB\0\x121\n\nlocal_addr\
+    \x18\r\x20\x01(\x0b2\x0e.hbb.LocalAddrH\0R\tlocalAddrB\0\x12@\n\x10confi\
+    gure_update\x18\x0e\x20\x01(\x0b2\x11.hbb.ConfigUpdateH\0R\x0fconfigureU\
+    pdateB\0\x124\n\x0bregister_pk\x18\x0f\x20\x01(\x0b2\x0f.hbb.RegisterPkH\
+    \0R\nregisterPkB\0\x12M\n\x14register_pk_response\x18\x10\x20\x01(\x0b2\
+    \x17.hbb.RegisterPkResponseH\0R\x12registerPkResponseB\0\x12@\n\x0fsoftw\
+    are_update\x18\x11\x20\x01(\x0b2\x13.hbb.SoftwareUpdateH\0R\x0esoftwareU\
+    pdateB\0\x12:\n\rrequest_relay\x18\x12\x20\x01(\x0b2\x11.hbb.RequestRela\
+    yH\0R\x0crequestRelayB\0\x12=\n\x0erelay_response\x18\x13\x20\x01(\x0b2\
+    \x12.hbb.RelayResponseH\0R\rrelayResponseB\0\x12A\n\x10test_nat_request\
+    \x18\x14\x20\x01(\x0b2\x13.hbb.TestNatRequestH\0R\x0etestNatRequestB\0\
+    \x12D\n\x11test_nat_response\x18\x15\x20\x01(\x0b2\x14.hbb.TestNatRespon\
+    seH\0R\x0ftestNatResponseB\0\x12=\n\x0epeer_discovery\x18\x16\x20\x01(\
+    \x0b2\x12.hbb.PeerDiscoveryH\0R\rpeerDiscoveryB\0B\t\n\x05union\x12\0:\0\
+    \"\xbb\x01\n\rPeerDiscovery\x12\x12\n\x03cmd\x18\x01\x20\x01(\tR\x03cmdB\
+    \0\x12\x12\n\x03mac\x18\x02\x20\x01(\tR\x03macB\0\x12\x10\n\x02id\x18\
+    \x03\x20\x01(\tR\x02idB\0\x12\x1c\n\x08username\x18\x04\x20\x01(\tR\x08u\
+    sernameB\0\x12\x1c\n\x08hostname\x18\x05\x20\x01(\tR\x08hostnameB\0\x12\
+    \x1c\n\x08platform\x18\x06\x20\x01(\tR\x08platformB\0\x12\x14\n\x04misc\
+    \x18\x07\x20\x01(\tR\x04miscB\0:\0*T\n\x08ConnType\x12\x12\n\x0cDEFAULT_\
+    CONN\x10\0\x1a\0\x12\x13\n\rFILE_TRANSFER\x10\x01\x1a\0\x12\x12\n\x0cPOR\
+    T_FORWARD\x10\x02\x1a\0\x12\t\n\x03RDP\x10\x03\x1a\0\x1a\0*A\n\x07NatTyp\
+    e\x12\x11\n\x0bUNKNOWN_NAT\x10\0\x1a\0\x12\x10\n\nASYMMETRIC\x10\x01\x1a\
+    \0\x12\x0f\n\tSYMMETRIC\x10\x02\x1a\0\x1a\0B\0b\x06proto3\
 ";
 
 /// `FileDescriptorProto` object which was a source for this generated file
