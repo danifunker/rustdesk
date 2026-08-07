@@ -22,11 +22,55 @@ HOST="${PPC_HOST:-ppctiger}"
 export SSH_AUTH_SOCK="${SSH_AUTH_SOCK:-/tmp/ssh-agent-ppc.sock}"
 export PPC_HOST="$HOST"   # the remote cc/ar wrappers read this, not $HOST
 export PPC_CPU_FLAGS="${PPC_CPU_FLAGS:--mcpu=970 -maltivec}"
+
+# The Rust standard library has to match the CPU the agent is built for, and
+# this used to be a hardcoded `-g5` path.
+#
+# mrustc compiles libcore/liballoc to C and then to Mach-O objects, so the
+# standard library carries the CPU flags it was built with. Measured: the g5
+# liballoc has 863 `rldicl`, 698 `std` and 685 `ld` in it, and the g4 one has
+# none. Linking the g5 copy into a G4 binary therefore drags in 64-bit
+# instructions that trap on the target, and nothing in the build would say so --
+# the cpusubtype would still read 7450, because that is set from the flags.
+#
+# Derived from PPC_CPU_FLAGS rather than fixed. Override with PPC_STDLIB.
+case "$PPC_CPU_FLAGS" in
+    *970*)                          STD_TAG=g5 ;;
+    *7450*|*7455*|*7447*|*7400*|*G4*|*g4*) STD_TAG=g4 ;;
+    *750*|*G3*|*g3*)                STD_TAG=g3 ;;
+    *) STD_TAG="" ;;
+esac
+if [ -n "${PPC_STDLIB:-}" ]; then
+    STDLIB="$PPC_STDLIB"
+elif [ -n "$STD_TAG" ]; then
+    STDLIB="$HOME/repos/mrustc/output-1.74.0-powerpc-apple-darwin-$STD_TAG"
+else
+    echo "error: cannot tell which standard library suits PPC_CPU_FLAGS='$PPC_CPU_FLAGS'." >&2
+    echo "       Set PPC_STDLIB to the matching mrustc output directory." >&2
+    exit 1
+fi
+[ -d "$STDLIB" ] || { echo "error: no standard library at $STDLIB" >&2; exit 1; }
 export PPC_JOBS="${PPC_JOBS:-2}"
 export PPC_SHIM="${PPC_SHIM:-$HOME/repos/rusty-backup/rb-cli-ppc/shim/ppc-compat.c}"
 export PPC_LDFLAGS="${PPC_LDFLAGS:--L/opt/local/lib -L/Users/admin/ppc-libs/lib -latomic -lMacportsLegacySupport -lgcc_s.1 -lsodium -lvpx}"
 
 mkdir -p "$OUT"
+
+# One output directory holds objects for one CPU. minicargo's staleness check is
+# "is the .o newer than the .c", which a flag change does not disturb, so a
+# switch from G5 to G4 in the same directory silently links yesterday's G5
+# objects. (The remote wrapper already namespaces the *shim* object by CPU flags
+# for exactly this reason -- see `cpu_suffix` in ppc-cc-remote.py.) Refuse
+# rather than produce a binary that is half one architecture.
+STAMP="$OUT/.cpu-flags"
+if [ -f "$STAMP" ] && [ "$(cat "$STAMP")" != "$PPC_CPU_FLAGS $STDLIB" ]; then
+    echo "error: $OUT was built with different settings:" >&2
+    echo "         had:  $(cat "$STAMP")" >&2
+    echo "         want: $PPC_CPU_FLAGS $STDLIB" >&2
+    echo "       Use a separate PPC_OUT per CPU, or remove $OUT first." >&2
+    exit 1
+fi
+printf '%s %s' "$PPC_CPU_FLAGS" "$STDLIB" > "$STAMP"
 
 # minicargo caches the build script's output and does not honour
 # cargo:rerun-if-changed, so an edited .c file links against a stale archive and
@@ -54,7 +98,7 @@ MRUSTC_TARGET_VER=1.74 \
   "$HOME/repos/mrustc/bin/minicargo" "$HERE" \
   --vendor-dir "$HERE/vendor" \
   --target powerpc-apple-darwin \
-  -L "$HOME/repos/mrustc/output-1.74.0-powerpc-apple-darwin-g5" \
+  -L "$STDLIB" \
   --output-dir "$OUT" \
   -j "$PPC_JOBS"
 
