@@ -582,28 +582,78 @@ peer, and `FetchLocalAddr` carries the LAN ones. **`PunchHoleRequest` NAT
 traversal is not needed** — which is the bulk of the protocol's complexity, and
 what this item guessed from the start for the wrong reason.
 
-### The work
+### ~~The work~~ (done, 2026-08-06, and verified against the real server)
 
-`RegisterPeer` and `RegisterPk` to udp 21116, a heartbeat to stay listed, and
-answering `FetchLocalAddr` and `RequestRelay` by connecting back. No local
-`relay-server` setting is needed: hbbs advertises one to peers that do not set
-their own, and `get_relay_server` prefers the local option only when present.
+`src/rendezvous.rs`. `RegisterPeer` and `RegisterPk` to udp 21116 every 15 s --
+hbbs drops a peer after 30 -- and three ways a peer arrives, all ending at
+`session::serve` with an ordinary `TcpStream`. No local `relay-server` setting
+is needed: hbbs advertises one to peers that do not set their own, and
+`get_relay_server` prefers the local option only when present.
 
-Two things in the current code are shaped by the server's absence and should
-change now that it exists.
+Each of the four was exercised against the live server, from a Linux build --
+registration is platform-independent, so none of it waited on a G5 deploy. The
+controlling side was driven by a probe that speaks the protocol by hand, for the
+same reason `probe_client` exists:
 
-**What discovery advertises.** `lan.rs` puts our *IP address* in the
-`PeerDiscovery` id, because the client only connects directly when the id is
-one (`client.rs`: `if is_ip_str(peer)`) and otherwise asks a rendezvous server
-to resolve it. With a server registered, `me.id` becomes the better answer: an
-id survives a DHCP change and works from another subnet. The line is marked.
+| path | evidence |
+|---|---|
+| registration | `registered, reachable as id ...` in 132 ms, and **hbbs itself** reports the id online, with a one-character-different id as the control |
+| `FetchLocalAddr` (same subnet) | server relayed our address and our registered pk to the caller; caller dialled it; `caller connected from ...` |
+| `PunchHole` (we choose a relay) | caller got `RelayResponse` naming our uuid and relay, with our pk substituted for the id |
+| `RequestRelay` (caller chose one) | caller joined the same uuid at hbbr and **received the agent's 122-byte `signed_id` through the relay** |
+
+Every one started `step 1: sending signed_id`, which is the point of the second
+item below: those sessions are encrypted whether or not `--secure` was passed.
+
+**Two deliberate divergences from upstream**, both in the module header:
+
+* **No hole punching.** Answering `PunchHole` with a relay we initiate is what
+  upstream itself does for a peer it judges unpunchable, and here that judgement
+  is structural rather than a guess -- see above. It also skips a round trip the
+  caller would otherwise spend waiting.
+* **No port reuse in the `FetchLocalAddr` path.** Upstream advertises the local
+  port of its connection to the server and rebinds it, because punching needs
+  the NAT mapping that connection made. We do not punch, so the advertised port
+  can be one of our own -- and the reuse *does not work* from std: it needs
+  `SO_REUSEADDR` on both sockets, and std cannot set options on an outgoing
+  `TcpStream`. Measured failing with `EADDRINUSE`, because our end of the
+  just-closed connection is in `FIN_WAIT`, which `SO_REUSEADDR` does not cover.
+  That was found by running the path, not by reading it.
+
+**Still to do:**
+
+* **Run it on the G5.** Everything above was proven on Linux, where there is no
+  capture and no input injection, so a session gets as far as the handshake and
+  no further. The protocol half is done; the machine half is untested.
+* **`licence_key`.** The 1.1.8 proto has no such field in `RequestRelay` (it is
+  field 6, added later). hbbr only checks it when started with `-k`, and an
+  unkeyed relay is the common self-hosted case -- but against a keyed one the
+  relay refuses us and the session never starts. Backporting the field the way
+  `PeerDiscovery` was, plus a key to put in it, is the fix. Worth knowing that
+  **hbbs is keyed even with no `-k`**, because it auto-generates `id_ed25519`
+  and uses the public half; hbbr is not, because it has no such fallback.
+
+Two things in the current code were shaped by the server's absence and have
+changed now that it exists.
+
+**What discovery advertises.** `lan.rs` used to put our *IP address* in the
+`PeerDiscovery` id unconditionally, because the client only connects directly
+when the id is one (`client.rs`: `if is_ip_str(peer)`) and otherwise asks a
+rendezvous server to resolve it -- and there was none, so advertising the id
+made the machine appear in the list and then refuse to connect. It now
+advertises whichever is true: `me.id` when registered, the address otherwise.
+The id is the better answer where it works, since it survives a DHCP change and
+reaches another subnet. The port guard moved behind the same condition: it only
+constrains the address form, because a registered agent's listening port stops
+mattering once the server arranges the connection.
 
 **The direct-IP handshake.** `session.rs` runs unencrypted by default because a
 client connecting by IP never starts the `signed_id`/`public_key` exchange --
-see the module header. A peer arriving via rendezvous *does*, which is what
-`--secure` already implements, so that path exists and is tested but is not the
-default. The server's own relay requests carry `secure: true`, so this becomes
-the normal path rather than an option.
+see the module header. A peer arriving via rendezvous *does*, so `rendezvous`
+sets `secure` per connection from the route the peer took rather than from the
+flag, and `Identity` is `Clone` so each session can carry its own. `--secure`
+now governs only the direct-IP listener. Every one of the four verified paths
+above began `step 1: sending signed_id`, which is that working.
 
 ## 3. Audio
 

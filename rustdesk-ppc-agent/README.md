@@ -6,9 +6,10 @@ Blocking I/O, no async runtime, 5 direct dependencies. Built with mrustc; see
 exists rather than a port of `src/server/`.
 
 Status: connects, authenticates and streams VP8 to a real client, with keyboard,
-mouse, trackpad scrolling, the real pointer shape, LAN discovery, screenshots
-and clipboard text (see "Where the agent has to run" below — the clipboard is
-the one feature that constrains it).
+mouse, trackpad scrolling, the real pointer shape, LAN discovery, screenshots,
+clipboard text (see "Where the agent has to run" below — the clipboard is
+the one feature that constrains it) and registration with a self-hosted
+rendezvous server, so it is reachable by ID rather than only by address.
 It reports itself as **1.4.5**, which is a capability declaration rather than a
 label — see `REPORTED_VERSION` in `src/session.rs`. See
 [`docs/BACKLOG.md`](docs/BACKLOG.md) for what is missing — notably audio and
@@ -40,6 +41,32 @@ here that is this agent, which always listens.)
 
 The G5 also answers the UDP broadcast on 21119 that populates a client's
 local-network list, so it can be picked from there instead of typed (`src/lan.rs`).
+
+### By ID, through a rendezvous server
+
+Direct IP only reaches the machine from its own subnet. Point the agent at a
+self-hosted RustDesk server and it registers, after which the **ID** works from
+anywhere — and that is what discovery advertises too:
+
+```bash
+rustdesk-agent --server rustdesk.example.org     # or HOST:PORT; saved, then exit
+rustdesk-agent --show-id                         # what to type in the client
+rustdesk-agent --no-server                       # stop registering
+```
+
+The client needs the same **Key** as the server (its `id_ed25519.pub`) in
+Settings → Network → ID/Relay Server, exactly as for any other peer. Nothing
+else changes: the ID goes in the ID field.
+
+Two things worth knowing about that path:
+
+* **Those sessions are always encrypted**, whatever `--secure` says. A peer
+  arriving through a server takes part in the `signed_id`/`public_key` exchange;
+  `--secure` exists for the direct-IP listener, where it does not.
+* **Remote peers are relayed, local ones are not.** A caller on the same subnet
+  is given our address and connects directly; anyone else meets us at the
+  relay. The agent does not attempt hole punching — see `docs/BACKLOG.md` item
+  12 for why that is a property of the deployment rather than a shortcut.
 
 ### Where the agent has to run
 
@@ -191,6 +218,7 @@ python3 -c "from PIL import Image; im=Image.open('/tmp/out/display.png'); \
 | `src/clipboard.rs`, `src/clipboard_shim.c` | clipboard text, via libzstd and the Pasteboard Manager |
 | `src/input.rs` | Quartz Event Services injection |
 | `src/lan.rs` | answers the UDP discovery broadcast |
+| `src/rendezvous.rs` | registers with a server, and answers connection requests |
 | `probes/` | C programs establishing the hardware floor |
 | `docs/videoperformance.md` | what was measured, and why the design follows |
 | `docs/performance-plan.md` | what is left to do about speed, and what each would buy |
