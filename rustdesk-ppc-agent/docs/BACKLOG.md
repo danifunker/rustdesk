@@ -1068,7 +1068,48 @@ installer was invoked. Test on a different machine, or accept the interruption.
 
 The cpusubtype gate in `install.sh` came out of the same work -- see the README
 section "Running it on a G4". `-mcpu=970` stamps `cpusubtype` 100, which will
-not load on a G4; `-mcpu=7450` stamps 10, which runs on both. Everything else in
-the tree, static libraries included, is already generic `ppc`, so a G4 build is
-one environment variable rather than a port. A G3 is a port: the shims are built
-with AltiVec.
+not load on a G4; `-mcpu=7450` stamps 10, which runs on both.
+
+### The cpusubtype is not evidence about the dependencies, and saying so was wrong
+
+That gate answers "will this load", and it was written up as though it also
+answered "will this run" -- the README said every dependency was "already
+generic `ppc`", on the strength of the Mach-O header alone. The header records
+what the *linker* stamped. It says nothing about the instructions inside, and
+the two answers are not the same question.
+
+`deploy/check-cpu-compat.sh` disassembles instead. The measured picture:
+
+| | 64-bit ops | `mtocrf` | `lwsync` |
+|---|---|---|---|
+| the agent, `-mcpu=970` | **362,000** | 1,073 | 334 |
+| libvpx / libopus / libsodium / libyuv | none | yes | 15 (vpx) |
+| the 7 bundled dylibs | none | yes | 57 |
+| Apple's Leopard `libSystem.B.dylib` | none | 498 | none |
+
+The conclusion held, but for a reason nobody had checked: `-mcpu=970` implies
+`-mpowerpc64`, so the agent is full of `std`/`ld`/`rldicl`/`mulld`/`fcfid` and
+the dependencies contain **not one** 64-bit instruction. They were built with no
+`-mcpu` at all -- libsodium's and opus's `config.log` say plain `-g -O2` -- so
+they are already G4 code. A G4 build really is one environment variable.
+
+Two findings worth keeping:
+
+* **`mtocrf` is settled by Apple.** It is in every library here, and in
+  Leopard's own `libSystem.B.dylib`, which shipped to every G4 Mac. If it did
+  not degrade to `mtcrf` on a 74xx, no G4 would boot. That is better evidence
+  than any amount of reading the architecture book.
+* **`lwsync` is not settled.** libvpx, libatomic and libgcc_s contain it, no
+  Apple library scanned does, and gcc here emits plain `sync` from C at every
+  `-mcpu` -- so it comes from those libraries' hand-written assembly and a
+  rebuild would not obviously remove it. The reserved-bit rule says a 7450
+  executes it as a full `sync`, which is correct if slower. Unverified: **none
+  of this has been run on a G4.**
+
+**The scanner needs its own controls**, which is the other lesson. The first
+version passed a multi-line list to `awk -v`; the G5's awk warns and leaves the
+match set empty, so it reported every file -- including the `-mcpu=970` agent --
+as clean. A scanner that finds nothing is indistinguishable from a clean result,
+so the script now compiles one source at two `-mcpu` settings and requires the
+970 one to trip it. Same shape as `fb-vigil` in §1d and `docker-proxy` in §12:
+the instrument was the thing that was wrong.
