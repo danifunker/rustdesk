@@ -620,11 +620,65 @@ item below: those sessions are encrypted whether or not `--secure` was passed.
   just-closed connection is in `FIN_WAIT`, which `SO_REUSEADDR` does not cover.
   That was found by running the path, not by reading it.
 
-**Still to do:**
+### What only the G5 could find: `u128` is emulated, and gets endianness wrong
 
-* **Run it on the G5.** Everything above was proven on Linux, where there is no
-  capture and no input injection, so a session gets as far as the handshake and
-  no further. The protocol half is done; the machine half is untested.
+Everything above passed on Linux and on the first PowerPC build, and the
+local-network path was still broken on the machine. `AddrMangle` is built on
+`u128`; 32-bit PowerPC gcc has no `__int128`, so mrustc emits a software
+`uint128_t` -- `struct { uint64_t lo, hi; }` -- and the byte swap that
+`u128::to_le_bytes` owes a big-endian target does not survive it.
+
+```text
+rendezvous: local-network request from 0.0.252.92:44107      <- really 192.168.99.153
+rendezvous: listening on 192.168.99.116:50974 for the caller
+rendezvous: local-network connect back failed: the caller never connected
+```
+
+The agent decoded the caller's address as noise, **re-encoded that noise** into
+`LocalAddr.socket_addr`, and the server duly sent its reply to an address that
+does not exist -- so the caller was never told where to go, and the agent sat
+listening for someone who could not come. From the client it looked like a peer
+that simply would not connect.
+
+The relay paths were unharmed, because they pass `socket_addr` through as
+opaque bytes and never re-encode it; only the log line was wrong there. That is
+why cellular worked while the LAN did not, which is the opposite of what one
+would guess.
+
+Fixed by doing the arithmetic as an explicit `(hi, lo)` pair of `u64`s -- the
+intermediate needs 82 bits, so the width is real, but every operation is now
+native on any target. **The round-trip test could never have caught this**: it
+agrees with itself in any byte order. `mangle_matches_the_wire_format` pins it
+against a vector computed independently, which is the test that would have.
+
+Confirmed on the machine afterwards: the same probe that hung now gets
+`CONNECTED -- the agent accepted us`.
+
+### A trap worth not rediscovering: an API server breaks connecting *to* us
+
+Not this agent's doing, and it will look exactly like the agent's fault. A
+client that holds a **login token** -- which is what signing in to any API
+server gives it -- takes this branch in the client's `client.rs`:
+
+```rust
+if !key.is_empty() && (!token.is_empty() || !switch_code.is_empty()) {
+    secure_tcp(&mut socket, &key).await   // waits for the server's KeyExchange
+```
+
+`secure_tcp` waits for the rendezvous server to speak first, and **`KeyExchange`
+appears nowhere in the OSS server's source**. So every outbound connection dies
+after the read timeout with `Failed to secure tcp: deadline has elapsed`, to
+*every* peer, while inbound ones keep working because those ride the UDP
+mediator. Seen for real, and it cost an evening's confusion because the symptom
+arrived at the same moment as this agent's first deployment.
+
+The escape is for the client not to hold a token, rather than to change which
+API server it is. Clearing `key` also skips the check, but the server then
+refuses the client's punch requests with `LICENSE_MISMATCH`, so that is not a
+way out.
+
+**Still to do**, now that the G5 itself is done:
+
 * **`licence_key`.** The 1.1.8 proto has no such field in `RequestRelay` (it is
   field 6, added later). hbbr only checks it when started with `-k`, and an
   unkeyed relay is the common self-hosted case -- but against a keyed one the
