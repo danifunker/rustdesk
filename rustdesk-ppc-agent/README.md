@@ -51,12 +51,22 @@ anywhere — and that is what discovery advertises too:
 ```bash
 rustdesk-agent --server rustdesk.example.org     # or HOST:PORT; saved, then exit
 rustdesk-agent --show-id                         # what to type in the client
+rustdesk-agent --key '<base64>'                  # only if hbbr was started with -k
 rustdesk-agent --no-server                       # stop registering
 ```
 
 The client needs the same **Key** as the server (its `id_ed25519.pub`) in
 Settings → Network → ID/Relay Server, exactly as for any other peer. Nothing
 else changes: the ID goes in the ID field.
+
+`--key` takes that same string and is needed only when the **relay** (hbbr) was
+started with `-k`: it goes into `RequestRelay.licence_key`, and a keyed relay
+drops a request whose key does not match by simply returning, so the symptom is
+a caller waiting on a relay the agent appears never to have joined rather than
+any error. An unkeyed hbbr — the common self-hosted case — ignores it. Worth
+knowing that hbbs is keyed even with no `-k`, since it auto-generates
+`id_ed25519`, while hbbr has no such fallback; the two are configured
+separately.
 
 Two things worth knowing about that path:
 
@@ -121,6 +131,79 @@ rustdesk-agent --listen 127.0.0.1 --port 5900
 
 Configuration lives in `~/.rustdesk-ppc-agent.conf` (mode 0600 — it holds the
 signing secret key).
+
+## Installing it on another Mac
+
+The built binary is **not portable on its own**: `otool -L` names five MacPorts
+libraries by absolute path, which exist only on a machine somebody has built a
+toolchain on. (libsodium, libvpx, libopus and libyuv are statically linked and
+need nothing.) So there are two steps — bundle, then install:
+
+```bash
+./build-ppc.sh                       # produces target/ppc/rustdesk-agent
+./deploy/bundle.sh                   # produces target/rustdesk-agent-g5.tar.gz
+```
+
+`bundle.sh` copies every non-system library the binary needs — walked
+*transitively*, because `libgcc_s.1.dylib` is a stub that pulls in two more —
+rewrites the load commands to `@executable_path/lib`, checks that nothing
+absolute is left, and runs the result before packing it. It does that work on a
+PowerPC Mac over ssh, because `install_name_tool` is part of Darwin's cctools
+and there is no build of it on the host. About 1 MB of libraries, 4 MB packed.
+
+Then, on the target Mac:
+
+```bash
+tar xzf rustdesk-agent-g5.tar.gz
+cd rustdesk-agent-g5
+./install.sh                                         # asks for a password
+./install.sh --password hunter2 --server rd.example.org --yes    # unattended
+./install.sh --uninstall
+```
+
+Everything lands under `$HOME` — no sudo, and not only out of politeness: the
+agent has to run in the user's Aqua session to reach the pasteboard and the
+window server, so a system-wide daemon would be the wrong shape even if it were
+easier. The installer refuses rather than guesses where it can: it checks the
+Mach-O cpusubtype against the machine's actual CPU, and it runs the binary
+before writing a LaunchAgent, so a missing library is a message at install time
+rather than a job that flaps invisibly under `KeepAlive`.
+
+**It starts at every login**, via `RunAtLoad`, and `KeepAlive` restarts it if it
+dies. Login, not boot — a Mac sitting at the login window has no agent, so one
+meant to be reachable unattended needs automatic login (System Preferences →
+Accounts → Login Options).
+
+Re-running the installer upgrades in place and leaves the password, the server
+and the machine's identity alone; `--uninstall` keeps
+`~/.rustdesk-ppc-agent.conf` for the same reason, since deleting it would change
+the ID and every peer would have to be told the new one. **One installation per
+machine**: the LaunchAgent label is fixed, and `launchctl unload` resolves a
+plist to its label rather than its path, so a second copy fights the first.
+
+### Running it on a G4
+
+Yes, with a rebuild — nothing in the agent is G5-specific, but the *binary* is.
+`-mcpu=970` makes the linker stamp the Mach-O `cpusubtype` 100
+(`CPU_SUBTYPE_POWERPC_970`), and a binary stamped that way will not load on a
+G4 at all. Every library it depends on, static and dynamic alike, is already
+generic `ppc`; only the agent's own flags need changing:
+
+```bash
+PPC_CPU_FLAGS='-mcpu=7450 -maltivec' ./build-ppc.sh
+./deploy/bundle.sh                       # names the tarball -g4 by itself
+```
+
+That produces cpusubtype 10 (`7450`), which a G5 will also run, so one G4 build
+covers both if you would rather not keep two. `install.sh` reads the subtype and
+the machine's `machine` output and refuses a mismatch with the command above
+rather than letting dyld say "Bad CPU type in executable".
+
+Two caveats. The C shims are compiled *on* a PowerPC Mac by the remote-cc
+wrapper, so a G4 build still needs a PowerPC machine to build on — the G5 does
+fine, since it is the same toolchain and only the flags differ. And a **G3 will
+not work**: the shims are built with AltiVec, which no G3 has. That is a real
+port rather than a flag change, and nobody has tried it.
 
 ## Why this port has no audio
 

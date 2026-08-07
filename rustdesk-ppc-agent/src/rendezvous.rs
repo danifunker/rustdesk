@@ -58,12 +58,15 @@
 //! by luck rather than agreement. `registration_ok` reads the raw i32 and
 //! accepts both, so neither vintage can be misread as a failure.
 //!
-//! **`RequestRelay.licence_key` does not exist in the 1.1.8 proto** (it is field
-//! 6, added later). hbbr only checks it when started with `-k`, so an unkeyed
-//! relay -- the common self-hosted case -- accepts us. Against a keyed relay the
-//! connection is refused and the session never starts; the field would have to
-//! be backported the way `PeerDiscovery` was, and the agent given a key to put
-//! in it.
+//! **`RequestRelay.licence_key` is backported** (field 6, added after 1.1.8).
+//! hbbr only checks it when started with `-k`, so an unkeyed relay -- the
+//! common self-hosted case -- accepts us either way, which is why this was
+//! invisible for so long. Against a keyed one the request is dropped by
+//! *returning* rather than answering, so the symptom is a caller waiting on a
+//! relay we appear never to have joined. `--key` sets it; empty is right unless
+//! hbbr was started with `-k`. Worth knowing that **hbbs is keyed even with no
+//! `-k`**, because it auto-generates `id_ed25519` and uses the public half;
+//! hbbr has no such fallback, so the two are configured independently.
 
 use std::io::{self, ErrorKind};
 use std::net::{
@@ -118,6 +121,9 @@ pub struct Registration {
     /// The Ed25519 *public* key. Upstream stores its pair as `(secret, public)`
     /// and registers `.1`; peers verify our `SignedId` against it.
     pub public_key: Vec<u8>,
+    /// The *server's* key, sent as `RequestRelay.licence_key` when joining a
+    /// relay. Empty unless configured, which is right for an unkeyed hbbr.
+    pub server_key: String,
 }
 
 /// Register, and answer connection requests, until the process ends.
@@ -249,7 +255,8 @@ fn run(reg: &Registration, ident: &Identity) -> io::Result<()> {
                 let (relay_server, uuid, secure) = (rr.relay_server, rr.uuid, rr.secure);
                 let socket_addr = rr.socket_addr;
                 let ident = ident.clone();
-                spawn(move || match relay(server, &relay_server, &uuid, &socket_addr, None) {
+                let key = reg.server_key.clone();
+                spawn(move || match relay(server, &relay_server, &uuid, &socket_addr, None, &key) {
                     Ok(stream) => run_session(stream, ident, secure, peer),
                     Err(e) => log::warn!("rendezvous: relay connect failed: {}", e),
                 });
@@ -271,8 +278,9 @@ fn run(reg: &Registration, ident: &Identity) -> io::Result<()> {
                 let (relay_server, id) = (ph.relay_server, reg.id.clone());
                 let socket_addr = ph.socket_addr;
                 let ident = ident.clone();
+                let key = reg.server_key.clone();
                 spawn(move || {
-                    match relay(server, &relay_server, &uuid, &socket_addr, Some(&id)) {
+                    match relay(server, &relay_server, &uuid, &socket_addr, Some(&id), &key) {
                         Ok(stream) => run_session(stream, ident, true, peer),
                         Err(e) => log::warn!("rendezvous: relay connect failed: {}", e),
                     }
@@ -350,6 +358,7 @@ fn relay(
     uuid: &str,
     socket_addr: &[u8],
     initiate: Option<&str>,
+    server_key: &str,
 ) -> io::Result<TcpStream> {
     // Checked before we announce anything: telling the server we are on our way
     // and then failing to arrive leaves the caller waiting on a relay we were
@@ -377,9 +386,12 @@ fn relay(
     drop(to_server);
 
     let mut stream = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT)?;
-    // `licence_key` would go here; the 1.1.8 proto has no such field. See the
-    // module header for when that matters.
+    // A keyed hbbr rejects a wrong key by *returning* -- no error comes back,
+    // the caller simply waits for a peer that never joins -- so a mismatch here
+    // looks exactly like an unreachable agent. Sent unconditionally, as
+    // upstream does: an unkeyed relay ignores the field.
     let mut req = RequestRelay::new();
+    req.licence_key = server_key.to_owned();
     req.uuid = uuid.to_owned();
     let mut msg = RendezvousMessage::new();
     msg.set_request_relay(req);

@@ -140,6 +140,22 @@ impl Config {
         self.store()
     }
 
+    /// The self-hosted server's key — the same base64 string a RustDesk client
+    /// puts in its "Key" field. Sent as `RequestRelay.licence_key` when joining
+    /// a relay, and needed only against an hbbr started with `-k`; an unkeyed
+    /// relay ignores it. Empty by default, which is the common case.
+    ///
+    /// Not to be confused with `public_key`/`secret_key`, which are this
+    /// agent's own identity. This one belongs to the server.
+    pub fn server_key(&self) -> String {
+        self.get("server_key").unwrap_or_default().to_owned()
+    }
+
+    pub fn set_server_key(&mut self, k: &str) -> io::Result<()> {
+        self.set("server_key", k);
+        self.store()
+    }
+
     pub fn password(&self) -> String {
         self.get("password").unwrap_or_default().to_owned()
     }
@@ -253,6 +269,26 @@ mod tests {
             Config::load(path.clone()).rendezvous_server(),
             "rustdesk.example.org"
         );
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// Empty by default, because that is what an unkeyed hbbr wants and a key
+    /// invented here would be worse than none: hbbr drops a mismatch silently.
+    #[test]
+    fn server_key_roundtrips_and_defaults_to_empty() {
+        let mut c = tmp_cfg();
+        let path = c.path.clone();
+        assert_eq!(c.server_key(), "");
+        // Base64 with '+' and '=' in it, since that is the shape of a real one
+        // and the config format has to carry it unmangled.
+        c.set_server_key("BSJl5A+1EXS3omQkgTiXGvdKm9HFzE50bYrf5Je4tdU=").unwrap();
+        assert_eq!(
+            Config::load(path.clone()).server_key(),
+            "BSJl5A+1EXS3omQkgTiXGvdKm9HFzE50bYrf5Je4tdU="
+        );
+        // `--key ''` clears it rather than being ignored.
+        c.set_server_key("").unwrap();
+        assert_eq!(Config::load(path.clone()).server_key(), "");
         let _ = std::fs::remove_file(path);
     }
 

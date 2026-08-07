@@ -99,6 +99,15 @@ message RequestRelay {
   bytes socket_addr = 3;
   string relay_server = 4;
   bool secure = 5;
+  // Field 6 in modern RustDesk, absent from 1.1.8. Backported because hbbr
+  // started with `-k` refuses any relay request whose key does not match
+  // (`make_pair_` in the server's relay_server.rs) -- and refuses it silently,
+  // by returning, so the caller simply waits for a peer that never joins. An
+  // unkeyed relay ignores the field, which is why this went unnoticed: hbbs is
+  // keyed even with no `-k`, since it auto-generates id_ed25519, but hbbr has
+  // no such fallback. Copied from github.com/rustdesk/hbb_common, which also
+  // has fields 8-11 that nothing here needs.
+  string licence_key = 6;
   ConnType conn_type = 7;
 }
 

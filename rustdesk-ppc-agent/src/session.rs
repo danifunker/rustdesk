@@ -964,6 +964,9 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
     let mut clip_sync = crate::clipboard::Sync::new();
     let mut clip_last_poll = std::time::Instant::now();
     let mut clip_first_poll = true;
+    // Set by the peer's `OptionMessage.disable_clipboard`, and per session:
+    // it is the *peer's* preference, so it must not outlive the peer.
+    let mut clip_disabled = false;
     // Said once per session rather than per poll: on a machine where the agent
     // was not started from the LaunchAgent this is every session, for ever.
     if !crate::clipboard::available() {
@@ -984,6 +987,7 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
                 &mut refresh_requested,
                 &mut screenshot_requested,
                 &mut clip_sync,
+                &mut clip_disabled,
                 &mut injector,
                 &mut cursor_tracker,
                 &mut last_peer_input,
@@ -996,6 +1000,7 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
                 &mut refresh_requested,
                 &mut screenshot_requested,
                 &mut clip_sync,
+                &mut clip_disabled,
             )?;
             if !alive {
                 return Ok(());
@@ -1168,7 +1173,11 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
         // Has anyone copied anything on the G5? `PasteboardSynchronize` answers
         // that in one call, which is why it is the poll rather than reading the
         // text every pass and comparing it.
-        if clip_last_poll.elapsed() >= CLIPBOARD_POLL {
+        // `clip_disabled` short-circuits the poll rather than the send, so a
+        // peer that switched the clipboard off costs no `PasteboardSynchronize`
+        // at all -- and `clip_first_poll` survives, so re-enabling mid-session
+        // still offers whatever is on the Mac now.
+        if !clip_disabled && clip_last_poll.elapsed() >= CLIPBOARD_POLL {
             clip_last_poll = std::time::Instant::now();
             // The first poll of a session ignores the flag. `kPasteboardModified`
             // reports changes made by *another* client since our last
@@ -1208,6 +1217,24 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
     }
 }
 
+/// The peer's `OptionMessage.disable_clipboard`, applied to what we already
+/// believe.
+///
+/// **`NotSet` means "no opinion", not "enable".** Options arrive one field at a
+/// time -- a client changing image quality sends an `OptionMessage` whose
+/// clipboard field is `NotSet` -- so treating the field as a value would turn
+/// the clipboard back on the moment the peer touched any other setting.
+/// Upstream guards it the same way (`connection.rs`: `if q != BoolOption::NotSet`),
+/// and this is the whole of the logic worth testing, so it is a function rather
+/// than three lines inside a match.
+fn apply_disable_clipboard(current: bool, opt: BoolOption) -> bool {
+    match opt {
+        BoolOption::Yes => true,
+        BoolOption::No => false,
+        _ => current,
+    }
+}
+
 /// Handle every message the peer has already sent, then return.
 ///
 /// Returns false when the peer has gone. Called between the stages of a frame
@@ -1220,6 +1247,7 @@ fn drain_input(
     refresh_requested: &mut bool,
     screenshot_requested: &mut Option<(String, i32)>,
     clip_sync: &mut crate::clipboard::Sync,
+    clip_disabled: &mut bool,
     #[cfg(target_os = "macos")] injector: &mut crate::input::Injector,
     #[cfg(target_os = "macos")] cursor_tracker: &mut crate::cursor::Tracker,
     #[cfg(target_os = "macos")] last_peer_input: &mut std::time::Instant,
@@ -1314,6 +1342,15 @@ fn drain_input(
                         o.disable_clipboard.enum_value_or_default(),
                         o.disable_audio.enum_value_or_default()
                     );
+                    let was = *clip_disabled;
+                    *clip_disabled =
+                        apply_disable_clipboard(was, o.disable_clipboard.enum_value_or_default());
+                    if *clip_disabled != was {
+                        log::info!(
+                            "peer {} the clipboard",
+                            if *clip_disabled { "disabled" } else { "re-enabled" }
+                        );
+                    }
                     #[cfg(target_os = "macos")]
                     if o.show_remote_cursor.enum_value_or_default() == BoolOption::Yes {
                         // Usually flipped mid-session, long after the shape was
@@ -1332,6 +1369,14 @@ fn drain_input(
             // both are decoded because the older one costs nothing and an older
             // peer would use it. See `crate::clipboard` for the rest, including
             // why the content is really zstd.
+            Some(ref u @ message::Union::clipboard(_))
+            | Some(ref u @ message::Union::multi_clipboards(_)) if *clip_disabled => {
+                // Both directions are gated, as upstream gates both on
+                // `clipboard_enabled()`. A peer that has switched the clipboard
+                // off does not expect what it copies to land on the Mac either.
+                let _ = u;
+                log::debug!("peer clipboard ignored: the peer disabled the clipboard");
+            }
             Some(ref u @ message::Union::clipboard(_))
             | Some(ref u @ message::Union::multi_clipboards(_)) => {
                 match crate::clipboard::incoming_text(u) {
@@ -1746,5 +1791,23 @@ mod tests {
     fn unset_password_refuses_rather_than_allowing_anyone() {
         let err = run_login("", "anything").unwrap_err();
         assert_eq!(err, "No Password Access");
+    }
+
+    /// The clipboard is on until the peer says otherwise, and `NotSet` is not
+    /// the peer saying otherwise. That last part is the whole reason this is a
+    /// function: every `OptionMessage` a client sends carries all the fields,
+    /// and all but the one it is changing arrive `NotSet`.
+    #[test]
+    fn disable_clipboard_ignores_not_set_rather_than_reading_it_as_enable() {
+        // Default on, and an unrelated option change must not disturb it.
+        assert!(!apply_disable_clipboard(false, BoolOption::NotSet));
+        assert!(apply_disable_clipboard(true, BoolOption::NotSet), "stays off");
+
+        // Explicit answers are obeyed in both directions, and are idempotent --
+        // a client re-sends the same options whenever any of them changes.
+        assert!(apply_disable_clipboard(false, BoolOption::Yes));
+        assert!(apply_disable_clipboard(true, BoolOption::Yes));
+        assert!(!apply_disable_clipboard(true, BoolOption::No));
+        assert!(!apply_disable_clipboard(false, BoolOption::No));
     }
 }

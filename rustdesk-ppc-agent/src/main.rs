@@ -35,6 +35,10 @@ OPTIONS:
                      registers on every start after this. Makes the machine
                      reachable by ID from anywhere, not just by IP on this LAN.
     --no-server      stop registering, and exit
+    --key KEY        the server's key -- the same string a RustDesk client
+                     puts in its Key field. Persisted, and sent when joining a
+                     relay. Only needed against an hbbr started with -k; an
+                     unkeyed relay ignores it. --key '' clears it.
     --config PATH    config file (default ~/.rustdesk-ppc-agent.conf)
     --secure         require the signed_id/public_key exchange. OFF by default:
                      a client connecting by IP does not take part, and enabling
@@ -66,6 +70,8 @@ fn main() {
     // `None` leaves whatever is in the config; `Some("")` is how --no-server
     // clears it, which a plain absent flag must not do.
     let mut set_server: Option<String> = None;
+    // Same rule: absent leaves the stored key alone, `--key ''` clears it.
+    let mut set_key: Option<String> = None;
 
     let mut i = 0;
     while i < argv.len() {
@@ -146,6 +152,10 @@ fn main() {
                 set_server = Some(String::new());
                 i += 1;
             }
+            "--key" => {
+                set_key = Some(need(i));
+                i += 2;
+            }
             "-h" | "--help" => usage(),
             _ => usage(),
         }
@@ -180,6 +190,18 @@ fn main() {
             println!("rendezvous server cleared; the agent is direct-IP only");
         } else {
             println!("rendezvous server set to {}", s);
+        }
+        return;
+    }
+    if let Some(k) = set_key {
+        cfg.set_server_key(&k).unwrap_or_else(|e| {
+            eprintln!("error: could not save config: {}", e);
+            exit(1);
+        });
+        if k.is_empty() {
+            println!("server key cleared; relays that require one will drop us");
+        } else {
+            println!("server key set ({} characters)", k.len());
         }
         return;
     }
@@ -231,6 +253,9 @@ fn main() {
     println!("display   : {}x{}", width, height);
     println!("mode      : {}", if secure { "secure (peer must know our key)" } else { "direct-IP, UNENCRYPTED" });
     println!("server    : {}", if server.is_empty() { "none -- direct IP only".to_owned() } else { server.clone() });
+    if !server.is_empty() {
+        println!("server key: {}", if cfg.server_key().is_empty() { "none (fine unless hbbr was started with -k)" } else { "set" });
+    }
 
     // Register with a rendezvous server, so the agent is reachable by id from
     // anywhere rather than only by address on this subnet. Its own thread: see
@@ -245,6 +270,7 @@ fn main() {
             id: ident.id.clone(),
             uuid: cfg.uuid(),
             public_key: pk.0.to_vec(),
+            server_key: cfg.server_key(),
         };
         let ident = ident.clone();
         std::thread::spawn(move || rustdesk_ppc_agent::rendezvous::serve(reg, ident));
