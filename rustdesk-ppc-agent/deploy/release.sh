@@ -124,8 +124,7 @@ for arch in $ARCHES; do
 
     # Big-endian header read a byte at a time; the host is little-endian, so
     # `od -tu4` would report 100 as 1677721600 -- a wrong answer, not an error.
-    GOT_SUBTYPE="$(od -An -tu1 -j8 -N4 "$BIN" \
-                   | awk '{print $1 * 16777216 + $2 * 65536 + $3 * 256 + $4}')"
+    GOT_SUBTYPE="$(od -An -tu1 -j8 -N4 "$BIN" | awk 'NR==1 { print $1 * 16777216 + $2 * 65536 + $3 * 256 + $4; exit }')"
     if [ "$GOT_SUBTYPE" != "$WANT_SUBTYPE" ]; then
         echo "error: $arch built cpusubtype $GOT_SUBTYPE, expected $WANT_SUBTYPE" >&2
         exit 1

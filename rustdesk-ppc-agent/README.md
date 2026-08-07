@@ -175,27 +175,33 @@ sh "$APP/install.sh" --password hunter2 --server rd.example.org --yes
 sh "$APP/install.sh" --uninstall
 ```
 
-### Why the app is a compiled AppleScript applet
+### Why the app is a small Cocoa program
 
-Both alternatives were measured on 10.5.8 rather than assumed, and both fail:
+The window shows every setting at once — password, ID server, relay server,
+server key — with **Save Changes**, and a row of **Install/Uninstall, Start,
+Stop, Restart, Refresh** whose enabled states follow what the service is
+actually doing. `deploy/app-ui.m` is the interface; `deploy/agent-helper.sh` is
+everything it shells out to, so the half that can be tested from a terminal is
+tested from one on every build.
 
-* **A shell script as `CFBundleExecutable`** — the usual trick for this sort of
-  thing — is refused by LaunchServices with **-10810** (`kLSUnknownErr`) once it
-  is any bigger than trivial. A three-line script app launches; the real one
-  never did, and it was not the bundle name, the `Info.plist` keys, the size, or
-  anything in `Resources`.
-* **Even when such an app does launch, it gets one dialog.** Only the first
-  `osascript` is user-interactive; every later one fails with **-1713** ("No
-  user interaction allowed"), because a script app never becomes a foreground
-  application. Running it from launchd instead fails at the *first* dialog.
+Two earlier attempts are worth recording, both measured on 10.5.8:
 
-`osacompile` produces a real application with Apple's own Mach-O as the
-executable, which has neither problem — verified showing three dialogs in a row
-including a hidden-answer one. So `deploy/app.applescript` is the UI and
-`deploy/agent-helper.sh` is everything it shells out to, which keeps the half
-that can be tested from a terminal testable. `bundle.sh` compiles the applet,
-checks the executable really is Mach-O, and exercises the helper's `status` and
-`menu` commands on every build.
+* **A shell script as `CFBundleExecutable`** — the usual trick — is refused by
+  LaunchServices with **-10810** (`kLSUnknownErr`) once it is any bigger than
+  trivial. A three-line script app launches; the real one never did, and it was
+  not the bundle name, the `Info.plist` keys, the size, or `Resources`.
+* **A compiled AppleScript applet** fixes that and can show as many dialogs as
+  it likes, but AppleScript has no form: `display dialog` takes one field, so
+  "configure the agent" became a chain of prompts with no way to see the
+  current settings together, change two, and save. That is a menu, not a
+  settings window.
+
+Apple's gcc 4.0.1 is on the G5 with Xcode 3, so the UI is ~400 lines of
+deliberately old Objective-C — no properties, no dot syntax, no blocks, and
+pre-10.12 Cocoa names, because the agent supports Tiger. It is laid out in code
+rather than a nib to keep a binary artifact out of the tree. `bundle.sh`
+compiles it on the Mac, checks the result is a Mach-O whose cpusubtype is not
+970 (so the same UI runs on a G4 and a G5), and exercises the helper.
 
 **Websockets and an API server are deliberately absent**, and the app says so
 rather than offering dead controls: this agent has no websocket transport and
