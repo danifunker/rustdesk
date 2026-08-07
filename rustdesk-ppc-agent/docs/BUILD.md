@@ -29,6 +29,14 @@ Rosetta. Two reasons, in order of importance:
   libyuv and libopus are all already generic `ppc` — the encoder, which is the
   real CPU cost, is identical in both.
 
+**The G4 build was then run on the G5 through a whole session**, rather than
+being reasoned about: secure handshake, login, 16 video frames with 2 keyframes,
+first frame 0.87 s, the 1.2.4+ refresh button producing a keyframe in 0.72 s
+with the control correctly producing none, and a 1920x1080 screenshot in 0.75 s.
+`--probe-display` on the same binary reports the C colour shim byte-identical to
+the Rust reference for both `argb->rgb` and `argb->i420`. Those numbers match
+what the G5 build has always produced.
+
 The G5 and universal (fat, `lipo`-fused) paths still work and are one flag
 away — `--arch "g5 g4 universal"` — but nothing needs them, and each extra
 variant is another download for someone to pick wrongly.
@@ -213,6 +221,8 @@ The two things most likely to misbehave, worth knowing before trying:
 
 If you try it, `~/rustdesk-ppc-agent/agent.log` says which of these happened;
 the log lines were written for precisely this kind of unknown.
+[`10.6-TESTING.md`](10.6-TESTING.md) has the sequence to run, what each failure
+looks like, and what to bring back.
 
 ---
 
