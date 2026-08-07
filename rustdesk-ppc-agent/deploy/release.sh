@@ -48,6 +48,7 @@ while [ $# -gt 0 ]; do
         --version)   [ $# -ge 2 ] || usage; VERSION="$2"; shift 2 ;;
         --skip-build) SKIP_BUILD=1; shift ;;
         --allow-dirty) ALLOW_DIRTY=1; shift ;;
+        --host|-H)   [ $# -ge 2 ] || usage; HOST="$2"; export PPC_HOST="$2"; shift 2 ;;
         --help|-h)   usage ;;
         *) echo "unknown option: $1" >&2; usage ;;
     esac
@@ -113,8 +114,12 @@ echo
 
 # Host-side tests first. They cover the protocol decisions, and they are free
 # compared with a 15-minute PowerPC build -- failing here costs nothing.
-echo "--- host tests"
-cargo test --quiet 2>&1 | tail -3
+if [ "${RELEASE_SKIP_TESTS:-0}" = "1" ]; then
+    echo "--- host tests: SKIPPED by request"
+else
+    echo "--- host tests"
+    cargo test --quiet 2>&1 | tail -3
+fi
 echo
 
 for arch in $ARCHES; do

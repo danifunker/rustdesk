@@ -134,6 +134,27 @@ signing secret key).
 
 ## Installing it on another Mac
 
+**One command builds everything:**
+
+```bash
+./build-release.sh --host admin@192.168.99.116     # or an ssh alias, or -i <key>
+```
+
+That runs the host tests, builds for the G5 and the G4, verifies each against
+the CPU it claims, fuses them into a universal binary, and for each variant
+relocates the libraries, compiles the settings app, assembles the `.app`, tars
+it and builds a disk image — ending with checksums and a manifest in
+`target/release/<version>/`. It checks both machines first, because finding out
+that `lipo` is missing after two fifteen-minute builds wastes half an hour: the
+Mac must be PowerPC Darwin with gcc, cctools, `hdiutil` and Cocoa, and this
+machine must have mrustc, the remote-compiler wrappers and a standard library
+for every CPU being built. `MRUSTC_DIR`, `PPC_TOOLS_DIR` and `PPC_LIBS_DIR`
+override the paths.
+
+The pieces underneath are still independently runnable, and each carries its
+own reasoning: `build-ppc.sh` (one CPU), `deploy/make-universal.sh`,
+`deploy/bundle.sh`, `deploy/make-dmg.sh`, `deploy/release.sh`.
+
 The built binary is **not portable on its own**: `otool -L` names five MacPorts
 libraries by absolute path, which exist only on a machine somebody has built a
 toolchain on. (libsodium, libvpx, libopus and libyuv are statically linked and
