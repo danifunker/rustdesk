@@ -709,81 +709,72 @@ flag, and `Identity` is `Clone` so each session can carry its own. `--secure`
 now governs only the direct-IP listener. Every one of the four verified paths
 above began `step 1: sending signed_id`, which is that working.
 
-## ~~3. Audio~~ (done, 2026-08-07, except for hearing it)
+## 3. Audio (built, works, reverted -- it captures the wrong thing)
 
-48 kHz stereo, Opus in restricted-low-delay mode, 10 ms frames -- upstream's
-numbers, and not adjustable ones: Opus takes 8/12/16/24/48 kHz and nothing else.
-`AudioFormat` is `Misc` field 8 and `AudioFrame` is `Message` field 11, both
-already in the 1.1.8 proto, so nothing needed backporting.
+**The code exists and is proven; it is not in the tree.** Built 2026-08-07 and
+reverted the same day at the user's call, for a reason no amount of polish
+fixes: it captures the default *input* device, and what anyone actually wants is
+the sound the G5 is playing. Line-in noise at 2 kbit/s is not worth a feature.
 
-`magnum-opus` was the plan and is not what shipped. It carries a bindgen build
-step, and every build-time crate has to be transpiled for the host by mrustc
-before a line of the agent compiles; the API actually used is four functions, so
-`src/opus_shim.c` calls them directly and the dependency list stays at five.
-Headers are vendored under `opus-include/` for the same reason vpx's are.
+`git show 2f4fa3a4d` is the whole of it, and `git revert` of the revert brings
+it back. Do that if a loopback driver ever appears -- see below.
 
-Measured end to end against a real session:
+What it did, measured against a real session under the LaunchAgent, alongside
+working video and clipboard:
 
 ```text
 audio format announced: 48000 Hz, 2 channels
 first audio frame after 0.24s (3 bytes)
 audio frames : 1470 (4410 bytes, 2.3 kbit/s)
-video frames : 16 (2 keyframes)
 ```
 
-1470 frames in 15 s is 98/second, which is the 10 ms cadence, and the format
-arrives before the first frame -- it has to, because the peer sizes its decoder
-from it. Confirmed under the LaunchAgent, in the same session as working video
-and clipboard.
+48 kHz stereo, Opus restricted-low-delay, 10 ms frames -- 1470 frames in 15 s is
+98/second, which is the cadence. `AudioFormat` is `Misc` field 8 and
+`AudioFrame` is `Message` field 11, both already in the 1.1.8 proto.
 
-### The capture was running and delivering nothing
+### What would make it worth having
 
-Worth recording because the *first* version of the shim could not tell anyone
-why. It opened, reported 48 kHz stereo, and returned zero samples in five
-seconds -- not silence, which would be 48000 zeros a second, but nothing.
+**A loopback driver, and no code change.** Mac OS X cannot capture its own
+output -- ScreenCaptureKit is 12.3+, twelve years after this hardware -- and
+upstream's macOS path has the same limitation and the same answer: a loopback
+driver *becomes* the default input, and the capture already written picks it up.
+Soundflower shipped PowerPC builds for 10.4/10.5. That is the one thing standing
+between the reverted commit and a useful feature, and it is an install rather
+than a patch.
 
-The cause: on 10.5 the AUHAL converts channels and sample format but is not
-reliable about **rate**, so a device sitting at some other rate makes every
-`AudioUnitRender` fail rather than resampling. The shim swallowed that error and
-counted nothing, so "no audio" was one message for two opposite faults -- a unit
-that never runs, and a unit that runs and fails every render. **That is the same
-instrumentation gap item 1d records for the capture path**, repeated within a
-day of writing it down.
+### Two findings that outlive the code
 
-Adding three counters -- callbacks, failed renders, last `OSStatus` -- turned it
-into a specific answer in one build. The fix is to ask the *device* for 48 kHz
-(`kAudioDevicePropertyNominalSampleRate`) before asking the unit for it; the
-PCM3052 in this machine offers it natively. Afterwards: 47922 samples per
-channel per second, 469 callbacks, **0 failed renders, 0 overruns**.
+**10.5's AUHAL will not resample.** It converts channels and sample format, but
+a device sitting at a rate other than the one asked for makes every
+`AudioUnitRender` fail rather than convert. The fix is to set the *device's*
+rate first (`kAudioDevicePropertyNominalSampleRate`) and then ask the unit; the
+PCM3052 in this machine offers 48 kHz natively. Anything else touching CoreAudio
+here will hit this.
 
-### What a peer can actually hear, which is less than one would like
+**The shim could not say why it was silent, and that cost the evening.** It
+opened, reported 48 kHz stereo, and returned zero samples in five seconds -- not
+silence, which is 48000 zeros a second, but nothing. The render error was
+swallowed and nothing was counted, so "no audio" was one message for a unit that
+never runs and a unit that runs and fails every render, which want opposite
+investigations. Adding three counters -- callbacks, failed renders, last
+`OSStatus` -- turned it into an answer in one build.
 
-**Mac OS X cannot capture its own output.** ScreenCaptureKit is 12.3+, twelve
-years after this hardware, and upstream's macOS path has the same limitation and
-the same answer: it opens the default *input* device, and someone who wants
-system sound installs a loopback driver, which then *becomes* the default input
-and needs no change here.
+**This is the same instrumentation gap item 1d records for the capture path**,
+repeated within a day of writing that down. The lesson evidently does not
+transfer by being written once: a probe that reports *what happened* rather than
+*that it failed* is worth building before it is needed, not after.
 
-So on a G5 with nothing in line-in, a peer hears the line input's noise floor.
-That is also why the silence gate never closes in practice: it tests for
-`!= 0.0`, exactly as upstream does, and an analogue input is never digitally
-zero. It costs 3 bytes a frame, so the gate earns its keep only against a muted
-loopback -- which is the case it was written for.
+### If it is ever picked up again
 
-**Not verified: that it sounds right.** Everything above is the pipeline
-proving itself -- format announced, frames at the right cadence, valid packets,
-a codec round trip on the machine. Whether music is music needs a cable into
-line-in and a human. `--probe-audio` reports peak and RMS for exactly that
-check, and prints `SILENT (nothing plugged in?)` when there is nothing to hear.
+`magnum-opus` was the plan and is not what was built. It carries a bindgen build
+step, and every build-time crate has to be transpiled for the host by mrustc
+before a line of the agent compiles; the API actually used is four functions.
+`opus_shim.c` in the reverted commit calls them directly, with headers vendored
+under `opus-include/` for the reason vpx's are.
 
-### Still open
-
-* **Cost on the G5 is unmeasured.** The pump is bounded at 320 ms of backlog per
-  pass so one slow full-screen frame cannot spend its whole budget encoding, and
-  `overruns` reports when the ring laps the reader -- it was 0 throughout, but
-  never with a busy screen and a real audio source at the same time.
-* **Microphone only, per above.** A loopback driver would make this useful for
-  the case people actually want, and needs no code.
+Also 10.5-specific and easy to lose an hour to: `AudioComponentFindNext` is
+10.6, so a HAL unit has to come from the Component Manager. Every example
+written since 2009 uses the newer pair.
 
 ## ~~4. Keyboard beyond raw keycodes~~ (done)
 

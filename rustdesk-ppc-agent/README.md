@@ -8,13 +8,12 @@ exists rather than a port of `src/server/`.
 Status: connects, authenticates and streams VP8 to a real client, with keyboard,
 mouse, trackpad scrolling, the real pointer shape, LAN discovery, screenshots,
 clipboard text (see "Where the agent has to run" below — the clipboard is
-the one feature that constrains it), Opus audio from the default input, and
-registration with a self-hosted rendezvous server, so it is reachable by ID
-rather than only by address.
+the one feature that constrains it) and registration with a self-hosted
+rendezvous server, so it is reachable by ID rather than only by address.
 It reports itself as **1.4.5**, which is a capability declaration rather than a
 label — see `REPORTED_VERSION` in `src/session.rs`. See
-[`docs/BACKLOG.md`](docs/BACKLOG.md) for what is left, which is now mostly
-verification rather than features: audio has never been heard, only measured.
+[`docs/BACKLOG.md`](docs/BACKLOG.md) for what is missing — notably audio and
+rendezvous registration.
 
 ## Connecting to it
 
@@ -39,28 +38,6 @@ you moved it with `--port`.
 Nothing needs enabling client-side: typing an IP triggers a direct connection.
 (RustDesk's "Direct IP Access" *setting* is for the machine being controlled —
 here that is this agent, which always listens.)
-
-### Sound
-
-A session carries Opus audio from the **default input device** — 48 kHz stereo,
-10 ms frames. Nothing to turn on; a peer that has muted us is honoured.
-
-**It cannot hear what the G5 is playing.** Mac OS X has no native capture of
-system output (ScreenCaptureKit is 12.3+, and upstream's macOS path has the same
-limitation), so a peer hears line-in. Installing a loopback driver makes that
-driver the default input, which is the supported way to share system sound and
-needs no change here. With nothing plugged in, expect the input's noise floor at
-about 2 kbit/s.
-
-`--probe-audio` checks the codec against a synthetic tone and then reports what
-the device is actually delivering, including whether anything is audible:
-
-```text
-codec    : PASS
-capture  : open at 48000 Hz, 2 channels
-level    : peak 0.0000, rms 0.0000 -- SILENT (nothing plugged in?)
-callbacks: 469, failed renders: 0, last OSStatus: 0
-```
 
 The G5 also answers the UDP broadcast on 21119 that populates a client's
 local-network list, so it can be picked from there instead of typed (`src/lan.rs`).
@@ -139,7 +116,6 @@ INFO clipboard unavailable: the pasteboard needs the Aqua session, ...
 rustdesk-agent --show-id          # the agent's ID
 rustdesk-agent --show-key         # public key a peer can pin
 rustdesk-agent --probe-display    # framebuffer geometry and per-stage timings
-rustdesk-agent --probe-audio      # self-test the codec, then listen for 5s
 rustdesk-agent --listen 127.0.0.1 --port 5900
 ```
 
@@ -161,9 +137,9 @@ real rustc rejects, so the macOS-gated modules need checking against a compiler
 that does. There is no macOS host here, so the cfg is forced instead:
 
 ```bash
-rsync -a src examples Cargo.toml Cargo.lock build.rs .cargo vendor opus-include /tmp/mac-check/
+rsync -a src examples Cargo.toml Cargo.lock build.rs .cargo vendor /tmp/mac-check/
 cd /tmp/mac-check
-sed -i 's/kind = "framework"/kind = "dylib"/' src/capture.rs src/input.rs src/audio.rs
+sed -i 's/kind = "framework"/kind = "dylib"/' src/capture.rs src/input.rs
 printf 'fn main() {}\n' > build.rs        # see below -- this line is the point
 RUSTFLAGS='--cfg target_os="macos" -A explicit_builtin_cfgs_in_flags -A unexpected_cfgs' \
   cargo check --all-targets
@@ -240,7 +216,6 @@ python3 -c "from PIL import Image; im=Image.open('/tmp/out/display.png'); \
 | `src/encode.rs`, `src/vpx_shim.c` | VP8 via libvpx |
 | `src/png.rs` | PNG for `ScreenshotResponse`, via the system zlib |
 | `src/clipboard.rs`, `src/clipboard_shim.c` | clipboard text, via libzstd and the Pasteboard Manager |
-| `src/audio.rs`, `src/audio_shim.c`, `src/opus_shim.c` | AUHAL capture, Opus encode |
 | `src/input.rs` | Quartz Event Services injection |
 | `src/lan.rs` | answers the UDP discovery broadcast |
 | `src/rendezvous.rs` | registers with a server, and answers connection requests |

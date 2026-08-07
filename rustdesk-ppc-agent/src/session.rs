@@ -517,96 +517,6 @@ pub fn serve(stream: TcpStream, ident: &Identity) -> io::Result<()> {
     message_loop(&mut peer)
 }
 
-/// Sound capture and encoding, kept beside the message loop.
-///
-/// Deliberately shaped like `Video`: optional, and a session that cannot open
-/// it serves without sound rather than failing. On this machine that is the
-/// common case, not the exception -- nothing is plugged into line-in, and Mac
-/// OS X cannot capture its own output (see `crate::audio`).
-#[cfg(target_os = "macos")]
-struct Audio {
-    cap: crate::audio::Capture,
-    enc: crate::audio::Encoder,
-    framer: crate::audio::Framer,
-    buf: Vec<f32>,
-    /// Set by the peer's `disable_audio`. Capture keeps running -- the ring is
-    /// cheap and stopping the unit mid-session risks not getting it back -- but
-    /// nothing is encoded or sent.
-    muted: bool,
-    frames: u64,
-    bytes: u64,
-}
-
-#[cfg(target_os = "macos")]
-impl Audio {
-    fn new() -> Result<Self, String> {
-        let cap = crate::audio::Capture::open()?;
-        let enc = crate::audio::Encoder::new()?;
-        Ok(Audio {
-            cap,
-            enc,
-            framer: crate::audio::Framer::new(),
-            // Room for a full drain of a loop that has been away a while.
-            buf: vec![0.0; crate::audio::FRAME_FLOATS * 64],
-            muted: false,
-            frames: 0,
-            bytes: 0,
-        })
-    }
-
-    /// What the peer needs before any frame arrives, or it cannot set up a
-    /// decoder. Sent once at login, the same way the display size is.
-    fn format_msg() -> Message {
-        let mut f = AudioFormat::new();
-        f.sample_rate = crate::audio::SAMPLE_RATE;
-        f.channels = crate::audio::CHANNELS as u32;
-        let mut mi = Misc::new();
-        mi.set_audio_format(f);
-        let mut m = Message::new();
-        m.set_misc(mi);
-        m
-    }
-
-    /// Drain what has been captured and send it on.
-    ///
-    /// Bounded: the video path can be away for half a second on a full-screen
-    /// frame, and without a cap one slow pass would spend that backlog on
-    /// encoding instead of on the picture. The ring holds a second, so a bounded
-    /// drain falls behind rather than losing anything, and `overruns` is what
-    /// says when that stopped being true.
-    fn pump(&mut self, peer: &mut Peer) -> io::Result<()> {
-        if self.muted {
-            return Ok(());
-        }
-        const MAX_FLOATS_PER_PASS: usize = crate::audio::FRAME_FLOATS * 32; // 320 ms
-        let mut taken = 0;
-        while taken < MAX_FLOATS_PER_PASS {
-            let got = self.cap.read(&mut self.buf);
-            if got == 0 {
-                break;
-            }
-            taken += got;
-            let (enc, frames, bytes) = (&mut self.enc, &mut self.frames, &mut self.bytes);
-            let mut out: Vec<Vec<u8>> = Vec::new();
-            self.framer.push(&self.buf[..got], |frame| {
-                if let Ok(p) = enc.encode(frame) {
-                    *frames += 1;
-                    *bytes += p.len() as u64;
-                    out.push(p.to_vec());
-                }
-            });
-            for p in out {
-                let mut af = AudioFrame::new();
-                af.data = p;
-                let mut m = Message::new();
-                m.set_audio_frame(af);
-                peer.send(&m)?;
-            }
-        }
-        Ok(())
-    }
-}
-
 /// Video pump state, kept beside the message loop.
 #[cfg(all(target_os = "macos", not(no_vpx)))]
 struct Video {
@@ -1002,27 +912,6 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
     #[cfg(all(target_os = "macos", not(no_vpx)))]
     let mut video_retry_at = std::time::Instant::now() + VIDEO_RETRY;
 
-    // Sound. Announced before any frame, because the peer sizes its decoder
-    // from the format and a frame that arrives first has nowhere to go.
-    #[cfg(target_os = "macos")]
-    let mut audio = match Audio::new() {
-        Ok(a) => {
-            log::info!(
-                "audio: capturing the default input at {} Hz, {} channels",
-                a.cap.rate,
-                a.cap.channels
-            );
-            peer.send(&Audio::format_msg())?;
-            Some(a)
-        }
-        Err(e) => {
-            // Not a warning: on a machine with nothing plugged in this is every
-            // session for ever, and it is not a fault.
-            log::info!("audio unavailable: {} -- this session is silent", e);
-            None
-        }
-    };
-
     peer.stream.set_read_timeout(Some(std::time::Duration::from_millis(POLL_MS)))?;
     #[cfg(target_os = "macos")]
     let mut injector = crate::input::Injector::new();
@@ -1077,9 +966,6 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
         );
     }
 
-    // Set from the peer's OptionMessage; applied to the pump each pass.
-    let mut audio_muted = false;
-
     macro_rules! pump_input {
         () => { pump_input!(true) };
         ($wait:expr) => {{
@@ -1091,7 +977,6 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
                 &mut refresh_requested,
                 &mut screenshot_requested,
                 &mut clip_sync,
-                &mut audio_muted,
                 &mut injector,
                 &mut cursor_tracker,
                 &mut last_peer_input,
@@ -1104,7 +989,6 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
                 &mut refresh_requested,
                 &mut screenshot_requested,
                 &mut clip_sync,
-                &mut audio_muted,
             )?;
             if !alive {
                 return Ok(());
@@ -1161,14 +1045,6 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
         // Both ways a session ends up without a picture: never having had one,
         // and `broken`, which `poll_geometry` sets when the encoder cannot be
         // rebuilt around a new screen size. Neither recovers on its own.
-        // Before the video work: a full-screen frame is half a second of
-        // reading and converting, and sound that waits for it arrives in bursts.
-        #[cfg(target_os = "macos")]
-        if let Some(a) = audio.as_mut() {
-            a.muted = audio_muted;
-            a.pump(peer)?;
-        }
-
         #[cfg(all(target_os = "macos", not(no_vpx)))]
         let no_picture = video.as_ref().map_or(true, |v| v.broken);
         #[cfg(all(target_os = "macos", not(no_vpx)))]
@@ -1337,7 +1213,6 @@ fn drain_input(
     refresh_requested: &mut bool,
     screenshot_requested: &mut Option<(String, i32)>,
     clip_sync: &mut crate::clipboard::Sync,
-    audio_muted: &mut bool,
     #[cfg(target_os = "macos")] injector: &mut crate::input::Injector,
     #[cfg(target_os = "macos")] cursor_tracker: &mut crate::cursor::Tracker,
     #[cfg(target_os = "macos")] last_peer_input: &mut std::time::Instant,
@@ -1432,16 +1307,6 @@ fn drain_input(
                         o.disable_clipboard.enum_value_or_default(),
                         o.disable_audio.enum_value_or_default()
                     );
-                    // Honoured rather than only logged: a peer that has muted
-                    // us should not be charged for the bandwidth, and on this
-                    // machine the encode is not free either. `NotSet` means the
-                    // peer said nothing on this message, which must not be read
-                    // as "unmute" -- only an explicit No does that.
-                    match o.disable_audio.enum_value_or_default() {
-                        BoolOption::Yes => *audio_muted = true,
-                        BoolOption::No => *audio_muted = false,
-                        _ => {}
-                    }
                     #[cfg(target_os = "macos")]
                     if o.show_remote_cursor.enum_value_or_default() == BoolOption::Yes {
                         // Usually flipped mid-session, long after the shape was
