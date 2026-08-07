@@ -156,6 +156,23 @@ impl Config {
         self.store()
     }
 
+    /// A relay to use instead of the one the rendezvous server advertises.
+    ///
+    /// Empty by default, which is right: hbbs advertises a relay to peers that
+    /// do not set their own, and upstream's `get_relay_server` prefers the
+    /// local option only when it is present. Worth having because the server
+    /// can advertise something a remote caller cannot reach -- a LAN address,
+    /// which is one of the three faults in BACKLOG.md item 12 -- and this is
+    /// the escape hatch for it that does not require touching the server.
+    pub fn relay_server(&self) -> String {
+        self.get("relay_server").unwrap_or_default().to_owned()
+    }
+
+    pub fn set_relay_server(&mut self, s: &str) -> io::Result<()> {
+        self.set("relay_server", s);
+        self.store()
+    }
+
     pub fn password(&self) -> String {
         self.get("password").unwrap_or_default().to_owned()
     }

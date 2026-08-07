@@ -1,13 +1,19 @@
 #!/usr/bin/env bash
 #
-# Build a self-contained installer tarball for a PowerPC Mac.
+# Build a self-contained "RustDesk Agent.app" for a PowerPC Mac.
 #
 #   ./deploy/bundle.sh              # bundle target/ppc/rustdesk-agent
 #   PPC_HOST=g4tiger ./deploy/bundle.sh
 #
-# Produces  target/rustdesk-agent-<arch>.tar.gz  containing the binary, every
-# non-system library it needs, the LaunchAgent plist and `install.sh`. Untar it
-# on any PowerPC Mac running 10.4 or 10.5 and run ./install.sh.
+# Produces  target/rustdesk-agent-<arch>.tar.gz  containing an application
+# bundle: the binary, every non-system library it needs, the LaunchAgent
+# template and install.sh, all under Contents/Resources. Untar it on any
+# PowerPC Mac running 10.4 or 10.5, drag the app where you want it, and
+# double-click -- it offers to install the background service, and afterwards
+# it is where the password and server settings live.
+#
+# For a headless install over ssh, install.sh is still there:
+#   "RustDesk Agent.app/Contents/Resources/install.sh" --password x --yes
 #
 # WHY THIS EXISTS: the binary is not portable as built. `otool -L` on it names
 # five MacPorts libraries by absolute path -- /opt/local/lib/libzstd, libz,
@@ -59,11 +65,12 @@ echo "bundling $(basename "$BIN") (cpusubtype $SUBTYPE -> $ARCH) via $HOST"
 # remote half is a single ssh round trip.
 scp -q "$BIN" "$HERE/deploy/install.sh" "$HERE/deploy/agent-ctl.sh" \
        "$HERE/deploy/com.rustdesk.ppc-agent.plist.in" \
-       "$HOST:/tmp/" 2>/dev/null || {
-    ssh "$HOST" "mkdir -p /tmp"
-    scp -q "$BIN" "$HERE/deploy/install.sh" "$HERE/deploy/agent-ctl.sh" \
-           "$HERE/deploy/com.rustdesk.ppc-agent.plist.in" "$HOST:/tmp/"
-}
+       "$HERE/deploy/agent-helper.sh" "$HERE/deploy/app.applescript" \
+       "$HOST:/tmp/"
+
+# The version stamped into the app bundle. Read here rather than on the Mac,
+# which has no copy of Cargo.toml.
+APP_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$HERE/Cargo.toml" | head -1)"
 
 # ---------------------------------------------------------------------------
 # The remote half: collect, relocate, verify, tar.
@@ -72,17 +79,45 @@ scp -q "$BIN" "$HERE/deploy/install.sh" "$HERE/deploy/agent-ctl.sh" \
 # is a stub that pulls in libgcc_s.1.1 and libgcc_ehs.1.1 -- a one-level copy
 # produces a bundle that links and then fails to load.
 # ---------------------------------------------------------------------------
-ssh "$HOST" "STAGE='$STAGE_REMOTE' NAME='$NAME' bash -s" <<'REMOTE'
+ssh "$HOST" "STAGE='$STAGE_REMOTE' NAME='$NAME' APP_VERSION='$APP_VERSION' bash -s" <<'REMOTE'
 set -euo pipefail
 rm -rf "$STAGE"
-mkdir -p "$STAGE/$NAME/lib"
-D="$STAGE/$NAME"
 
+# The artifact is an application bundle, because that is how someone installs
+# software on a Mac: drag it across, double-click it, and it offers to install
+# the service. Everything the installer needs lives in Contents/Resources, and
+# the payload sits directly in Resources so that @executable_path/lib -- which
+# is relative to the *binary*, not to the bundle -- resolves.
+# The UI is a COMPILED APPLET, not a shell script as CFBundleExecutable.
+# LaunchServices refuses the latter with -10810 once it is any bigger than
+# trivial, and even when it launches only its first osascript can display
+# anything. osacompile produces a real application with Apple's own Mach-O
+# executable, which has neither problem. See app.applescript's header.
+mkdir -p "$STAGE/$NAME"
+APP="$STAGE/$NAME/RustDesk Agent.app"
+osacompile -o "$APP" /tmp/app.applescript \
+    || { echo "error: the app's AppleScript does not compile" >&2; exit 1; }
+
+# The payload sits directly in Resources so that @executable_path/lib -- which
+# is relative to the *binary being run*, not to the bundle -- resolves when the
+# agent is launched from there before installation.
+D="$APP/Contents/Resources"
+mkdir -p "$D/lib"
 cp /tmp/rustdesk-agent "$D/rustdesk-agent"
 cp /tmp/install.sh "$D/install.sh"
 cp /tmp/agent-ctl.sh "$D/rustdesk-ctl"
 cp /tmp/com.rustdesk.ppc-agent.plist.in "$D/com.rustdesk.ppc-agent.plist.in"
-chmod +x "$D/rustdesk-agent" "$D/install.sh" "$D/rustdesk-ctl"
+cp /tmp/agent-helper.sh "$D/agent-helper.sh"
+chmod +x "$D/rustdesk-agent" "$D/install.sh" "$D/rustdesk-ctl" "$D/agent-helper.sh"
+
+# osacompile names every applet "Applet". Give it ours.
+defaults write "$APP/Contents/Info" CFBundleName "RustDesk Agent"
+defaults write "$APP/Contents/Info" CFBundleDisplayName "RustDesk Agent"
+defaults write "$APP/Contents/Info" CFBundleIdentifier "com.rustdesk.ppc-agent.settings"
+defaults write "$APP/Contents/Info" CFBundleShortVersionString "$APP_VERSION"
+defaults write "$APP/Contents/Info" CFBundleVersion "$APP_VERSION"
+plutil -lint "$APP/Contents/Info.plist" >/dev/null \
+    || { echo "error: Info.plist is malformed after editing" >&2; exit 1; }
 
 # A dependency worth copying: anything not under /usr/lib or /System, i.e. not
 # shipped with the OS. Everything else is guaranteed present on any 10.4/10.5.
@@ -167,6 +202,32 @@ fi
 echo "  bundle runs: $( cd "$D" && ./rustdesk-agent --config "$STAGE/probe.conf" --show-id )"
 rm -f "$STAGE/probe.conf" "$STAGE/err"
 
+# The app's non-interactive half, which is everything except the dialogs: it
+# reads the config, finds the binary and formats the status block. A typo in any
+# of that fails here rather than as an empty window on someone's Mac.
+if ! sh "$D/agent-helper.sh" status > "$STAGE/status" 2>&1; then
+    echo "error: the app's status command failed:" >&2; cat "$STAGE/status" >&2; exit 1
+fi
+grep -q '^Status:' "$STAGE/status" || { echo "error: unexpected status output:" >&2; cat "$STAGE/status" >&2; exit 1; }
+
+# State-independent: the build machine usually *has* the agent installed, so a
+# check for "Install" passes or fails depending on who is building. Assert what
+# is true in both branches -- the settings are offered, and exactly one of
+# Install/Uninstall.
+MENU="$(sh "$D/agent-helper.sh" menu)"
+echo "$MENU" | grep -q '^Set the password$' \
+    || { echo "error: the app menu is missing its settings items:" >&2; echo "$MENU" >&2; exit 1; }
+N_STATE="$(echo "$MENU" | grep -c '^Install$\|^Uninstall$')"
+[ "$N_STATE" = "1" ] \
+    || { echo "error: menu offers $N_STATE of Install/Uninstall, expected exactly 1" >&2; echo "$MENU" >&2; exit 1; }
+
+# And the applet really is an application: a Mach-O executable, not a script.
+EXE="$(defaults read "$APP/Contents/Info" CFBundleExecutable)"
+file "$APP/Contents/MacOS/$EXE" | grep -q 'Mach-O' \
+    || { echo "error: the app executable is not a Mach-O; osacompile did not run?" >&2; exit 1; }
+echo "  app: applet compiles, executable is Mach-O, status and menu work"
+rm -f "$STAGE/status"
+
 ( cd "$STAGE" && tar czf "$NAME.tar.gz" "$NAME" )
 REMOTE
 
@@ -177,6 +238,13 @@ ssh "$HOST" "rm -rf '$STAGE_REMOTE' /tmp/rustdesk-agent /tmp/install.sh /tmp/age
 echo
 echo "built $TARBALL ($(du -h "$TARBALL" | cut -f1))"
 echo
-echo "To install on a PowerPC Mac:"
-echo "    scp $TARBALL user@mac:~/"
-echo "    ssh user@mac 'tar xzf $NAME.tar.gz && cd $NAME && ./install.sh'"
+cat <<EOM
+
+To install on a PowerPC Mac:
+    scp $TARBALL user@mac:~/
+    then on the Mac: untar it, drag "RustDesk Agent" where you want it,
+    and double-click it. It offers to install the background service.
+
+Or headless, over ssh:
+    ssh user@mac "tar xzf $NAME.tar.gz && sh '$NAME/RustDesk Agent.app/Contents/Resources/install.sh' --yes --password <pw>"
+EOM

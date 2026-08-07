@@ -124,6 +124,21 @@ pub struct Registration {
     /// The *server's* key, sent as `RequestRelay.licence_key` when joining a
     /// relay. Empty unless configured, which is right for an unkeyed hbbr.
     pub server_key: String,
+    /// A relay to use instead of whichever one the server names. Empty means
+    /// "use the server's", which is the normal case.
+    pub relay_server: String,
+}
+
+/// Which relay to actually join: ours if configured, otherwise the one the
+/// server named. Mirrors upstream's `get_relay_server`, which prefers the local
+/// option only when it is set -- see `config::relay_server` for when that
+/// matters.
+fn choose_relay(configured: &str, advertised: &str) -> String {
+    if configured.is_empty() {
+        advertised.to_owned()
+    } else {
+        configured.to_owned()
+    }
 }
 
 /// Register, and answer connection requests, until the process ends.
@@ -231,7 +246,8 @@ fn run(reg: &Registration, ident: &Identity) -> io::Result<()> {
                     continue;
                 }
                 log::info!("rendezvous: local-network request from {}", peer);
-                let (id, relay_server) = (reg.id.clone(), fla.relay_server.clone());
+                let (id, relay_server) =
+                    (reg.id.clone(), choose_relay(&reg.relay_server, &fla.relay_server));
                 let ident = ident.clone();
                 spawn(move || match fetch_local_addr(server, &relay_server, &id, peer) {
                     // Upstream serves this path secure: a peer arriving through
@@ -252,7 +268,8 @@ fn run(reg: &Registration, ident: &Identity) -> io::Result<()> {
                     rr.uuid,
                     rr.secure
                 );
-                let (relay_server, uuid, secure) = (rr.relay_server, rr.uuid, rr.secure);
+                let (relay_server, uuid, secure) =
+                    (choose_relay(&reg.relay_server, &rr.relay_server), rr.uuid, rr.secure);
                 let socket_addr = rr.socket_addr;
                 let ident = ident.clone();
                 let key = reg.server_key.clone();
@@ -275,7 +292,8 @@ fn run(reg: &Registration, ident: &Identity) -> io::Result<()> {
                     if ph.relay_server.is_empty() { "(unset)" } else { &ph.relay_server },
                     uuid
                 );
-                let (relay_server, id) = (ph.relay_server, reg.id.clone());
+                let (relay_server, id) =
+                    (choose_relay(&reg.relay_server, &ph.relay_server), reg.id.clone());
                 let socket_addr = ph.socket_addr;
                 let ident = ident.clone();
                 let key = reg.server_key.clone();
@@ -631,6 +649,23 @@ fn mangle_decode(bytes: &[u8]) -> SocketAddr {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    /// The default has to be "use whatever the server said", because that is
+    /// the only relay a stock deployment has: hbbs advertises one to peers that
+    /// do not set their own. An override that applied when unset would break
+    /// every working setup.
+    #[test]
+    fn relay_override_applies_only_when_configured() {
+        assert_eq!(choose_relay("", "relay.example.org"), "relay.example.org");
+        assert_eq!(choose_relay("mine.example.org", "relay.example.org"), "mine.example.org");
+        // The case this exists for: the server names something a remote caller
+        // cannot reach, and ours wins anyway.
+        assert_eq!(choose_relay("public.example.org", "192.168.99.1"), "public.example.org");
+        // Both empty is not an error here -- `relay` rejects an empty target
+        // with a message, rather than dialling nothing.
+        assert_eq!(choose_relay("", ""), "");
+    }
 
     #[test]
     fn mangle_round_trips() {

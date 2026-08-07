@@ -35,6 +35,10 @@ OPTIONS:
                      registers on every start after this. Makes the machine
                      reachable by ID from anywhere, not just by IP on this LAN.
     --no-server      stop registering, and exit
+    --relay-server H use this relay instead of the one the server advertises.
+                     Persisted. Empty is the default and means whichever relay
+                     the rendezvous server names, which is normally right.
+                     --relay-server '' clears an override.
     --key KEY        the server's key -- the same string a RustDesk client
                      puts in its Key field. Persisted, and sent when joining a
                      relay. Only needed against an hbbr started with -k; an
@@ -72,6 +76,7 @@ fn main() {
     let mut set_server: Option<String> = None;
     // Same rule: absent leaves the stored key alone, `--key ''` clears it.
     let mut set_key: Option<String> = None;
+    let mut set_relay: Option<String> = None;
 
     let mut i = 0;
     while i < argv.len() {
@@ -156,6 +161,10 @@ fn main() {
                 set_key = Some(need(i));
                 i += 2;
             }
+            "--relay-server" => {
+                set_relay = Some(need(i));
+                i += 2;
+            }
             "-h" | "--help" => usage(),
             _ => usage(),
         }
@@ -190,6 +199,18 @@ fn main() {
             println!("rendezvous server cleared; the agent is direct-IP only");
         } else {
             println!("rendezvous server set to {}", s);
+        }
+        return;
+    }
+    if let Some(r) = set_relay {
+        cfg.set_relay_server(&r).unwrap_or_else(|e| {
+            eprintln!("error: could not save config: {}", e);
+            exit(1);
+        });
+        if r.is_empty() {
+            println!("relay override cleared; the server's relay will be used");
+        } else {
+            println!("relay server set to {}", r);
         }
         return;
     }
@@ -271,6 +292,7 @@ fn main() {
             uuid: cfg.uuid(),
             public_key: pk.0.to_vec(),
             server_key: cfg.server_key(),
+            relay_server: cfg.relay_server(),
         };
         let ident = ident.clone();
         std::thread::spawn(move || rustdesk_ppc_agent::rendezvous::serve(reg, ident));
