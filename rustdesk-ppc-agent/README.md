@@ -140,11 +140,11 @@ signing secret key).
 ./build-release.sh --host admin@192.168.99.116     # or an ssh alias, or -i <key>
 ```
 
-That runs the host tests, builds for the G5 and the G4, verifies each against
-the CPU it claims, fuses them into a universal binary, and for each variant
-relocates the libraries, compiles the settings app, assembles the `.app`, tars
-it and builds a disk image — ending with checksums and a manifest in
-`target/release/<version>/`. It checks both machines first, because finding out
+That runs the host tests, builds the agent, verifies it against the CPU it
+claims, then relocates the libraries, compiles the settings app, assembles the
+`.app`, tars it and builds a disk image — ending with checksums and a manifest
+in `target/release/<version>/`. Full requirements for both machines, and what
+each is for, are in [`docs/BUILD.md`](docs/BUILD.md). It checks both machines first, because finding out
 that `lipo` is missing after two fifteen-minute builds wastes half an hour: the
 Mac must be PowerPC Darwin with gcc, cctools, `hdiutil` and Cocoa, and this
 machine must have mrustc, the remote-compiler wrappers and a standard library
@@ -165,25 +165,15 @@ need nothing.) So there are two steps — bundle, then install:
 ./deploy/bundle.sh                   # produces target/rustdesk-agent-g5.tar.gz
 ```
 
-**Take the universal download unless you have a reason not to.** It carries both
-builds in one Mach-O and the Mac picks at launch, so the same `.app` is right on
-a G4 and a G5 — including after a disk is moved between them, which is the case
-that makes a single download worth the size. It is 8 MB against 4; the
-single-CPU downloads are still built for when that matters.
+**There is one download.** It is built for the G4 (`cpusubtype` 10 / `ppc7400`)
+and runs on a G4, on a G5, and under Rosetta — which is why it targets the older
+CPU rather than the faster one: **Rosetta refuses anything requiring a G5**, and
+the G5 build was measured to buy nothing. Both were timed on a G5 with
+`--probe-display`: the colour conversion is 16-17 ms either way, because it is a
+C shim and the frame is dominated by the VRAM read, while libvpx and every
+static library are already generic `ppc`. See [`docs/BUILD.md`](docs/BUILD.md).
 
-Mach-O's fat format keys slices on cputype **and cpusubtype**, so two PowerPC
-builds coexist and the kernel grades them at `exec`. Measured rather than
-assumed: a fat binary whose two slices print their own names prints the G5 one
-on the G5, and each slice extracted with `lipo -thin` prints what it claims.
-There is no launcher script and nothing chosen at install time. The app's status
-says which slice the machine will use — *G4 and G5 (this Mac runs the G5
-build)*.
-
-If you do take a single-CPU download, they are told apart by the enclosing
-folder (`rustdesk-agent-g4/` or `-g5/`), by the version string in Get Info
-(`0.1.0 (G4)`), and by the same "Built for" line. A G4 build runs on a G5 too;
-a G5 build on a G4 is refused by the installer, which now reads a fat header
-properly rather than mistaking the first slice's cputype for a cpusubtype.
+A G3 will not work: the shims and libvpx use AltiVec, which no G3 has.
 
 `bundle.sh` copies every non-system library the binary needs — walked
 *transitively*, because `libgcc_s.1.dylib` is a stub that pulls in two more —
