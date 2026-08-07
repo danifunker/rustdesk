@@ -278,9 +278,9 @@
     float y = 166;
     struct { NSString *label; NSString *hint; } rows[4] = {
         { @"Password:",    @"what someone types to connect; leave blank to keep the current one" },
-        { @"ID server:",   @"your hbbs host, or empty for direct IP only" },
+        { @"ID server:",   @"the same ID Server your clients use; empty means direct IP only" },
         { @"Relay server:",@"optional; empty means whichever relay the ID server names" },
-        { @"Server key:",  @"only needed if your relay (hbbr) was started with -k" },
+        { @"Server key:",  @"the same Key your clients use; only needed if hbbr runs with -k" },
     };
     NSTextField **targets[4];
     passwordField = [self fieldAt:NSMakeRect(130, 0, WIN_W - 150, 22) secure:YES];
@@ -299,6 +299,9 @@
         NSTextField *f = *(targets[i]);
         [f setFrame:NSMakeRect(130, TOP(y, 22), WIN_W - 150, 22)];
         [v addSubview:f];
+        /* One line, and it does not wrap or ellipsise -- it simply gets cut
+         * off, which is how the first version of these hints lost the end of
+         * two of them. Keep each under about 70 characters at this width. */
         [v addSubview:[self labelAt:NSMakeRect(132, TOP(y + 23, 14), WIN_W - 150, 14)
                                text:rows[i].hint bold:NO]];
         y += 44;
