@@ -87,14 +87,20 @@ fn main() {
         Some(message::Union::signed_id(x)) => {
             println!("  mode: secure (signed_id offered)");
             let signed = x.id;
-            let text = match &expect_pk {
+            // Decoded exactly as `decode_id_pk` does in the client's
+            // src/common.rs: verify, then parse the payload as `IdPk`. This
+            // probe used to split the payload on a NUL and base64-decode the
+            // rest, which is the 1.1.8 format -- so it agreed with the agent
+            // while every real client fell back to plaintext. A mirror that
+            // does not decode the way upstream decodes proves nothing.
+            let payload = match &expect_pk {
                 Some(pkb) if pkb.len() == sign::PUBLICKEYBYTES => {
                     let mut k = [0u8; sign::PUBLICKEYBYTES];
                     k.copy_from_slice(pkb);
                     match sign::verify(&signed, &sign::PublicKey(k)) {
                         Ok(v) => {
                             println!("  signed_id signature: VERIFIED");
-                            String::from_utf8(v).unwrap()
+                            v
                         }
                         Err(_) => {
                             eprintln!("FAIL: signed_id signature did not verify");
@@ -104,14 +110,30 @@ fn main() {
                 }
                 _ => {
                     println!("  signed_id signature: not checked (no pubkey given)");
-                    String::from_utf8_lossy(&signed[sign::SIGNATUREBYTES..]).into_owned()
+                    signed[sign::SIGNATUREBYTES..].to_vec()
                 }
             };
-            let mut parts = text.splitn(2, '\0');
-            println!("  agent id  : {}", parts.next().unwrap_or(""));
-            let raw = b64_decode(parts.next().unwrap_or("")).expect("bad ephemeral key b64");
+            let idpk = match IdPk::parse_from_bytes(&payload) {
+                Ok(v) => v,
+                Err(e) => {
+                    // What a real client hits here it does not report: it
+                    // answers with an empty PublicKey and carries on unencrypted.
+                    eprintln!("FAIL: signed_id payload is not an IdPk protobuf: {}", e);
+                    eprintln!("      a real client would silently drop to plaintext here");
+                    std::process::exit(1)
+                }
+            };
+            println!("  agent id  : {}", idpk.id);
+            if idpk.pk.len() != box_::PUBLICKEYBYTES {
+                eprintln!(
+                    "FAIL: ephemeral key is {} bytes, not {}",
+                    idpk.pk.len(),
+                    box_::PUBLICKEYBYTES
+                );
+                std::process::exit(1)
+            }
             let mut pkb = [0u8; box_::PUBLICKEYBYTES];
-            pkb.copy_from_slice(&raw);
+            pkb.copy_from_slice(&idpk.pk);
 
             let sym = secretbox::gen_key();
             let (our_pk, our_sk) = box_::gen_keypair();

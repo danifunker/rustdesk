@@ -409,6 +409,18 @@ message PublicKey {
   bytes symmetric_value = 2;
 }
 
+// Absent from 1.1.8, which signed a plaintext "<id>\0<base64(pk)>" string
+// instead. Backported because a modern client parses `SignedId.id` as this
+// message (`decode_id_pk` in the client's src/common.rs) and, when the parse
+// fails, silently answers with an empty `PublicKey` -- so the session falls
+// back to plaintext with the client logging a misleading "pk mismatch". Copied
+// verbatim from github.com/rustdesk/hbb_common, where it sits by VideoFrame.
+// Note `pk` is the raw 32-byte X25519 key, not base64.
+message IdPk {
+  string id = 1;
+  bytes pk = 2;
+}
+
 message SignedId {
   bytes id = 1;
 }

@@ -13,11 +13,14 @@
 //!    and sends, *unencrypted*:
 //!
 //! ```text
-//! Message{ signed_id: SignedId{ id: sign("<id>\0<base64(ephemeral_pk)>") } }
+//! Message{ signed_id: SignedId{ id: sign(IdPk{ id, pk: ephemeral_pk }) } }
 //! ```
 //!
 //!    Note `sign::sign` — the **combined** form (signature ‖ message), not
-//!    `sign_detached`.
+//!    `sign_detached` — and that the signed message is a serialised `IdPk`
+//!    protobuf carrying the **raw** 32-byte key. 1.1.8 signed the plaintext
+//!    string `"<id>\0<base64(pk)>"` here; see `signed_id` for why that is not
+//!    what we send.
 //! 3. The peer replies with `Message{ public_key: PublicKey{ asymmetric_value,
 //!    symmetric_value } }`, where `asymmetric_value` is its own 32-byte X25519
 //!    public key and `symmetric_value` is the secretbox key sealed with
@@ -35,7 +38,10 @@
 //! `LoginRequest{ password, .. }`, and the agent checks
 //! `sha256(sha256(permanent_password ‖ salt) ‖ challenge)`.
 
+use protobuf::Message as _;
 use sodiumoxide::crypto::{box_, secretbox, sign};
+
+use crate::message_proto::IdPk;
 
 /// Sealed frames plus the two nonce counters. Mirrors the `(Key, u64, u64)`
 /// tuple in hbb_common's `FramedStream`.
@@ -83,11 +89,28 @@ impl Handshake {
         Self { our_pk_b, our_sk_b }
     }
 
-    /// The payload for `SignedId.id`: `sign("<id>\0<base64(ephemeral_pk)>", sk)`.
-    /// Combined form — signature and message together.
+    /// The payload for `SignedId.id`: `sign(IdPk{ id, pk }, sk)`, combined form
+    /// — signature and message together.
+    ///
+    /// **The message is a protobuf, not a string.** 1.1.8 signed
+    /// `"<id>\0<base64(ephemeral_pk)>"` and this agent did too, which is a
+    /// format no modern client can read: `decode_id_pk` (the client's
+    /// `src/common.rs`) verifies the signature — which succeeded, our key being
+    /// fine — and then runs `IdPk::parse_from_bytes` over it, which fails. The
+    /// client answers a failed parse with an **empty `PublicKey`**, the same
+    /// thing it sends when it has no key for us, so every session through the
+    /// rendezvous server silently fell back to plaintext while the client
+    /// logged "pk mismatch". The pk was never the problem; the encoding was.
+    ///
+    /// `pk` goes in as raw bytes — the old format base64'd it, this one does
+    /// not. Mirrors `src/server.rs:210-225` in current master.
     pub fn signed_id(&self, id: &str, sk: &sign::SecretKey) -> Vec<u8> {
-        let msg = format!("{}\0{}", id, base64_encode(&self.our_pk_b.0));
-        sign::sign(msg.as_bytes(), sk)
+        let mut idpk = IdPk::new();
+        idpk.id = id.to_owned();
+        idpk.pk = self.our_pk_b.0.to_vec();
+        // `write_to_bytes` fails only on a message with unset required fields,
+        // which proto3 does not have. Upstream does the same with `unwrap_or_default`.
+        sign::sign(&idpk.write_to_bytes().unwrap_or_default(), sk)
     }
 
     /// Open the peer's sealed secretbox key. `asymmetric_value` is its X25519
@@ -141,40 +164,13 @@ pub fn verify_login_hash(expected: &[u8], got: &[u8]) -> bool {
     diff == 0
 }
 
-/// Standard base64, matching the `base64` crate's default alphabet as used by
-/// `src/server.rs`. Inlined to keep the dependency list minimal — this is the
-/// only place the agent needs it.
-fn base64_encode(input: &[u8]) -> String {
-    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity((input.len() + 2) / 3 * 4);
-    for chunk in input.chunks(3) {
-        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
-        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
-        out.push(T[(n >> 18 & 0x3F) as usize] as char);
-        out.push(T[(n >> 12 & 0x3F) as usize] as char);
-        out.push(if chunk.len() > 1 { T[(n >> 6 & 0x3F) as usize] as char } else { '=' });
-        out.push(if chunk.len() > 2 { T[(n & 0x3F) as usize] as char } else { '=' });
-    }
-    out
-}
+// A base64 encoder lived here, for the `<id>\0<base64(pk)>` payload. `IdPk`
+// carries the key as raw bytes, so the agent no longer needs base64 anywhere:
+// the only other place a key is written out is `config.rs`, which uses hex.
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn base64_matches_the_reference_alphabet() {
-        assert_eq!(base64_encode(b""), "");
-        assert_eq!(base64_encode(b"f"), "Zg==");
-        assert_eq!(base64_encode(b"fo"), "Zm8=");
-        assert_eq!(base64_encode(b"foo"), "Zm9v");
-        assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
-        assert_eq!(base64_encode(b"fooba"), "Zm9vYmE=");
-        assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
-        // 32 bytes, the actual case: an X25519 public key. 32 % 3 == 2, so a
-        // single '=' pad. Cross-checked against Python's base64.b64encode.
-        assert_eq!(base64_encode(&[0xFFu8; 32]), "//////////////////////////////////////////8=");
-    }
 
     #[test]
     fn nonce_is_little_endian_regardless_of_host_byte_order() {
@@ -250,16 +246,58 @@ mod tests {
         assert!(agent.open_symmetric_key(&[7u8; 32], &[0u8; 48]).is_err());
     }
 
+    /// The signed payload, pinned against a vector assembled from the protobuf
+    /// encoding rules rather than from our own codegen.
+    ///
+    /// The test this replaced encoded and decoded with this module's own code,
+    /// so it agreed with itself perfectly — and would have agreed just as
+    /// perfectly with an invented format, which is what it was in fact
+    /// certifying for months. Same reasoning, and the same class of bug, as
+    /// `rendezvous::mangle_matches_the_wire_format`.
     #[test]
-    fn signed_id_is_verifiable_and_carries_the_ephemeral_key() {
+    fn signed_id_matches_the_wire_format() {
+        // Both keys from seeds, so the output is fixed rather than fresh.
+        let (verify_pk, sk) = sign::keypair_from_seed(&sign::Seed([0x42u8; 32]));
+        let (our_pk_b, our_sk_b) = box_::keypair_from_seed(&box_::Seed([0x11u8; 32]));
+        let agent = Handshake { our_pk_b, our_sk_b };
+
+        let signed = agent.signed_id("4iv3930za", &sk);
+        let msg = sign::verify(&signed, &verify_pk).expect("signature must verify");
+
+        // Hand-assembled from the wire spec, not from `IdPk::write_to_bytes`:
+        //   field 1 `id`, wire type 2 -> tag (1<<3)|2 = 0x0a, length, UTF-8
+        //   field 2 `pk`, wire type 2 -> tag (2<<3)|2 = 0x12, length, RAW key
+        // The key is 32 raw bytes; base64 here is what the old format did and
+        // is what no client could read.
+        let mut want = vec![0x0a, 9];
+        want.extend_from_slice(b"4iv3930za");
+        want.extend_from_slice(&[0x12, 32]);
+        want.extend_from_slice(&agent.our_pk_b.0);
+        assert_eq!(msg, want);
+
+        // 64-byte signature + 11 + 34 = 109, which is also the size of the
+        // signed `IdPk` a real hbbs hands a caller for a 9-character id --
+        // the one length here that was measured off another implementation.
+        assert_eq!(signed.len(), 109);
+    }
+
+    /// Decoded the way the *client* decodes it: verify, then parse `IdPk` —
+    /// `decode_id_pk` in upstream's `src/common.rs`, which is the code that
+    /// silently gave up on us. Splitting on a separator we chose is what the
+    /// old test did.
+    #[test]
+    fn signed_id_decodes_the_way_a_modern_client_decodes_it() {
         let (pk, sk) = sign::gen_keypair();
         let agent = Handshake::new();
         let signed = agent.signed_id("123456789", &sk);
+
         let opened = sign::verify(&signed, &pk).expect("signature must verify");
-        let text = String::from_utf8(opened).unwrap();
-        let mut parts = text.splitn(2, '\0');
-        assert_eq!(parts.next().unwrap(), "123456789");
-        assert_eq!(parts.next().unwrap(), base64_encode(&agent.our_pk_b.0));
+        let idpk = IdPk::parse_from_bytes(&opened).expect("client parses SignedId.id as IdPk");
+        assert_eq!(idpk.id, "123456789");
+        // The client's `get_pk` rejects anything that is not exactly 32 bytes,
+        // and answers with an empty PublicKey when it does.
+        assert_eq!(idpk.pk.len(), box_::PUBLICKEYBYTES);
+        assert_eq!(idpk.pk, agent.our_pk_b.0.to_vec());
     }
 
     #[test]

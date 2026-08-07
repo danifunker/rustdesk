@@ -603,7 +603,10 @@ same reason `probe_client` exists:
 | `RequestRelay` (caller chose one) | caller joined the same uuid at hbbr and **received the agent's 122-byte `signed_id` through the relay** |
 
 Every one started `step 1: sending signed_id`, which is the point of the second
-item below: those sessions are encrypted whether or not `--secure` was passed.
+item below: those sessions take the encrypted path whether or not `--secure` was
+passed. Starting it was as far as they got, and this table did not notice --
+see "What only a real client could find" below, which is why the wording here
+used to say they *were* encrypted.
 
 **Two deliberate divergences from upstream**, both in the module header:
 
@@ -653,6 +656,49 @@ against a vector computed independently, which is the test that would have.
 
 Confirmed on the machine afterwards: the same probe that hung now gets
 `CONNECTED -- the agent accepted us`.
+
+### ~~What only a real client could find: `signed_id` was a 1.1.8 string~~ (fixed)
+
+The same class of bug as the one above, found the same way -- by something that
+was not us -- and it had been shipping since the handshake was written.
+
+Every session arriving through the rendezvous server logged:
+
+```text
+step 2: peer declined encryption -- continuing UNENCRYPTED
+```
+
+on the path that is *supposed* to be the encrypted one. **We signed a 1.1.8-era
+plaintext string and the client parses a protobuf.** `crypto::signed_id` sent
+`sign("<id>\0<base64(pk)>")`; `decode_id_pk` in the client's `src/common.rs`
+verifies the signature -- which succeeded, our key being fine, and hbbs handing
+the client the right one -- and then runs `IdPk::parse_from_bytes` over the
+result, which fails on a string that is not protobuf.
+
+**The client's answer to a failed parse is an empty `PublicKey`**, the one
+branch of `secure_connection` that sends one, and that is indistinguishable at
+this end from "no key for you, carry on in the clear". So the fault could not
+fail loudly: it downgraded the session and logged a "declined". The client's own
+line says `pk mismatch`, which sent the first look in the wrong direction --
+the pk was right, the encoding was not.
+
+Fixed by backporting `IdPk` (it is not in the 1.1.8 proto) and signing it, with
+the key as **raw** bytes rather than base64. `signed_id` is now 109 bytes for a
+9-character id, which is exactly what hbbs itself produces -- so the `signed_id`
+measured through the relay in the table above is 113 bytes now rather than 122,
+the difference being base64 and the `Message` envelope.
+
+**Nothing caught it because everything that could have was written by us.**
+`probe_client` and `crypto::tests::signed_id_is_verifiable_and_carries_the_ephemeral_key`
+both implemented the same invented format, agreed with the agent perfectly, and
+would have agreed just as perfectly with any other format -- and on the strength
+of that agreement this file said the `--secure` path "exists and is tested". It
+was tested against ourselves. The two tests that replaced it pin the payload
+against a vector assembled from the protobuf spec and decode it the way
+`decode_id_pk` does, which is the same remedy `mangle_matches_the_wire_format`
+is for the `u128` bug -- **the second time in two days that a self-consistent
+round trip certified a wire format nobody else could read.** A mirror written
+from the same head as the code is not a witness.
 
 ### A trap worth not rediscovering: an API server breaks connecting *to* us
 
@@ -707,7 +753,9 @@ see the module header. A peer arriving via rendezvous *does*, so `rendezvous`
 sets `secure` per connection from the route the peer took rather than from the
 flag, and `Identity` is `Clone` so each session can carry its own. `--secure`
 now governs only the direct-IP listener. Every one of the four verified paths
-above began `step 1: sending signed_id`, which is that working.
+above began `step 1: sending signed_id`, which is the routing working -- though
+for a while that was all it was, the exchange itself collapsing one message
+later, which is the item above.
 
 ## 3. Audio (built, works, reverted -- it captures the wrong thing)
 
