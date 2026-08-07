@@ -2,8 +2,9 @@
 #
 # Build, package and verify release artifacts. Run on the host; needs the G5.
 #
-#   ./deploy/release.sh                     # both CPUs, version from Cargo.toml
+#   ./deploy/release.sh                     # g5, g4 and a universal build
 #   ./deploy/release.sh --arch g4           # just one
+#   ./deploy/release.sh --arch universal    # the single download that runs on both
 #   ./deploy/release.sh --version 0.2.0
 #   ./deploy/release.sh --skip-build        # re-package what is already built
 #
@@ -31,7 +32,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HOST="${PPC_HOST:-ppctiger}"
 export SSH_AUTH_SOCK="${SSH_AUTH_SOCK:-/tmp/ssh-agent-ppc.sock}"
 
-ARCHES="g5 g4"
+ARCHES="g5 g4 universal"
 VERSION=""
 SKIP_BUILD=0
 ALLOW_DIRTY=0
@@ -102,6 +103,33 @@ cargo test --quiet 2>&1 | tail -3
 echo
 
 for arch in $ARCHES; do
+    # The universal build is not a compile: it fuses the two that came before,
+    # so it must run last and it reuses their verification rather than
+    # repeating it. `otool` on a fat file disassembles one slice, so the
+    # instruction scan genuinely cannot be redone here -- which is why the g4
+    # slice is checked as a thin binary above, before it is fused.
+    if [ "$arch" = "universal" ]; then
+        echo "=============================================================="
+        echo "  universal   (fuses the g4 and g5 builds)"
+        echo "=============================================================="
+        for need in g4 g5; do
+            [ -f "$HERE/target/ppc-$need/rustdesk-agent" ] || {
+                echo "error: universal needs the $need build; run without --arch" >&2; exit 1; }
+        done
+        OUT="$HERE/target/ppc-universal"
+        ./deploy/make-universal.sh "$HERE/target/ppc-g4/rustdesk-agent" \
+                                   "$HERE/target/ppc-g5/rustdesk-agent" \
+                                   "$OUT/rustdesk-agent" | sed 's/^/  /'
+        echo "  bundling ..."
+        PPC_BIN="$OUT/rustdesk-agent" PPC_BUNDLE_OUT="$HERE/target" ./deploy/bundle.sh | sed 's/^/    /'
+        SRC_TAR="$HERE/target/rustdesk-agent-universal.tar.gz"
+        [ -f "$SRC_TAR" ] || { echo "error: bundle.sh produced no $SRC_TAR" >&2; exit 1; }
+        mv "$SRC_TAR" "$REL/rustdesk-agent-$VERSION-universal.tar.gz"
+        echo "  -> rustdesk-agent-$VERSION-universal.tar.gz"
+        echo
+        continue
+    fi
+
     CPU="$(flags_for "$arch")"
     WANT_SUBTYPE="$(subtype_for "$arch")"
     [ -n "$CPU" ] || { echo "error: unknown arch '$arch'" >&2; exit 1; }
@@ -183,10 +211,13 @@ sha256sum ./*.tar.gz > SHA256SUMS
         arch="${f##*-}"; arch="${arch%.tar.gz}"
         echo "  $f"
         echo "      for:        $(case $arch in g5) echo 'PowerPC G5 (970) only';;
-                                              g4) echo 'PowerPC G4 (7450); also runs on a G5';;
-                                              g3) echo 'PowerPC G3 (750); untested';; esac)"
+                                              g4) echo 'PowerPC G4; also runs on a G5';;
+                                              g3) echo 'PowerPC G3 (750); untested';;
+                                              universal) echo 'G4 and G5 -- one download, the Mac picks at launch';; esac)"
+        if [ "$arch" != "universal" ]; then
         echo "      cpu flags:  $(flags_for "$arch")"
         echo "      cpusubtype: $(subtype_for "$arch")"
+        fi
         echo "      size:       $(du -h "$f" | cut -f1)"
         echo "      sha256:     $(sha256sum "$f" | cut -d' ' -f1)"
     done

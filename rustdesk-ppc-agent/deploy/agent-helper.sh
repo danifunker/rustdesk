@@ -48,6 +48,17 @@ ctl() {
     fi
 }
 
+# Which slice of a universal binary this Mac executes. A plain function, not a
+# case nested inside a command substitution inside a string: Leopard's bash
+# fails to parse that, and the error lands in the middle of the status block.
+this_slice() {
+    case "$(machine 2>/dev/null)" in
+        ppc970) echo "the G5 build" ;;
+        ppc74*) echo "the G4 build" ;;
+        *)      echo "whichever slice matches" ;;
+    esac
+}
+
 is_installed() { [ -x "$BIN" ] && [ -f "$PLIST" ]; }
 # Exact match on the label, not a substring. `launchctl list` prints
 # PID<TAB>status<TAB>label, and the settings app registers itself as
@@ -79,6 +90,12 @@ status)
     # Which CPU this copy was built for. The G4 and G5 downloads carry the same
     # app name, so without this there is nothing on screen to tell them apart.
     arch="$(cat "$RES/BUILD-ARCH" 2>/dev/null || echo '?')"
+    # A universal copy carries both, and the kernel grades them at exec time --
+    # so name the one this machine will actually run, which is the question
+    # someone reads this line to answer.
+    case "$arch" in
+        *and*) arch="$arch (this Mac runs $(this_slice))" ;;
+    esac
     printf 'Status:      %s\nID:          %s\nThis Mac:    %s\nPassword:    %s\nID server:   %s\nRelay:       %s\nServer key:  %s\nBuilt for:   %s' \
         "$st" "$id" "$ip" "$pw" "$srv" "$rly" "$key" "$arch"
     ;;
