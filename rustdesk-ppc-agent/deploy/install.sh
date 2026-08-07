@@ -24,6 +24,13 @@
 # Re-running the installer to upgrade in place is the supported way.
 set -eu
 
+# Exact match on the label, not a substring. `launchctl list` prints
+# PID<TAB>status<TAB>label, and the settings app registers itself as
+# "[0x0-...].com.rustdesk.ppc-agent.settings" -- which CONTAINS the agent's
+# label, so `grep -q "$LABEL"` is true whenever the window is merely open. That
+# made Stop report "It is still running" every time, and the Start/Stop buttons
+# read the wrong state. The app's bundle id being a prefix of the job label is
+# allowed; code that cannot tell them apart is not.
 LABEL=com.rustdesk.ppc-agent
 PREFIX="$HOME/rustdesk-ppc-agent"
 PORT=21118
@@ -172,7 +179,7 @@ mkdir -p "$PREFIX" "$HOME/Library/LaunchAgents"
 
 # Stop anything already running before overwriting the binary it is executing.
 # KeepAlive means a plain kill is not enough: launchd puts it straight back.
-if launchctl list 2>/dev/null | grep -q "$LABEL"; then
+if launchctl list 2>/dev/null | awk -v l="$LABEL" '$NF == l { f = 1 } END { exit !f }' ; then
     note "stopping the running agent"
     launchctl unload -S Aqua "$PLIST" >/dev/null 2>&1 || \
         launchctl unload "$PLIST" >/dev/null 2>&1 || true
@@ -292,7 +299,7 @@ fi
 sleep 2
 
 echo
-if launchctl list 2>/dev/null | grep -q "$LABEL"; then
+if launchctl list 2>/dev/null | awk -v l="$LABEL" '$NF == l { f = 1 } END { exit !f }' ; then
     echo "Running. It will start again at every login."
 else
     echo "The LaunchAgent is installed but not running yet."
