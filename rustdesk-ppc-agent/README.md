@@ -144,6 +144,13 @@ need nothing.) So there are two steps — bundle, then install:
 ./deploy/bundle.sh                   # produces target/rustdesk-agent-g5.tar.gz
 ```
 
+**The G4 and G5 downloads are separate**, and both contain an app of the same
+name. They are told apart by the enclosing folder (`rustdesk-agent-g4/` or
+`-g5/`), by the version string in Get Info (`0.1.0 (G4)`), and by the "Built
+for" line the app shows. A G4 build runs on a G5 as well, so one is enough if
+you would rather keep a single download; a G5 build on a G4 is refused by the
+installer with the rebuild command.
+
 `bundle.sh` copies every non-system library the binary needs — walked
 *transitively*, because `libgcc_s.1.dylib` is a stub that pulls in two more —
 rewrites the load commands to `@executable_path/lib`, checks that nothing
@@ -151,7 +158,7 @@ absolute is left, and runs the result before packing it. It does that work on a
 PowerPC Mac over ssh, because `install_name_tool` is part of Darwin's cctools
 and there is no build of it on the host. About 1 MB of libraries, 4 MB packed.
 
-Then, on the target Mac, untar it and **double-click "RustDesk Agent"**. The app
+Then, on the target Mac, untar it and **double-click "Agent for RustDesk PPC"**. The app
 is the installer and the settings panel both: it shows the ID, whether the
 service is running, and the current server, and offers to install or remove the
 background service, set the password, ID server, server key and relay, and show
@@ -162,7 +169,7 @@ the bundle:
 
 ```bash
 tar xzf rustdesk-agent-g5.tar.gz
-APP="rustdesk-agent-g5/RustDesk Agent.app/Contents/Resources"
+APP="rustdesk-agent-g5/Agent for RustDesk PPC.app/Contents/Resources"
 sh "$APP/install.sh"                                              # asks for a password
 sh "$APP/install.sh" --password hunter2 --server rd.example.org --yes
 sh "$APP/install.sh" --uninstall
