@@ -11,9 +11,9 @@ clipboard text (see "Where the agent has to run" below — the clipboard is
 the one feature that constrains it) and registration with a self-hosted
 rendezvous server, so it is reachable by ID rather than only by address.
 It reports itself as **1.4.5**, which is a capability declaration rather than a
-label — see `REPORTED_VERSION` in `src/session.rs`. See
-[`docs/BACKLOG.md`](docs/BACKLOG.md) for what is missing — notably audio and
-rendezvous registration.
+label — see `REPORTED_VERSION` in `src/session.rs`. There is deliberately **no
+audio**; see below for why. [`docs/BACKLOG.md`](docs/BACKLOG.md) has the rest of
+what is missing.
 
 ## Connecting to it
 
@@ -121,6 +121,37 @@ rustdesk-agent --listen 127.0.0.1 --port 5900
 
 Configuration lives in `~/.rustdesk-ppc-agent.conf` (mode 0600 — it holds the
 signing secret key).
+
+## Why this port has no audio
+
+Not an omission and not a hard part left undone: **the audio path was written,
+it worked, and it was taken back out** (`git show 2f4fa3a4d`; reverted by
+`b9bd49766`). Measured against a real session, alongside video and clipboard:
+48 kHz stereo, Opus at restricted low delay, 10 ms frames, first frame 0.24 s
+in, about 2.3 kbit/s.
+
+The reason it is not in the tree is what it captures. CoreAudio on Mac OS X
+10.5 can capture an **input device** and nothing else — there is no way for a
+process to record what the machine is playing. ScreenCaptureKit, which is how
+modern macOS does it, is 12.3+, twelve years after this hardware. Upstream's own
+macOS path has the same limitation and the same answer. So the feature as built
+sends whatever the default input device hears — line-in on this machine — and
+never the sound the G5 is playing, which is the only thing anyone wants from it.
+Shipping it would put a working-looking speaker on the client and deliver noise.
+
+**A loopback driver fixes it with no code change.** Such a driver installs
+*as an input device* and becomes the default one, and the capture already
+written picks it up; Soundflower shipped PowerPC builds for 10.4/10.5. If one is
+ever installed here, reverting the revert is the whole job. That is the reason
+the work was kept as a commit rather than deleted.
+
+Two things learned on the way that apply to anything else touching CoreAudio on
+this machine, and which [`docs/BACKLOG.md`](docs/BACKLOG.md) §3 records in full:
+10.5's AUHAL converts channels and sample format but **will not resample**, so
+the device's own rate has to be set before the unit is asked for one; and
+`AudioComponentFindNext` is 10.6, so a HAL unit has to be found through the
+Component Manager instead — which every example written since 2009 gets wrong
+for this vintage.
 
 ## Building
 

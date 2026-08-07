@@ -22,14 +22,21 @@
 //! Sending `signed_id` here and waiting for `public_key` deadlocks: we wait for a
 //! key exchange the peer will never start, it waits for a `hash` we never send.
 //!
-//! **Secure (`--secure`).** For a peer that knows our public key out of band:
+//! **Secure.** For a peer that knows our public key out of band — every peer
+//! arriving through the rendezvous server, which is handed the key by it, and a
+//! direct-IP peer only under `--secure`:
 //!
 //! ```text
-//!   agent -> peer   Message{ signed_id }        plaintext
+//!   agent -> peer   Message{ signed_id }        plaintext: sign(IdPk{ id, pk })
 //!   peer  -> agent  Message{ public_key }       plaintext; seals the secretbox key
 //!   -- everything past here is secretbox-sealed --
 //!   ... as above
 //! ```
+//!
+//! The peer parses `signed_id` as an `IdPk` protobuf, and answers a payload it
+//! cannot parse with an *empty* `public_key` — which is indistinguishable at
+//! this end from "no key for you". So a wrong payload does not fail the
+//! session, it silently downgrades it to plaintext. See `crypto::signed_id`.
 
 use std::io;
 use std::net::TcpStream;
@@ -1522,17 +1529,22 @@ mod tests {
             platform: String::new(),
         };
 
-        // 1. SignedId -> verify with the agent's public key, take its ephemeral pk
+        // 1. SignedId -> verify with the agent's public key, take its ephemeral
+        //    pk. Decoded the way a real client does (`decode_id_pk`, upstream's
+        //    src/common.rs): verify, then parse the payload as `IdPk`. Reading
+        //    it any other way is how the agent shipped a format no client could
+        //    read -- see `crypto::signed_id`.
         let signed = match c.recv().unwrap().union {
             Some(message::Union::signed_id(s)) => s.id,
             _ => return Err("no signed_id".into()),
         };
         let opened = sign::verify(&signed, &pk).map_err(|_| "bad signature")?;
-        let text = String::from_utf8(opened).unwrap();
-        let their_pk_b64 = text.splitn(2, '\0').nth(1).unwrap().to_owned();
-        let their_pk_raw = base64_decode(&their_pk_b64).ok_or("bad b64")?;
+        let idpk = IdPk::parse_from_bytes(&opened).map_err(|_| "signed_id is not an IdPk")?;
+        if idpk.pk.len() != box_::PUBLICKEYBYTES {
+            return Err("ephemeral key is not 32 bytes".into());
+        }
         let mut pkb = [0u8; box_::PUBLICKEYBYTES];
-        pkb.copy_from_slice(&their_pk_raw);
+        pkb.copy_from_slice(&idpk.pk);
 
         // 2. seal a fresh symmetric key to it (zero nonce, as upstream does)
         let sym = secretbox::gen_key();
@@ -1581,26 +1593,6 @@ mod tests {
         drop(c);
         let _ = t.join();
         out
-    }
-
-    fn base64_decode(s: &str) -> Option<Vec<u8>> {
-        const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        let mut out = Vec::new();
-        let mut acc = 0u32;
-        let mut bits = 0;
-        for ch in s.bytes() {
-            if ch == b'=' {
-                break;
-            }
-            let v = T.iter().position(|&c| c == ch)? as u32;
-            acc = (acc << 6) | v;
-            bits += 6;
-            if bits >= 8 {
-                bits -= 8;
-                out.push((acc >> bits) as u8);
-            }
-        }
-        Some(out)
     }
 
     /// Direct-IP mode: the peer sends nothing until it gets a `hash`. This is
