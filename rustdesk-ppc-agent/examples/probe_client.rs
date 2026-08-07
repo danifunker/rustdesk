@@ -208,6 +208,10 @@ fn main() {
     println!("\nwatching for video frames (15s)...");
     let start = Instant::now();
     let (mut frames, mut bytes, mut keys, mut other) = (0u32, 0usize, 0u32, 0u32);
+    // Sound: counted, not decoded -- libopus is not a dependency of the probe,
+    // and whether the packets are good is the real client's verdict.
+    let (mut audio_frames, mut audio_bytes) = (0usize, 0usize);
+    let mut audio_format: Option<(u32, u32)> = None;
     let mut first_frame_at: Option<Duration> = None;
     let mut key_times: Vec<f64> = Vec::new();
 
@@ -255,6 +259,26 @@ fn main() {
                     match rustdesk_ppc_agent::clipboard::incoming_text(u) {
                         Some(t) => got_clip = Some((carrier, t)),
                         None => println!("  <- {} with no text in it", carrier),
+                    }
+                }
+                // Sound. The format arrives once, before any frame; the frames
+                // are Opus packets we only count, since decoding them is the
+                // real client's job and libopus is not a dependency here.
+                Some(message::Union::misc(mi)) => {
+                    if let Some(misc::Union::audio_format(f)) = mi.union {
+                        println!(
+                            "  audio format announced: {} Hz, {} channels",
+                            f.sample_rate, f.channels
+                        );
+                        audio_format = Some((f.sample_rate, f.channels));
+                    }
+                }
+                Some(message::Union::audio_frame(af)) => {
+                    audio_frames += 1;
+                    audio_bytes += af.data.len();
+                    if audio_frames == 1 {
+                        println!("  first audio frame after {:.2}s ({} bytes)",
+                                 start.elapsed().as_secs_f64(), af.data.len());
                     }
                 }
                 Some(message::Union::screenshot_response(r)) => {
@@ -326,6 +350,16 @@ fn main() {
 
     let secs = start.elapsed().as_secs_f64();
     println!("\n--- results ---");
+    match audio_format {
+        Some((rate, chans)) => println!("  audio format : {} Hz, {} channels", rate, chans),
+        None => println!("  audio format : never announced"),
+    }
+    println!(
+        "  audio frames : {} ({} bytes, {:.1} kbit/s)",
+        audio_frames,
+        audio_bytes,
+        if secs > 0.0 { audio_bytes as f64 * 8.0 / secs / 1000.0 } else { 0.0 }
+    );
     println!("  video frames : {} ({} keyframes)", frames, keys);
     println!("  bytes        : {} ({:.0} KB/s)", bytes, bytes as f64 / 1024.0 / secs);
     println!("  frame rate   : {:.2} fps", frames as f64 / secs);

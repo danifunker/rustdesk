@@ -24,7 +24,7 @@ export PPC_HOST="$HOST"   # the remote cc/ar wrappers read this, not $HOST
 export PPC_CPU_FLAGS="${PPC_CPU_FLAGS:--mcpu=970 -maltivec}"
 export PPC_JOBS="${PPC_JOBS:-2}"
 export PPC_SHIM="${PPC_SHIM:-$HOME/repos/rusty-backup/rb-cli-ppc/shim/ppc-compat.c}"
-export PPC_LDFLAGS="${PPC_LDFLAGS:--L/opt/local/lib -L/Users/admin/ppc-libs/lib -latomic -lMacportsLegacySupport -lgcc_s.1 -lsodium -lvpx}"
+export PPC_LDFLAGS="${PPC_LDFLAGS:--L/opt/local/lib -L/Users/admin/ppc-libs/lib -latomic -lMacportsLegacySupport -lgcc_s.1 -lsodium -lvpx -lopus}"
 
 mkdir -p "$OUT"
 
