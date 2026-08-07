@@ -32,6 +32,13 @@ agent_bin() {
     if [ -x "$BIN" ]; then echo "$BIN"; else echo "$RES/rustdesk-agent"; fi
 }
 
+# One key out of the provenance file bundle.sh wrote.
+info_get() {
+    [ -f "$RES/BUILD-INFO" ] || { echo "?"; return 0; }
+    v="$(sed -n "s/^$1=//p" "$RES/BUILD-INFO" | head -1)"
+    [ -n "$v" ] && echo "$v" || echo "?"
+}
+
 conf_get() {
     [ -f "$CONF" ] || return 0
     sed -n "s/^$1 *= *//p" "$CONF" | head -1
@@ -89,15 +96,15 @@ status)
     ip="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo '?')"
     # Which CPU this copy was built for. The G4 and G5 downloads carry the same
     # app name, so without this there is nothing on screen to tell them apart.
-    arch="$(cat "$RES/BUILD-ARCH" 2>/dev/null || echo '?')"
+    arch="$(info_get arch)"
     # A universal copy carries both, and the kernel grades them at exec time --
     # so name the one this machine will actually run, which is the question
     # someone reads this line to answer.
     case "$arch" in
         *and*) arch="$arch (this Mac runs $(this_slice))" ;;
     esac
-    printf 'Status:      %s\nID:          %s\nThis Mac:    %s\nPassword:    %s\nID server:   %s\nRelay:       %s\nServer key:  %s\nBuilt for:   %s' \
-        "$st" "$id" "$ip" "$pw" "$srv" "$rly" "$key" "$arch"
+    printf 'Status:      %s\nID:          %s\nThis Mac:    %s\nPassword:    %s\nID server:   %s\nRelay:       %s\nServer key:  %s\nBuilt for:   %s\nBuild:       %s (%s)' \
+        "$st" "$id" "$ip" "$pw" "$srv" "$rly" "$key" "$arch" "$(info_get version)" "$(info_get commit)"
     ;;
 menu)
     # The action list, which depends on what is installed. Newline separated;
@@ -129,6 +136,7 @@ restart) ctl stop >/dev/null 2>&1; sleep 1; ctl >/dev/null 2>&1; sleep 2
          is_running && echo "Restarted." || echo "It did not come back. Try Show the log." ;;
 stop)    ctl stop >/dev/null 2>&1; sleep 1; is_running && echo "It is still running." || echo "Stopped." ;;
 conf)    conf_get "$2" ;;
+info)    info_get "$2" ;;
 showkey) "$(agent_bin)" --show-key 2>/dev/null || echo "(no key yet)" ;;
 showlog) tail -25 "$PREFIX/agent.log" 2>/dev/null || echo "No log yet - the agent has not run." ;;
 set)

@@ -241,24 +241,47 @@
     [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:PROJECT_URL]];
 }
 
+/* One key out of Contents/Resources/BUILD-INFO, which bundle.sh writes. The app
+ * cannot work its own commit out at runtime, and should not have to re-derive
+ * its CPU from the Mach-O header. */
+- (NSString *)buildInfo:(NSString *)key
+{
+    NSString *path = [[[NSBundle mainBundle] resourcePath]
+                      stringByAppendingPathComponent:@"BUILD-INFO"];
+    NSString *all = [NSString stringWithContentsOfFile:path];
+    if (!all) return @"?";
+    NSString *prefix = [key stringByAppendingString:@"="];
+    NSEnumerator *e = [[all componentsSeparatedByString:@"\n"] objectEnumerator];
+    NSString *line;
+    while ((line = [e nextObject]) != nil) {
+        if ([line hasPrefix:prefix]) return [line substringFromIndex:[prefix length]];
+    }
+    return @"?";
+}
+
 - (void)about:(id)sender
 {
-    NSBundle *b = [NSBundle mainBundle];
-    NSString *vers = [[b infoDictionary] objectForKey:@"CFBundleShortVersionString"];
-    NSString *arch = [NSString stringWithContentsOfFile:
-                      [[b resourcePath] stringByAppendingPathComponent:@"BUILD-ARCH"]];
-    if (!arch) arch = @"?";
+    NSString *commit = [self buildInfo:@"commit"];
+    /* A build from a tree with uncommitted changes cannot be reproduced from
+     * its commit alone, so say so where anyone reporting a problem will see
+     * it, rather than only in the file. */
+    NSString *dirty = ([commit rangeOfString:@"dirty"].location != NSNotFound)
+        ? @"\n\nThis build was made from a tree with uncommitted changes, so"
+          @"\nthe commit above does not fully describe it."
+        : @"";
 
     NSAlert *a = [[[NSAlert alloc] init] autorelease];
     [a setMessageText:APP_NAME];
     [a setInformativeText:[NSString stringWithFormat:
-        @"Version %@\n"
-        @"Built for PowerPC %@, Mac OS X 10.4 and 10.5\n\n"
+        @"Version %@   (%@)\n"
+        @"Built %@\n"
+        @"For PowerPC %@, Mac OS X 10.4 and 10.5\n\n"
         @"A RustDesk agent - the controlled side - for PowerPC Macs, "
         @"built with mrustc because RustDesk itself needs an async runtime this "
         @"hardware has no compiler for.\n\n"
-        @"Source and issues:\n%@\n(branch ppc-agent)",
-        (vers ? vers : @"?"), arch, PROJECT_URL]];
+        @"Source and issues:\n%@\n(branch ppc-agent)%@",
+        [self buildInfo:@"version"], commit, [self buildInfo:@"built"],
+        [self buildInfo:@"arch"], PROJECT_URL, dirty]];
     [a addButtonWithTitle:@"OK"];
     [a addButtonWithTitle:@"Open GitHub Page"];
     if ([a runModal] == NSAlertSecondButtonReturn) [self openProject:nil];

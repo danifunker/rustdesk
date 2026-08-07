@@ -95,6 +95,23 @@ scp -q "$BIN" "$HERE/deploy/install.sh" "$HERE/deploy/agent-ctl.sh" \
 # which has no copy of Cargo.toml.
 APP_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$HERE/Cargo.toml" | head -1)"
 
+# Which commit this came from, and whether the tree was clean. Computed here if
+# the caller did not pass it, so a bare `bundle.sh` stamps itself correctly too.
+#
+# "+dirty" is not a formality: it is the difference between an artifact someone
+# can rebuild and one nobody can. It goes in the bundle, in Get Info, and in the
+# app's About window, so a screenshot of a misbehaving copy identifies itself.
+if [ -z "${GIT_REF:-}" ]; then
+    GIT_REF="$(cd "$HERE" && git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    if [ -n "$(cd "$HERE" && git status --porcelain -- . 2>/dev/null)" ]; then
+        GIT_REF="$GIT_REF+dirty"
+    fi
+fi
+BUILD_DATE="$(date -u '+%Y-%m-%d %H:%M UTC')"
+case "$GIT_REF" in
+    *+dirty) echo "  warning: building from a DIRTY tree; the artifact will say so" >&2 ;;
+esac
+
 # ---------------------------------------------------------------------------
 # The remote half: collect, relocate, verify, tar.
 #
@@ -102,7 +119,7 @@ APP_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$HERE/Cargo.toml" | head -1)
 # is a stub that pulls in libgcc_s.1.1 and libgcc_ehs.1.1 -- a one-level copy
 # produces a bundle that links and then fails to load.
 # ---------------------------------------------------------------------------
-ssh "$HOST" "STAGE='$STAGE_REMOTE' NAME='$NAME' APP_VERSION='$APP_VERSION' ARCH_LABEL='$ARCH_LABEL' bash -s" <<'REMOTE'
+ssh "$HOST" "STAGE='$STAGE_REMOTE' NAME='$NAME' APP_VERSION='$APP_VERSION' ARCH_LABEL='$ARCH_LABEL' GIT_REF='$GIT_REF' BUILD_DATE='$BUILD_DATE' bash -s" <<'REMOTE'
 set -euo pipefail
 rm -rf "$STAGE"
 
@@ -133,9 +150,16 @@ cp /tmp/com.rustdesk.ppc-agent.plist.in "$D/com.rustdesk.ppc-agent.plist.in"
 cp /tmp/agent-helper.sh "$D/agent-helper.sh"
 cp /tmp/app.icns "$D/app.icns"
 chmod +x "$D/rustdesk-agent" "$D/install.sh" "$D/rustdesk-ctl" "$D/agent-helper.sh"
-# Written rather than worked out at runtime: the app should be able to say which
-# CPU it carries without re-deriving it from the Mach-O header on the target.
-printf '%s' "$ARCH_LABEL" > "$D/BUILD-ARCH"
+# Everything the app needs to identify itself, in one file the settings window
+# and the status block both read. Written rather than worked out at runtime: the
+# app should not have to re-derive its own CPU from the Mach-O header, and it
+# cannot derive the commit at all.
+cat > "$D/BUILD-INFO" <<INFO
+version=$APP_VERSION
+commit=$GIT_REF
+built=$BUILD_DATE
+arch=$ARCH_LABEL
+INFO
 
 # Hand-written rather than edited afterwards, so every key is visible in one
 # place. NSPrincipalClass with no NSMainNibFile is what makes a nib-less Cocoa
@@ -154,8 +178,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleSignature</key>        <string>????</string>
     <key>CFBundleInfoDictionaryVersion</key> <string>6.0</string>
     <key>CFBundleVersion</key>          <string>$APP_VERSION</string>
-    <key>CFBundleShortVersionString</key> <string>$APP_VERSION ($ARCH_LABEL)</string>
-    <key>CFBundleGetInfoString</key>    <string>$APP_VERSION for $ARCH_LABEL</string>
+    <key>CFBundleShortVersionString</key> <string>$APP_VERSION ($GIT_REF)</string>
+    <key>CFBundleGetInfoString</key>    <string>$APP_VERSION ($GIT_REF) for $ARCH_LABEL, built $BUILD_DATE</string>
     <key>NSPrincipalClass</key>         <string>NSApplication</string>
     <key>LSMinimumSystemVersion</key>   <string>10.4.0</string>
     <key>NSHumanReadableCopyright</key> <string>RustDesk agent for PowerPC Mac OS X</string>
@@ -267,6 +291,9 @@ for flag in --password --server --no-server --key --relay-server --show-id --sho
     }
 done
 echo "  agent supports every setting the window offers"
+
+grep -q "^commit=" "$D/BUILD-INFO" || { echo "error: no commit stamped into BUILD-INFO" >&2; exit 1; }
+echo "  stamped $(sed -n 's/^commit=//p' "$D/BUILD-INFO") built $(sed -n 's/^built=//p' "$D/BUILD-INFO")"
 
 # A malformed icns does not error -- the Finder just shows the blank-page
 # placeholder, which looks exactly like having forgotten the key. Check the

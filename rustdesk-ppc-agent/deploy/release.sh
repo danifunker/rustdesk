@@ -59,7 +59,7 @@ while [ $# -gt 0 ]; do
         --arch)      [ $# -ge 2 ] || usage; ARCHES="$2"; shift 2 ;;
         --version)   [ $# -ge 2 ] || usage; VERSION="$2"; shift 2 ;;
         --skip-build) SKIP_BUILD=1; shift ;;
-        --allow-dirty) ALLOW_DIRTY=1; shift ;;
+        --allow-dirty) ALLOW_DIRTY=1; shift ;;   # accepted and ignored: dirty now warns
         --host|-H)   [ $# -ge 2 ] || usage; HOST="$2"; export PPC_HOST="$2"; shift 2 ;;
         --help|-h)   usage ;;
         *) echo "unknown option: $1" >&2; usage ;;
@@ -119,16 +119,21 @@ fi
 [ -n "$VERSION" ] || { echo "error: no version; pass --version" >&2; exit 1; }
 
 cd "$HERE"
+# The commit is stamped into the bundle, Get Info and the About window, so a
+# dirty build is identifiable wherever it ends up. That is what makes warning
+# the right response rather than refusing: the risk was an artifact nobody could
+# trace back, and it now traces itself.
 GIT_REF="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 if [ -n "$(git status --porcelain -- . 2>/dev/null)" ]; then
-    if [ "$ALLOW_DIRTY" -eq 0 ]; then
-        echo "error: the working tree has uncommitted changes." >&2
-        echo "       A release names a commit, and this one would not be reproducible." >&2
-        echo "       Commit them, or pass --allow-dirty to accept a 'git ref +dirty' label." >&2
-        exit 1
-    fi
     GIT_REF="$GIT_REF+dirty"
+    echo "*** WARNING: the working tree has uncommitted changes." >&2
+    echo "***          Everything built here is stamped $GIT_REF and says so in" >&2
+    echo "***          Get Info and the app's About window. It cannot be rebuilt" >&2
+    echo "***          from its commit alone." >&2
+    git status --short -- . 2>/dev/null | sed 's/^/***          /' >&2
+    echo >&2
 fi
+export GIT_REF
 
 REL="$HERE/target/release/$VERSION"
 mkdir -p "$REL"
@@ -263,6 +268,9 @@ sha256sum ./*.tar.gz ./*.dmg > SHA256SUMS
 {
     echo "rustdesk-ppc-agent $VERSION"
     echo "commit:   $GIT_REF"
+    case "$GIT_REF" in *+dirty)
+        echo "          *** built from uncommitted changes; not reproducible ***" ;;
+    esac
     echo "built:    $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
     echo "builder:  $(uname -srm), C compiled on $HOST"
     echo
