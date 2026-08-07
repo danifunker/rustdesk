@@ -272,6 +272,25 @@ PowerPC, every tool above, the static libraries, and the space in `/tmp`. The
 host: minicargo, both wrappers, cargo, the committed artwork, and a standard
 library for every CPU in the run.
 
+### Provenance
+
+Every artifact is stamped with the commit it came from, and with `+dirty` if the
+tree had uncommitted changes. It appears in four places, so a copy that turns up
+without context still identifies itself:
+
+* `Contents/Resources/BUILD-INFO` — `version`, `commit`, `built`, `arch`;
+* **Get Info** in the Finder — `0.1.0 (a1b2c3d+dirty) for G4 and G5, built ...`;
+* the settings window's **status block** — `Build: 0.1.0 (a1b2c3d+dirty)`;
+* the **About** window, which additionally spells out what dirty means: the
+  commit does not fully describe the build.
+
+**A dirty tree warns rather than refuses.** It used to refuse, on the grounds
+that a release names a commit and an unreproducible one is worse than no
+release. Stamping changed the trade: the artifact now says so wherever it goes,
+so the failure it was guarding against — an untraceable copy in the wild —
+cannot happen quietly. `build-release.sh` says so before the slow work starts
+and lists the modified files; `release.sh` repeats it and marks `MANIFEST.txt`.
+
 ### What it verifies afterwards
 
 Recorded in `MANIFEST.txt` beside the artifacts, along with what it could

@@ -194,6 +194,18 @@ say "standard libraries present for: $WANT"
 
 command -v cargo >/dev/null || die "cargo is not on PATH (the host tests need it)"
 
+# Said here as well as in release.sh, because here it is still cheap to stop.
+if [ -n "$(git status --porcelain -- . 2>/dev/null)" ]; then
+    say ""
+    say "WARNING: this tree has uncommitted changes."
+    say "         The build will be stamped +dirty and will say so in the app's"
+    say "         About window, and it will not be reproducible from its commit."
+    git status --short -- . 2>/dev/null | sed 's/^/           /'
+    say ""
+else
+    say "tree is clean at $(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+fi
+
 # The committed artwork. Regenerating it needs Pillow; using it does not.
 for art in deploy/app.icns deploy/dmg-background.png; do
     [ -f "$art" ] || die "missing $art -- run ./deploy/make-icns.py or ./deploy/make-dmg-bg.py"
