@@ -151,15 +151,50 @@ absolute is left, and runs the result before packing it. It does that work on a
 PowerPC Mac over ssh, because `install_name_tool` is part of Darwin's cctools
 and there is no build of it on the host. About 1 MB of libraries, 4 MB packed.
 
-Then, on the target Mac:
+Then, on the target Mac, untar it and **double-click "RustDesk Agent"**. The app
+is the installer and the settings panel both: it shows the ID, whether the
+service is running, and the current server, and offers to install or remove the
+background service, set the password, ID server, server key and relay, and show
+the log. Nobody has to open Terminal.
+
+For a headless install over ssh, the same `install.sh` the app calls is inside
+the bundle:
 
 ```bash
 tar xzf rustdesk-agent-g5.tar.gz
-cd rustdesk-agent-g5
-./install.sh                                         # asks for a password
-./install.sh --password hunter2 --server rd.example.org --yes    # unattended
-./install.sh --uninstall
+APP="rustdesk-agent-g5/RustDesk Agent.app/Contents/Resources"
+sh "$APP/install.sh"                                              # asks for a password
+sh "$APP/install.sh" --password hunter2 --server rd.example.org --yes
+sh "$APP/install.sh" --uninstall
 ```
+
+### Why the app is a compiled AppleScript applet
+
+Both alternatives were measured on 10.5.8 rather than assumed, and both fail:
+
+* **A shell script as `CFBundleExecutable`** — the usual trick for this sort of
+  thing — is refused by LaunchServices with **-10810** (`kLSUnknownErr`) once it
+  is any bigger than trivial. A three-line script app launches; the real one
+  never did, and it was not the bundle name, the `Info.plist` keys, the size, or
+  anything in `Resources`.
+* **Even when such an app does launch, it gets one dialog.** Only the first
+  `osascript` is user-interactive; every later one fails with **-1713** ("No
+  user interaction allowed"), because a script app never becomes a foreground
+  application. Running it from launchd instead fails at the *first* dialog.
+
+`osacompile` produces a real application with Apple's own Mach-O as the
+executable, which has neither problem — verified showing three dialogs in a row
+including a hidden-answer one. So `deploy/app.applescript` is the UI and
+`deploy/agent-helper.sh` is everything it shells out to, which keeps the half
+that can be tested from a terminal testable. `bundle.sh` compiles the applet,
+checks the executable really is Mach-O, and exercises the helper's `status` and
+`menu` commands on every build.
+
+**Websockets and an API server are deliberately absent**, and the app says so
+rather than offering dead controls: this agent has no websocket transport and
+the open-source server answers websocket registration with `NOT_SUPPORT`
+anyway, and the API-server field only matters to a client signing in to an
+account, which this agent never does.
 
 Everything lands under `$HOME` — no sudo, and not only out of politeness: the
 agent has to run in the user's Aqua session to reach the pasteboard and the
