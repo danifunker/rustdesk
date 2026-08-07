@@ -1,24 +1,20 @@
 #!/bin/sh
 #
-# The non-interactive half of "RustDesk Agent.app", in Contents/Resources.
+# The non-interactive half of "Agent for RustDesk PPC.app", in Contents/Resources.
 #
-# The UI is a compiled AppleScript applet (deploy/app.applescript) which calls
-# each command below with `do shell script`. Nothing here displays anything, so
-# all of it is testable from a terminal -- and bundle.sh does exactly that.
+# The window is a small Cocoa app (deploy/app-ui.m) which shells out to each
+# command below. Nothing here displays anything, so all of it is testable from a
+# terminal -- and bundle.sh runs it on every build.
 #
-# WHY AN APPLET AND NOT A SHELL-SCRIPT .APP, both measured on 10.5.8:
+# Keeping the two apart is deliberate: the interface is the part that can only
+# be exercised by a person at the machine, so it should contain as little
+# behaviour as possible. Everything that decides anything lives here.
 #
-#   * a shell script as CFBundleExecutable is refused by LaunchServices with
-#     -10810 (kLSUnknownErr). A trivial one launches; this one does not, and no
-#     amount of trimming Info.plist keys, Resources or the bundle name changed
-#     it;
-#   * even when such an app does launch, only its FIRST osascript is user
-#     interactive. Every later one fails with -1713 "No user interaction
-#     allowed", because a script app never becomes a foreground application.
-#
-# A compiled applet has Apple's own Mach-O as its executable and is a real
-# foreground app, so it launches and can show as many dialogs as it likes --
-# verified: three in a row, including `with hidden answer`.
+# WHY NOT A SHELL SCRIPT AS CFBundleExecutable, measured on 10.5.8: it is
+# refused by LaunchServices with -10810 (kLSUnknownErr) once it is any bigger
+# than trivial, and even when such an app launches only its FIRST osascript is
+# user-interactive -- every later one fails -1713 "No user interaction allowed",
+# because a script app never becomes a foreground application.
 set -u
 
 # This script lives in Contents/Resources beside the payload it installs.
@@ -105,6 +101,8 @@ uninstall)
         || echo "Uninstall reported a problem."
     ;;
 start)   ctl >/dev/null 2>&1; sleep 2; is_running && echo "Started." || echo "Could not start it. Try Show the log." ;;
+restart) ctl stop >/dev/null 2>&1; sleep 1; ctl >/dev/null 2>&1; sleep 2
+         is_running && echo "Restarted." || echo "It did not come back. Try Show the log." ;;
 stop)    ctl stop >/dev/null 2>&1; sleep 1; is_running && echo "It is still running." || echo "Stopped." ;;
 conf)    conf_get "$2" ;;
 showkey) "$(agent_bin)" --show-key 2>/dev/null || echo "(no key yet)" ;;

@@ -45,6 +45,8 @@ export SSH_AUTH_SOCK="${SSH_AUTH_SOCK:-/tmp/ssh-agent-ppc.sock}"
 # is big-endian and this script runs on a little-endian host: `od -tu4` would
 # read 100 as 1677721600, which is a wrong answer rather than an error.
 mach_cpusubtype() {
+    # `set --` word-splits, so a trailing blank line from BSD od is harmless
+    # here; the awk forms elsewhere need NR==1 because they do not.
     set -- $(od -An -tu1 -j8 -N4 "$1")
     echo $(( $1 * 16777216 + $2 * 65536 + $3 * 256 + $4 ))
 }
@@ -71,7 +73,7 @@ echo "bundling $(basename "$BIN") (cpusubtype $SUBTYPE -> $ARCH) via $HOST"
 # remote half is a single ssh round trip.
 scp -q "$BIN" "$HERE/deploy/install.sh" "$HERE/deploy/agent-ctl.sh" \
        "$HERE/deploy/com.rustdesk.ppc-agent.plist.in" \
-       "$HERE/deploy/agent-helper.sh" "$HERE/deploy/app.applescript" \
+       "$HERE/deploy/agent-helper.sh" "$HERE/deploy/app-ui.m" \
        "$HOST:/tmp/"
 
 # The version stamped into the app bundle. Read here rather than on the Mac,
@@ -94,46 +96,58 @@ rm -rf "$STAGE"
 # the service. Everything the installer needs lives in Contents/Resources, and
 # the payload sits directly in Resources so that @executable_path/lib -- which
 # is relative to the *binary*, not to the bundle -- resolves.
-# The UI is a COMPILED APPLET, not a shell script as CFBundleExecutable.
-# LaunchServices refuses the latter with -10810 once it is any bigger than
-# trivial, and even when it launches only its first osascript can display
-# anything. osacompile produces a real application with Apple's own Mach-O
-# executable, which has neither problem. See app.applescript's header.
+# The UI is a small Cocoa app, compiled here because this is the only PowerPC
+# Mac available and Apple's gcc 4.0.1 lives on it. Built with NO -mcpu: it is a
+# settings window with nothing to optimise, and a generic-ppc build means the
+# same UI binary is correct on a G4 and a G5 -- only the agent differs.
+#
+# A shell script as CFBundleExecutable was tried first and is not viable:
+# LaunchServices refuses it with -10810. A real Mach-O has no such problem.
 mkdir -p "$STAGE/$NAME"
 APP="$STAGE/$NAME/Agent for RustDesk PPC.app"
-osacompile -o "$APP" /tmp/app.applescript \
-    || { echo "error: the app's AppleScript does not compile" >&2; exit 1; }
-
-# The payload sits directly in Resources so that @executable_path/lib -- which
-# is relative to the *binary being run*, not to the bundle -- resolves when the
-# agent is launched from there before installation.
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/lib"
 D="$APP/Contents/Resources"
-mkdir -p "$D/lib"
+
+gcc -O2 -Wall -o "$APP/Contents/MacOS/AgentForRustDeskPPC" /tmp/app-ui.m -framework Cocoa \
+    || { echo "error: the settings app did not compile" >&2; exit 1; }
+
 cp /tmp/rustdesk-agent "$D/rustdesk-agent"
 cp /tmp/install.sh "$D/install.sh"
 cp /tmp/agent-ctl.sh "$D/rustdesk-ctl"
 cp /tmp/com.rustdesk.ppc-agent.plist.in "$D/com.rustdesk.ppc-agent.plist.in"
 cp /tmp/agent-helper.sh "$D/agent-helper.sh"
+chmod +x "$D/rustdesk-agent" "$D/install.sh" "$D/rustdesk-ctl" "$D/agent-helper.sh"
 # Written rather than worked out at runtime: the app should be able to say which
 # CPU it carries without re-deriving it from the Mach-O header on the target.
 printf '%s' "$ARCH_LABEL" > "$D/BUILD-ARCH"
-chmod +x "$D/rustdesk-agent" "$D/install.sh" "$D/rustdesk-ctl" "$D/agent-helper.sh"
 
-# osacompile names every applet "Applet". Give it ours.
-# -string on every one of these: without it `defaults` parses the value as a
-# plist expression, and "0.1.0 (G5)" fails with "Could not parse".
-defaults write "$APP/Contents/Info" CFBundleName -string "Agent for RustDesk PPC"
-defaults write "$APP/Contents/Info" CFBundleDisplayName -string "Agent for RustDesk PPC"
-defaults write "$APP/Contents/Info" CFBundleIdentifier -string "com.rustdesk.ppc-agent.settings"
-defaults write "$APP/Contents/Info" CFBundleVersion -string "$APP_VERSION"
-# The G4 and G5 builds are separate downloads with the same app name, so the CPU
-# goes in the version string and in Get Info: once both are dragged out of their
-# folders there is otherwise nothing to tell them apart, and installing the
-# wrong one only fails at install time.
-defaults write "$APP/Contents/Info" CFBundleShortVersionString -string "$APP_VERSION ($ARCH_LABEL)"
-defaults write "$APP/Contents/Info" CFBundleGetInfoString -string "$APP_VERSION for $ARCH_LABEL"
+# Hand-written rather than edited afterwards, so every key is visible in one
+# place. NSPrincipalClass with no NSMainNibFile is what makes a nib-less Cocoa
+# app start: main() builds the menu bar and window itself.
+cat > "$APP/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>       <string>AgentForRustDeskPPC</string>
+    <key>CFBundleIdentifier</key>       <string>com.rustdesk.ppc-agent.settings</string>
+    <key>CFBundleName</key>             <string>Agent for RustDesk PPC</string>
+    <key>CFBundleDisplayName</key>      <string>Agent for RustDesk PPC</string>
+    <key>CFBundlePackageType</key>      <string>APPL</string>
+    <key>CFBundleSignature</key>        <string>????</string>
+    <key>CFBundleInfoDictionaryVersion</key> <string>6.0</string>
+    <key>CFBundleVersion</key>          <string>$APP_VERSION</string>
+    <key>CFBundleShortVersionString</key> <string>$APP_VERSION ($ARCH_LABEL)</string>
+    <key>CFBundleGetInfoString</key>    <string>$APP_VERSION for $ARCH_LABEL</string>
+    <key>NSPrincipalClass</key>         <string>NSApplication</string>
+    <key>LSMinimumSystemVersion</key>   <string>10.4.0</string>
+    <key>NSHumanReadableCopyright</key> <string>RustDesk agent for PowerPC Mac OS X</string>
+</dict>
+</plist>
+PLIST
+printf 'APPL????' > "$APP/Contents/PkgInfo"
 plutil -lint "$APP/Contents/Info.plist" >/dev/null \
-    || { echo "error: Info.plist is malformed after editing" >&2; exit 1; }
+    || { echo "error: Info.plist is malformed" >&2; exit 1; }
 
 # A dependency worth copying: anything not under /usr/lib or /System, i.e. not
 # shipped with the OS. Everything else is guaranteed present on any 10.4/10.5.
@@ -237,11 +251,21 @@ N_STATE="$(echo "$MENU" | grep -c '^Install$\|^Uninstall$')"
 [ "$N_STATE" = "1" ] \
     || { echo "error: menu offers $N_STATE of Install/Uninstall, expected exactly 1" >&2; echo "$MENU" >&2; exit 1; }
 
-# And the applet really is an application: a Mach-O executable, not a script.
-EXE="$(defaults read "$APP/Contents/Info" CFBundleExecutable)"
-file "$APP/Contents/MacOS/$EXE" | grep -q 'Mach-O' \
-    || { echo "error: the app executable is not a Mach-O; osacompile did not run?" >&2; exit 1; }
-echo "  app: applet compiles, executable is Mach-O, status and menu work"
+# The UI binary must be a Mach-O (LaunchServices refuses scripts) and must not
+# be stamped 970, or the G4 download would ship a settings window that will not
+# start on a G4. Apple's gcc 4.0.1 stamps 10 (7450) by default with no -mcpu at
+# all -- not 0 as expected -- and 10 runs on both a G4 and a G5, so both 0 and
+# 10 are accepted and only 100 is refused.
+EXE="$APP/Contents/MacOS/AgentForRustDeskPPC"
+file "$EXE" | grep -q 'Mach-O' || { echo "error: the UI is not a Mach-O" >&2; exit 1; }
+# NR==1/exit: BSD od emits a trailing blank line -- see install.sh.
+UI_SUB="$(od -An -tu1 -j8 -N4 "$EXE" | awk 'NR==1 { print $1 * 16777216 + $2 * 65536 + $3 * 256 + $4; exit }')"
+case "$UI_SUB" in
+    0|10) ;;
+    *) echo "error: the UI binary is cpusubtype $UI_SUB; it must be 0 or 10 so that" >&2
+       echo "       the same settings window works on a G4 and a G5" >&2; exit 1 ;;
+esac
+echo "  app: Cocoa UI compiles (cpusubtype $UI_SUB), helper status and menu work"
 rm -f "$STAGE/status"
 
 ( cd "$STAGE" && tar czf "$NAME.tar.gz" "$NAME" )

@@ -131,8 +131,13 @@ esac
 # Byte at a time and reassembled by hand: the header is big-endian, and while
 # this script only ever runs on a big-endian Mac, `od -tu4` reading it correctly
 # would then be an accident of the host rather than something the code says.
-SUBTYPE="$(od -An -tu1 -j8 -N4 "$SRC/rustdesk-agent" \
-           | awk '{print $1 * 16777216 + $2 * 65536 + $3 * 256 + $4}')"
+#
+# `NR==1 ... exit` is not tidiness. BSD od prints a trailing blank line, so
+# without it SUBTYPE is "100\n0", the comparison below can never be equal, and
+# the check silently passes everything -- which is what it did until this was
+# noticed. A guard that cannot fire is worse than no guard, because it is
+# documented as protecting you.
+SUBTYPE="$(od -An -tu1 -j8 -N4 "$SRC/rustdesk-agent" | awk 'NR==1 { print $1 * 16777216 + $2 * 65536 + $3 * 256 + $4; exit }')"
 CPU="$(machine 2>/dev/null || echo unknown)"
 if [ "$SUBTYPE" = "100" ] && [ "$CPU" != "ppc970" ] && [ "$CPU" != "unknown" ]; then
     die "this bundle is built for the G5 (cpusubtype 970) and this is a $CPU.
