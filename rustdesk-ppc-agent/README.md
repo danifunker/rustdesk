@@ -171,7 +171,15 @@ absolute is left, and runs the result before packing it. It does that work on a
 PowerPC Mac over ssh, because `install_name_tool` is part of Darwin's cctools
 and there is no build of it on the host. About 1 MB of libraries, 4 MB packed.
 
-Then, on the target Mac, untar it and **double-click "Agent for RustDesk PPC"**. The app
+`deploy/release.sh` additionally builds a **disk image** per artifact — the
+download to actually hand someone. It opens on a window with the app on the
+left, an Applications alias on the right and an arrow between them; drag one
+onto the other. `hdiutil` and the Finder both do their part over ssh, because
+setting window and icon geometry is not "user interaction" in the sense that
+makes dialogs fail.
+
+Then, on the target Mac, open the image and drag the app across — or, from a
+tarball, untar it and **double-click "Agent for RustDesk PPC"**. The app
 is the installer and the settings panel both: it shows the ID, whether the
 service is running, and the current server, and offers to install or remove the
 background service, set the password, ID server, server key and relay, and show

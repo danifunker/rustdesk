@@ -73,6 +73,21 @@ subtype_for() {
     esac
 }
 
+# The download most people will take: a window with the app, an Applications
+# alias and an arrow between them. Each image gets its own volume name, so two
+# of them mounted at once do not collide -- and so the release build itself does
+# not trip over the previous mount.
+make_dmg() {
+    _arch="$1"; _tar="$2"
+    case "$_arch" in
+        universal) _vol="Agent for RustDesk PPC" ;;
+        *)         _vol="Agent for RustDesk PPC $(echo "$_arch" | tr a-z A-Z)" ;;
+    esac
+    _dmg="$REL/Agent-for-RustDesk-PPC-$VERSION-$_arch.dmg"
+    echo "  building the disk image ..."
+    ./deploy/make-dmg.sh "$_tar" "$_dmg" "$_vol" | sed 's/^/    /'
+}
+
 if [ -z "$VERSION" ]; then
     VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$HERE/Cargo.toml" | head -1)"
 fi
@@ -126,6 +141,7 @@ for arch in $ARCHES; do
         [ -f "$SRC_TAR" ] || { echo "error: bundle.sh produced no $SRC_TAR" >&2; exit 1; }
         mv "$SRC_TAR" "$REL/rustdesk-agent-$VERSION-universal.tar.gz"
         echo "  -> rustdesk-agent-$VERSION-universal.tar.gz"
+        make_dmg universal "$REL/rustdesk-agent-$VERSION-universal.tar.gz"
         echo
         continue
     fi
@@ -190,6 +206,7 @@ for arch in $ARCHES; do
     [ -f "$SRC_TAR" ] || { echo "error: bundle.sh produced no $SRC_TAR" >&2; exit 1; }
     mv "$SRC_TAR" "$REL/rustdesk-agent-$VERSION-$arch.tar.gz"
     echo "  -> $(basename "$REL/rustdesk-agent-$VERSION-$arch.tar.gz")"
+    make_dmg "$arch" "$REL/rustdesk-agent-$VERSION-$arch.tar.gz"
     echo
 done
 
@@ -197,7 +214,7 @@ done
 # Manifest and checksums
 # ---------------------------------------------------------------------------
 cd "$REL"
-sha256sum ./*.tar.gz > SHA256SUMS
+sha256sum ./*.tar.gz ./*.dmg > SHA256SUMS
 
 {
     echo "rustdesk-ppc-agent $VERSION"
@@ -205,8 +222,18 @@ sha256sum ./*.tar.gz > SHA256SUMS
     echo "built:    $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
     echo "builder:  $(uname -srm), C compiled on $HOST"
     echo
-    echo "Artifacts"
-    echo "---------"
+    echo "Disk images -- the download to hand someone"
+    echo "-------------------------------------------"
+    for f in *.dmg; do
+        echo "  $f"
+        echo "      size:       $(du -h "$f" | cut -f1)"
+        echo "      sha256:     $(sha256sum "$f" | cut -d' ' -f1)"
+    done
+    echo "  Open one and drag the app onto Applications. Launch it to install"
+    echo "  the background service; it is also where the settings live."
+    echo
+    echo "Tarballs -- the same bundles, for scripted or ssh installs"
+    echo "----------------------------------------------------------"
     for f in *.tar.gz; do
         arch="${f##*-}"; arch="${arch%.tar.gz}"
         echo "  $f"
