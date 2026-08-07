@@ -80,7 +80,7 @@ echo "  built $(date -r "$BIN" '+%Y-%m-%d %H:%M'), cpusubtype $SUBTYPE -> $ARCH,
 # remote half is a single ssh round trip.
 scp -q "$BIN" "$HERE/deploy/install.sh" "$HERE/deploy/agent-ctl.sh" \
        "$HERE/deploy/com.rustdesk.ppc-agent.plist.in" \
-       "$HERE/deploy/agent-helper.sh" "$HERE/deploy/app-ui.m" \
+       "$HERE/deploy/agent-helper.sh" "$HERE/deploy/app-ui.m" "$HERE/deploy/app.icns" \
        "$HOST:/tmp/"
 
 # The version stamped into the app bundle. Read here rather than on the Mac,
@@ -123,6 +123,7 @@ cp /tmp/install.sh "$D/install.sh"
 cp /tmp/agent-ctl.sh "$D/rustdesk-ctl"
 cp /tmp/com.rustdesk.ppc-agent.plist.in "$D/com.rustdesk.ppc-agent.plist.in"
 cp /tmp/agent-helper.sh "$D/agent-helper.sh"
+cp /tmp/app.icns "$D/app.icns"
 chmod +x "$D/rustdesk-agent" "$D/install.sh" "$D/rustdesk-ctl" "$D/agent-helper.sh"
 # Written rather than worked out at runtime: the app should be able to say which
 # CPU it carries without re-deriving it from the Mach-O header on the target.
@@ -139,6 +140,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleExecutable</key>       <string>AgentForRustDeskPPC</string>
     <key>CFBundleIdentifier</key>       <string>com.rustdesk.ppc-agent.settings</string>
     <key>CFBundleName</key>             <string>Agent for RustDesk PPC</string>
+    <key>CFBundleIconFile</key>         <string>app.icns</string>
     <key>CFBundleDisplayName</key>      <string>Agent for RustDesk PPC</string>
     <key>CFBundlePackageType</key>      <string>APPL</string>
     <key>CFBundleSignature</key>        <string>????</string>
@@ -257,6 +259,14 @@ for flag in --password --server --no-server --key --relay-server --show-id --sho
     }
 done
 echo "  agent supports every setting the window offers"
+
+# A malformed icns does not error -- the Finder just shows the blank-page
+# placeholder, which looks exactly like having forgotten the key. Check the
+# container parses and that the entry Leopard prefers is present.
+[ -s "$D/app.icns" ] || { echo "error: no icon in the bundle" >&2; exit 1; }
+head -c 4 "$D/app.icns" | grep -q icns || { echo "error: app.icns is not an icns" >&2; exit 1; }
+grep -q it32 "$D/app.icns" || { echo "error: app.icns has no 128x128 entry" >&2; exit 1; }
+echo "  icon present ($(wc -c < "$D/app.icns" | tr -d " ") bytes)"
 
 # The app's non-interactive half, which is everything except the dialogs: it
 # reads the config, finds the binary and formats the status block. A typo in any
