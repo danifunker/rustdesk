@@ -132,30 +132,64 @@ case "$OSVER" in
     *) note "warning: built for Mac OS X 10.4/10.5, this is $OSVER -- continuing anyway" ;;
 esac
 
-# The Mach-O cpusubtype at offset 8. 100 is CPU_SUBTYPE_POWERPC_970, and a
-# binary stamped that way will not load on a G4 at all. `machine` reports the
-# CPU this Mac actually has: ppc970, ppc7450, ppc7400, ppc750.
-# Byte at a time and reassembled by hand: the header is big-endian, and while
-# this script only ever runs on a big-endian Mac, `od -tu4` reading it correctly
-# would then be an accident of the host rather than something the code says.
-#
-# `NR==1 ... exit` is not tidiness. BSD od prints a trailing blank line, so
-# without it SUBTYPE is "100\n0", the comparison below can never be equal, and
-# the check silently passes everything -- which is what it did until this was
-# noticed. A guard that cannot fire is worse than no guard, because it is
-# documented as protecting you.
-SUBTYPE="$(od -An -tu1 -j8 -N4 "$SRC/rustdesk-agent" | awk 'NR==1 { print $1 * 16777216 + $2 * 65536 + $3 * 256 + $4; exit }')"
+
+# Which CPU subtypes a Mach-O contains: one for a thin file, several for a
+# universal one. A fat file starts 0xcafebabe and its header is nfat_arch at
+# offset 4 then 20-byte entries of (cputype, cpusubtype, offset, size, align) --
+# so reading offset 8 as "the cpusubtype", which is right for a thin file, gets
+# the *first slice's cputype* for a fat one and silently judges the wrong thing.
+mach_subtypes() {
+    _f="$1"
+    _be4() { od -An -tu1 -j"$2" -N4 "$1" | awk 'NR==1 { print $1*16777216 + $2*65536 + $3*256 + $4; exit }'; }
+    case "$(od -An -tx1 -N4 "$_f" | tr -d ' \n')" in
+        cafebabe)
+            _n="$(_be4 "$_f" 4)"
+            _i=0
+            while [ "$_i" -lt "$_n" ]; do
+                _be4 "$_f" $(( 8 + _i * 20 + 4 ))
+                _i=$(( _i + 1 ))
+            done ;;
+        feedface)
+            _be4 "$_f" 8 ;;
+        *) ;;   # not a Mach-O we know; callers treat an empty list as unknown
+    esac
+}
+
+# Can this machine execute a slice of that subtype? 0 is ALL, 10/11 are the G4
+# pair (7400 and 7450), 100 is the 970. A G5 runs all of them; a G4 runs
+# everything except 100.
+subtype_runs_here() {
+    case "$1:$2" in
+        0:*|*:unknown)      return 0 ;;
+        100:ppc970)         return 0 ;;
+        100:*)              return 1 ;;
+        10:*|11:*)          case "$2" in ppc750*|ppc603*|ppc604*) return 1 ;; *) return 0 ;; esac ;;
+        *)                  return 0 ;;
+    esac
+}
+
 CPU="$(machine 2>/dev/null || echo unknown)"
-if [ "$SUBTYPE" = "100" ] && [ "$CPU" != "ppc970" ] && [ "$CPU" != "unknown" ]; then
-    die "this bundle is built for the G5 (cpusubtype 970) and this is a $CPU.
+SUBTYPES="$(mach_subtypes "$SRC/rustdesk-agent")"
+[ -n "$SUBTYPES" ] || die "$SRC/rustdesk-agent is not a Mach-O binary"
+
+RUNNABLE=0
+for st in $SUBTYPES; do
+    if subtype_runs_here "$st" "$CPU"; then RUNNABLE=1; fi
+done
+if [ "$RUNNABLE" -eq 0 ]; then
+    die "this bundle holds only cpusubtype(s) [$SUBTYPES] and this is a $CPU.
        It would fail to load. Nothing in the agent is G5-specific -- the CPU
        flag is -- so rebuild on the host with:
 
            PPC_CPU_FLAGS='-mcpu=7450 -maltivec' ./build-ppc.sh
            ./deploy/bundle.sh
 
-       and install that bundle instead."
+       or use the universal download, which carries both."
 fi
+case "$SUBTYPES" in
+    *\ *) note "universal binary: subtypes $SUBTYPES; this $CPU picks one at launch" ;;
+esac
+
 # AltiVec is on every G4 and G5 and on no G3, and the shims are built with it.
 case "$CPU" in
     ppc750*|ppc603*|ppc604*)

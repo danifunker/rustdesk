@@ -144,12 +144,25 @@ need nothing.) So there are two steps — bundle, then install:
 ./deploy/bundle.sh                   # produces target/rustdesk-agent-g5.tar.gz
 ```
 
-**The G4 and G5 downloads are separate**, and both contain an app of the same
-name. They are told apart by the enclosing folder (`rustdesk-agent-g4/` or
-`-g5/`), by the version string in Get Info (`0.1.0 (G4)`), and by the "Built
-for" line the app shows. A G4 build runs on a G5 as well, so one is enough if
-you would rather keep a single download; a G5 build on a G4 is refused by the
-installer with the rebuild command.
+**Take the universal download unless you have a reason not to.** It carries both
+builds in one Mach-O and the Mac picks at launch, so the same `.app` is right on
+a G4 and a G5 — including after a disk is moved between them, which is the case
+that makes a single download worth the size. It is 8 MB against 4; the
+single-CPU downloads are still built for when that matters.
+
+Mach-O's fat format keys slices on cputype **and cpusubtype**, so two PowerPC
+builds coexist and the kernel grades them at `exec`. Measured rather than
+assumed: a fat binary whose two slices print their own names prints the G5 one
+on the G5, and each slice extracted with `lipo -thin` prints what it claims.
+There is no launcher script and nothing chosen at install time. The app's status
+says which slice the machine will use — *G4 and G5 (this Mac runs the G5
+build)*.
+
+If you do take a single-CPU download, they are told apart by the enclosing
+folder (`rustdesk-agent-g4/` or `-g5/`), by the version string in Get Info
+(`0.1.0 (G4)`), and by the same "Built for" line. A G4 build runs on a G5 too;
+a G5 build on a G4 is refused by the installer, which now reads a fat header
+properly rather than mistaking the first slice's cputype for a cpusubtype.
 
 `bundle.sh` copies every non-system library the binary needs — walked
 *transitively*, because `libgcc_s.1.dylib` is a stub that pulls in two more —

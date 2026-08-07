@@ -50,18 +50,26 @@ mach_cpusubtype() {
     set -- $(od -An -tu1 -j8 -N4 "$1")
     echo $(( $1 * 16777216 + $2 * 65536 + $3 * 256 + $4 ))
 }
-SUBTYPE="$(mach_cpusubtype "$BIN")"
-case "$SUBTYPE" in
-    100) ARCH=g5 ;;
-    10)  ARCH=g4 ;;
-    0)   ARCH=ppc ;;
-    *)   ARCH="ppc-subtype$SUBTYPE" ;;
-esac
+# A universal binary starts 0xcafebabe and has no single cpusubtype -- reading
+# offset 8 would hand back the first slice's *cputype*. Detect it first.
+if [ "$(od -An -tx1 -N4 "$BIN" | tr -d ' \n')" = "cafebabe" ]; then
+    SUBTYPE="universal"
+    ARCH=universal
+else
+    SUBTYPE="$(mach_cpusubtype "$BIN")"
+    case "$SUBTYPE" in
+        100) ARCH=g5 ;;
+        10)  ARCH=g4 ;;
+        0)   ARCH=ppc ;;
+        *)   ARCH="ppc-subtype$SUBTYPE" ;;
+    esac
+fi
 case "$ARCH" in
-    g5)  ARCH_LABEL="G5" ;;
-    g4)  ARCH_LABEL="G4" ;;
-    g3)  ARCH_LABEL="G3" ;;
-    *)   ARCH_LABEL="$ARCH" ;;
+    g5)        ARCH_LABEL="G5" ;;
+    g4)        ARCH_LABEL="G4" ;;
+    g3)        ARCH_LABEL="G3" ;;
+    universal) ARCH_LABEL="G4 and G5" ;;
+    *)         ARCH_LABEL="$ARCH" ;;
 esac
 STAGE_REMOTE="/tmp/rd-bundle-$$"
 NAME="rustdesk-agent-$ARCH"
