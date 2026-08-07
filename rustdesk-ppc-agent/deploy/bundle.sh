@@ -66,7 +66,7 @@ else
 fi
 case "$ARCH" in
     g5)        ARCH_LABEL="G5" ;;
-    g4)        ARCH_LABEL="G4" ;;
+    g4)        ARCH_LABEL="PowerPC G4 or later" ;;
     g3)        ARCH_LABEL="G3" ;;
     universal) ARCH_LABEL="G4 and G5" ;;
     *)         ARCH_LABEL="$ARCH" ;;

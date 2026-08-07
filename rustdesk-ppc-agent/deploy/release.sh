@@ -2,9 +2,16 @@
 #
 # Build, package and verify release artifacts. Run on the host; needs the G5.
 #
-#   ./deploy/release.sh                     # g5, g4 and a universal build
-#   ./deploy/release.sh --arch g4           # just one
-#   ./deploy/release.sh --arch universal    # the single download that runs on both
+#   ./deploy/release.sh                     # one build, for every supported Mac
+#   ./deploy/release.sh --arch "g5 g4 universal"   # the variants, if ever needed
+#
+# ONE ARTIFACT, TARGETING THE OLDEST HARDWARE THIS SUPPORTS. The G5 build was
+# measured against the G4 one on a G5 and buys nothing: the colour conversion is
+# a C shim that times the same either way (16-17 ms both), libvpx and every
+# static library are already generic ppc, and the frame is dominated by the VRAM
+# read. Meanwhile a G5-stamped binary is strictly worse in one way that matters
+# -- Rosetta on 10.6 refuses anything requiring a G5 -- so G4 is not a
+# compromise, it is the correct target.
 #   ./deploy/release.sh --version 0.2.0
 #   ./deploy/release.sh --skip-build        # re-package what is already built
 #
@@ -32,7 +39,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HOST="${PPC_HOST:-ppctiger}"
 export SSH_AUTH_SOCK="${SSH_AUTH_SOCK:-/tmp/ssh-agent-ppc.sock}"
 
-ARCHES="g5 g4 universal"
+ARCHES="g4"
 VERSION=""
 SKIP_BUILD=0
 ALLOW_DIRTY=0
@@ -78,13 +85,25 @@ subtype_for() {
 # alias and an arrow between them. Each image gets its own volume name, so two
 # of them mounted at once do not collide -- and so the release build itself does
 # not trip over the previous mount.
+# Building one variant means one download, which needs no qualifier in its name.
+# Building several means every name has to say which is which.
+name_suffix() {
+    case "$ARCHES" in
+        *\ *) echo "-$1" ;;
+        *)    echo "" ;;
+    esac
+}
+
 make_dmg() {
     _arch="$1"; _tar="$2"
     case "$_arch" in
         universal) _vol="Agent for RustDesk PPC" ;;
-        *)         _vol="Agent for RustDesk PPC $(echo "$_arch" | tr a-z A-Z)" ;;
+        *) case "$ARCHES" in
+               *\ *) _vol="Agent for RustDesk PPC $(echo "$_arch" | tr a-z A-Z)" ;;
+               *)    _vol="Agent for RustDesk PPC" ;;
+           esac ;;
     esac
-    _dmg="$REL/Agent-for-RustDesk-PPC-$VERSION-$_arch.dmg"
+    _dmg="$REL/Agent-for-RustDesk-PPC-$VERSION$(name_suffix "$_arch").dmg"
     echo "  building the disk image ..."
     ./deploy/make-dmg.sh "$_tar" "$_dmg" "$_vol" | sed 's/^/    /'
 }
@@ -144,9 +163,10 @@ for arch in $ARCHES; do
         PPC_BIN="$OUT/rustdesk-agent" PPC_BUNDLE_OUT="$HERE/target" ./deploy/bundle.sh | sed 's/^/    /'
         SRC_TAR="$HERE/target/rustdesk-agent-universal.tar.gz"
         [ -f "$SRC_TAR" ] || { echo "error: bundle.sh produced no $SRC_TAR" >&2; exit 1; }
-        mv "$SRC_TAR" "$REL/rustdesk-agent-$VERSION-universal.tar.gz"
-        echo "  -> rustdesk-agent-$VERSION-universal.tar.gz"
-        make_dmg universal "$REL/rustdesk-agent-$VERSION-universal.tar.gz"
+        _tarname="$REL/rustdesk-agent-$VERSION$(name_suffix universal).tar.gz"
+        mv "$SRC_TAR" "$_tarname"
+        echo "  -> $(basename "$_tarname")"
+        make_dmg universal "$_tarname"
         echo
         continue
     fi
@@ -209,9 +229,10 @@ for arch in $ARCHES; do
 
     SRC_TAR="$HERE/target/rustdesk-agent-$arch.tar.gz"
     [ -f "$SRC_TAR" ] || { echo "error: bundle.sh produced no $SRC_TAR" >&2; exit 1; }
-    mv "$SRC_TAR" "$REL/rustdesk-agent-$VERSION-$arch.tar.gz"
-    echo "  -> $(basename "$REL/rustdesk-agent-$VERSION-$arch.tar.gz")"
-    make_dmg "$arch" "$REL/rustdesk-agent-$VERSION-$arch.tar.gz"
+    _tarname="$REL/rustdesk-agent-$VERSION$(name_suffix "$arch").tar.gz"
+    mv "$SRC_TAR" "$_tarname"
+    echo "  -> $(basename "$_tarname")"
+    make_dmg "$arch" "$_tarname"
     echo
 done
 
@@ -241,9 +262,10 @@ sha256sum ./*.tar.gz ./*.dmg > SHA256SUMS
     echo "----------------------------------------------------------"
     for f in *.tar.gz; do
         arch="${f##*-}"; arch="${arch%.tar.gz}"
+        case "$arch" in [0-9]*) arch="$ARCHES" ;; esac   # no suffix: one build
         echo "  $f"
         echo "      for:        $(case $arch in g5) echo 'PowerPC G5 (970) only';;
-                                              g4) echo 'PowerPC G4; also runs on a G5';;
+                                              g4) echo 'PowerPC G4 or later: G4, G5, and Rosetta on Intel';;
                                               g3) echo 'PowerPC G3 (750); untested';;
                                               universal) echo 'G4 and G5 -- one download, the Mac picks at launch';; esac)"
         if [ "$arch" != "universal" ]; then
