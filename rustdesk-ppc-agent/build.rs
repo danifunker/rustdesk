@@ -24,6 +24,17 @@ fn main() {
         println!("cargo:rustc-cfg=no_vpx");
         return;
     }
+
+    // Where libvpx, libsodium and libzstd are. `build-ppc.sh` also puts this on
+    // the link line via PPC_LDFLAGS, so the cross build does not need it -- but
+    // a native build (MacPorts, where the libraries are under ${prefix}/lib)
+    // has no wrapper adding -L, and the link then fails on -lvpx. Emitting it
+    // here serves both: the remote cc wrapper passes system-prefix paths
+    // through untouched, so the same flag is correct on either side.
+    println!("cargo:rerun-if-env-changed=PPC_LIBS_DIR");
+    if let Ok(dir) = std::env::var("PPC_LIBS_DIR") {
+        println!("cargo:rustc-link-search=native={}", dir);
+    }
     cc::Build::new()
         .file("src/vpx_shim.c")
         .flag(NO_MISCOMPILE)
