@@ -172,7 +172,9 @@ fn main() {
 
     // Minimal logger rather than env_logger, to keep the dependency set small.
     // Static, so it needs neither an allocation nor log's `std` feature.
-    START_MS.store(now_ms(), std::sync::atomic::Ordering::Relaxed);
+    let start = now_ms();
+    START_SUB_MS.store((start % 1000) as u32, std::sync::atomic::Ordering::Relaxed);
+    START_S.store((start / 1000) as u32, std::sync::atomic::Ordering::Release);
     log::set_logger(&LOGGER).ok();
     log::set_max_level(level);
 
@@ -924,9 +926,21 @@ fn base64(b: &[u8]) -> String {
 
 static LOGGER: StderrLogger = StderrLogger;
 
-/// Milliseconds since the epoch at startup. An AtomicU64 rather than
-/// LazyLock<Instant>, which is 1.80+ and mrustc targets 1.74.
-static START_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Milliseconds since the epoch at startup, split across two `AtomicU32`s.
+///
+/// Atomics rather than `LazyLock<Instant>`, which is 1.80+ and mrustc targets
+/// 1.74 -- but *not* an `AtomicU64`: 32-bit PowerPC has no 8-byte atomic
+/// instruction, so rustc sets `max_atomic_width` 32 on every ppc32 target and
+/// `AtomicU64` does not exist there. Our own mrustc target spec is the outlier;
+/// it declares 64-bit atomics and links `-latomic`, whose 8-byte operations are
+/// lock-based and therefore not the lock-free, address-free thing std promises.
+/// Splitting keeps this correct under either compiler.
+///
+/// `START_S` is stored last with Release and read first with Acquire, so a
+/// non-zero seconds value implies the millisecond remainder beside it is
+/// visible. Zero still means "not started yet" -- epoch second 0 is 1970.
+static START_S: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static START_SUB_MS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
@@ -936,8 +950,13 @@ fn now_ms() -> u64 {
 }
 
 fn since_start() -> f64 {
-    let s = START_MS.load(std::sync::atomic::Ordering::Relaxed);
-    if s == 0 { 0.0 } else { (now_ms().saturating_sub(s)) as f64 / 1000.0 }
+    let s = START_S.load(std::sync::atomic::Ordering::Acquire);
+    if s == 0 {
+        return 0.0;
+    }
+    let sub = START_SUB_MS.load(std::sync::atomic::Ordering::Relaxed);
+    let start = s as u64 * 1000 + sub as u64;
+    (now_ms().saturating_sub(start)) as f64 / 1000.0
 }
 
 struct StderrLogger;

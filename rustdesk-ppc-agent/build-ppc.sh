@@ -101,7 +101,7 @@ done
 SODIUM_LIB_DIR="$PPC_LIBS_DIR" \
 CC_powerpc_apple_darwin="$PPC_TOOLS_DIR/scripts/ppc-cc-remote.py" \
 AR_powerpc_apple_darwin="$PPC_TOOLS_DIR/scripts/ppc-ar-remote.py" \
-MRUSTC_TARGET_VER=1.74 \
+MRUSTC_TARGET_VER="${MRUSTC_TARGET_VER:-1.74}" \
   "$MRUSTC_DIR/bin/minicargo" "$HERE" \
   --vendor-dir "$HERE/vendor" \
   --target powerpc-apple-darwin \
