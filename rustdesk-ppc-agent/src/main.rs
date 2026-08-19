@@ -19,6 +19,7 @@ USAGE:
     rustdesk-agent --password PASS
     rustdesk-agent --show-id | --show-key
     rustdesk-agent --server HOST | --no-server
+    rustdesk-agent --api-server URL | --no-api-server
     rustdesk-agent --probe-display
 
 OPTIONS:
@@ -43,6 +44,14 @@ OPTIONS:
                      puts in its Key field. Persisted, and sent when joining a
                      relay. Only needed against an hbbr started with -k; an
                      unkeyed relay ignores it. --key '' clears it.
+    --api-server URL report in to this console, so the machine appears in its
+                     device list. Persisted. A bare host means https. This is
+                     separate from --server: that one makes the machine
+                     reachable, this one makes it visible.
+    --no-api-server  stop reporting in, and exit
+    --ca-bundle PATH certificates used to verify an https console. Persisted.
+                     Empty is the default and searches the usual places; set it
+                     for a console behind a private CA. --ca-bundle '' clears it.
     --config PATH    config file (default ~/.rustdesk-ppc-agent.conf)
     --secure         require the signed_id/public_key exchange. OFF by default:
                      a client connecting by IP does not take part, and enabling
@@ -77,6 +86,9 @@ fn main() {
     // Same rule: absent leaves the stored key alone, `--key ''` clears it.
     let mut set_key: Option<String> = None;
     let mut set_relay: Option<String> = None;
+    // Same rule again: absent leaves it, `--no-api-server` clears it.
+    let mut set_api: Option<String> = None;
+    let mut set_ca: Option<String> = None;
 
     let mut i = 0;
     while i < argv.len() {
@@ -165,6 +177,18 @@ fn main() {
                 set_relay = Some(need(i));
                 i += 2;
             }
+            "--api-server" => {
+                set_api = Some(need(i));
+                i += 2;
+            }
+            "--no-api-server" => {
+                set_api = Some(String::new());
+                i += 1;
+            }
+            "--ca-bundle" => {
+                set_ca = Some(need(i));
+                i += 2;
+            }
             "-h" | "--help" => usage(),
             _ => usage(),
         }
@@ -228,13 +252,56 @@ fn main() {
         }
         return;
     }
+    if let Some(a) = set_api {
+        // Checked before it is stored: a URL that cannot be parsed is a typo,
+        // and finding out at the next start -- from a warning in a log nobody
+        // is watching -- is how a machine stays missing from the console for a
+        // week.
+        if !a.is_empty() {
+            if let Err(e) = rustdesk_ppc_agent::http::Url::parse(&a) {
+                eprintln!("error: {:?} is not a usable URL: {}", a, e);
+                exit(1);
+            }
+        }
+        cfg.set_api_server(&a).unwrap_or_else(|e| {
+            eprintln!("error: could not save config: {}", e);
+            exit(1);
+        });
+        if a.is_empty() {
+            println!("console cleared; the agent will not report in");
+        } else {
+            println!("console set to {}", rustdesk_ppc_agent::http::Url::parse(&a).unwrap());
+        }
+        return;
+    }
+    if let Some(c) = set_ca {
+        // Checked by loading it, for the same reason the URL is parsed before
+        // it is stored: a bundle that turns out to be a private key is worth
+        // finding out about now rather than from a handshake failure later.
+        if !c.is_empty() {
+            if let Err(e) = rustdesk_ppc_agent::http::CaBundle::load(&c) {
+                eprintln!("error: {}", e);
+                exit(1);
+            }
+        }
+        cfg.set_ca_bundle(&c).unwrap_or_else(|e| {
+            eprintln!("error: could not save config: {}", e);
+            exit(1);
+        });
+        if c.is_empty() {
+            println!("CA bundle cleared; the usual places will be searched");
+        } else {
+            println!("CA bundle set to {}", c);
+        }
+        return;
+    }
     if show_id {
         println!("{}", cfg.id());
         return;
     }
     if show_key {
         let (pk, _) = cfg.key_pair();
-        println!("{}", base64(&pk.0));
+        println!("{}", rustdesk_ppc_agent::config::base64_encode(&pk.0));
         return;
     }
     if probe {
@@ -272,13 +339,15 @@ fn main() {
     };
     let server = cfg.rendezvous_server();
     println!("agent id  : {}", ident.id);
-    println!("public key: {}", base64(&pk.0));
+    println!("public key: {}", rustdesk_ppc_agent::config::base64_encode(&pk.0));
     println!("display   : {}x{}", width, height);
     println!("mode      : {}", if secure { "secure (peer must know our key)" } else { "direct-IP, UNENCRYPTED" });
     println!("server    : {}", if server.is_empty() { "none -- direct IP only".to_owned() } else { server.clone() });
     if !server.is_empty() {
         println!("server key: {}", if cfg.server_key().is_empty() { "none (fine unless hbbr was started with -k)" } else { "set" });
     }
+    let api_server = cfg.api_server();
+    println!("console   : {}", if api_server.is_empty() { "none -- not in any device list".to_owned() } else { api_server.clone() });
 
     // Register with a rendezvous server, so the agent is reachable by id from
     // anywhere rather than only by address on this subnet. Its own thread: see
@@ -313,13 +382,32 @@ fn main() {
         std::thread::spawn(move || rustdesk_ppc_agent::lan::serve(me));
     }
 
+    // Report in to a console, so the machine appears in its device list. Its
+    // own thread, like the two above: it sleeps fifteen seconds at a time.
+    //
+    // Independent of `--server` on purpose. Registration makes the machine
+    // reachable by id; this makes it visible in a list. A deployment can want
+    // either without the other, and neither one implies the other is
+    // configured.
+    if !api_server.is_empty() {
+        let enrolment = rustdesk_ppc_agent::api::Enrolment {
+            api_server: api_server.clone(),
+            id: ident.id.clone(),
+            uuid: cfg.uuid(),
+            hostname: ident.hostname.clone(),
+            username: std::env::var("USER").unwrap_or_else(|_| "admin".to_owned()),
+            ca_bundle: cfg.ca_bundle(),
+        };
+        std::thread::spawn(move || rustdesk_ppc_agent::api::serve(enrolment));
+    }
+
     if let Err(e) = session::listen(&format!("{}:{}", listen, port), &ident) {
         eprintln!("error: {}", e);
         exit(1);
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "irix"))]
 fn display_size() -> (i32, i32) {
     match rustdesk_ppc_agent::capture::Capturer::new() {
         Ok(c) => (c.width as i32, c.height as i32),
@@ -329,12 +417,12 @@ fn display_size() -> (i32, i32) {
         }
     }
 }
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "irix")))]
 fn display_size() -> (i32, i32) {
     (0, 0)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "irix"))]
 fn probe_display() {
     use rustdesk_ppc_agent::convert::{argb_to_i420, I420};
     match rustdesk_ppc_agent::capture::Capturer::new() {
@@ -487,7 +575,7 @@ fn probe_display() {
         Err(e) => println!("capture unavailable: {}", e),
     }
 }
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "irix")))]
 fn probe_display() {
     println!("--probe-display is only meaningful on macOS");
 }
@@ -505,7 +593,7 @@ fn probe_display() {
 /// Median of three, because a single sample on a machine with a window server
 /// on it is noise. Each row builds its own encoder: every knob here is fixed at
 /// `vpx_codec_enc_init` time or depends on state accumulated since it.
-#[cfg(all(target_os = "macos", not(no_vpx)))]
+#[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
 fn encode_sweep(img: &mut rustdesk_ppc_agent::convert::I420) -> u128 {
     use rustdesk_ppc_agent::encode::{Encoder, Tune};
 
@@ -597,7 +685,7 @@ fn encode_sweep(img: &mut rustdesk_ppc_agent::convert::I420) -> u128 {
 /// what a terminal redraw costs an encoder than random noise would be. Noise is
 /// the worst case for a codec and would make every configuration here look bad
 /// in the same way.
-#[cfg(all(target_os = "macos", not(no_vpx)))]
+#[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
 fn dirty_patch(img: &mut rustdesk_ppc_agent::convert::I420, n: u8) {
     let (pw, ph) = (256.min(img.width), 64.min(img.height));
     for y in 0..ph {
@@ -619,7 +707,7 @@ fn dirty_patch(img: &mut rustdesk_ppc_agent::convert::I420, n: u8) {
 /// was given, so Cmd+Space then a known word makes the result readable off the
 /// screen. Goes through `Injector` deliberately -- this exercises the same path
 /// the session loop uses, `chr` values and all.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "irix"))]
 fn probe_keys_fn(click_at: Option<(i32, i32)>) {
     use protobuf::ProtobufEnumOrUnknown;
     use rustdesk_ppc_agent::message_proto::MouseEvent;
@@ -725,13 +813,13 @@ fn probe_keys_fn(click_at: Option<(i32, i32)>) {
     ctrl_c(&mut inj);
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "irix")))]
 fn probe_keys_fn(_click_at: Option<(i32, i32)>) {
     println!("--probe-keys is only meaningful on macOS");
 }
 
 /// Dump an ARGB frame as a binary PPM. Memory order is A,R,G,B, so RGB is at +1.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "irix"))]
 fn write_ppm(path: &str, frame: &[u8], w: usize, h: usize, stride: usize) -> std::io::Result<()> {
     use std::io::Write;
     let mut f = std::io::BufWriter::new(std::fs::File::create(path)?);
@@ -747,7 +835,7 @@ fn write_ppm(path: &str, frame: &[u8], w: usize, h: usize, stride: usize) -> std
     f.flush()
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "irix"))]
 fn probe_live_fn() {
     use rustdesk_ppc_agent::input::{cursor_position, Injector};
     use rustdesk_ppc_agent::message_proto::MouseEvent;
@@ -895,7 +983,7 @@ fn probe_live_fn() {
         if dirty_after_escape { "repainted the screen (menu closed)" } else { "changed nothing" }
     );
 }
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "irix")))]
 fn probe_live_fn() {
     println!("--probe-live is only meaningful on macOS");
 }
@@ -908,20 +996,6 @@ fn hostname() -> String {
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "mac".to_owned())
-}
-
-fn base64(b: &[u8]) -> String {
-    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::new();
-    for c in b.chunks(3) {
-        let x = [c[0], *c.get(1).unwrap_or(&0), *c.get(2).unwrap_or(&0)];
-        let n = ((x[0] as u32) << 16) | ((x[1] as u32) << 8) | x[2] as u32;
-        out.push(T[(n >> 18 & 63) as usize] as char);
-        out.push(T[(n >> 12 & 63) as usize] as char);
-        out.push(if c.len() > 1 { T[(n >> 6 & 63) as usize] as char } else { '=' });
-        out.push(if c.len() > 2 { T[(n & 63) as usize] as char } else { '=' });
-    }
-    out
 }
 
 static LOGGER: StderrLogger = StderrLogger;

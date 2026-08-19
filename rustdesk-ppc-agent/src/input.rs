@@ -16,7 +16,7 @@
 //!   * low 3 bits — 0 move, 1 down, 2 up, 3 wheel
 //!   * bits 3..   — 1 left, 2 right, 4 middle
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "irix"))]
 use std::os::raw::c_double;
 use std::os::raw::{c_int, c_uint};
 
@@ -30,8 +30,9 @@ use crate::message_proto::{
 #[cfg(target_os = "macos")]
 #[link(name = "Carbon", kind = "framework")]
 extern "C" {}
+// IRIX gets the same interface from XTEST; see the IRIX tree's input_shim.c.
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "irix"))]
 extern "C" {
     fn rd_mouse(ty: c_int, x: c_double, y: c_double, button: c_int);
     fn rd_mouse_here(ty: c_int, button: c_int);
@@ -52,7 +53,7 @@ extern "C" {
 /// events instead of pressing keys -- corrupts everything afterwards. A stuck
 /// Control is the worst of them, because a Control-click is a right-click here,
 /// so left-clicking silently starts opening context menus.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "irix"))]
 pub fn release_modifiers() {
     unsafe { rd_release_modifiers() }
 }
@@ -65,7 +66,7 @@ pub fn release_modifiers() {
 /// the alternatives for checking it on this OS are all blocked (event taps need
 /// an accessibility toggle, and typing into a window tests focus as much as it
 /// tests the mapping).
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "irix"))]
 pub fn keycode_for_char(cp: u32) -> Option<(i32, bool)> {
     let mut shift: c_int = 0;
     let code = unsafe { rd_keycode_for_char(cp, &mut shift) };
@@ -93,7 +94,7 @@ pub fn land_delta(x: f64, y: f64, dx: f64, dy: f64, width: f64, height: f64) -> 
 }
 
 /// Where the system thinks the cursor is. Out-params, not a returned struct.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "irix"))]
 pub fn cursor_position() -> (f64, f64) {
     let (mut x, mut y) = (0.0f64, 0.0f64);
     unsafe { rd_cursor_pos(&mut x, &mut y) };
@@ -456,7 +457,7 @@ impl Injector {
     /// about the machine, not about the message: 10.5 has no magnify event to
     /// post and no reason to pretend, so a peer's gestures are dropped rather
     /// than approximated into something nobody asked for.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "irix"))]
     pub fn touch(&mut self, ev: &PointerDeviceEvent) {
         if !crate::sys::has_gesture_events() {
             return;
@@ -472,7 +473,7 @@ impl Injector {
         }
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "irix"))]
     pub fn mouse(&mut self, ev: &MouseEvent) {
         let action = self.decide_mouse(ev);
         log::debug!("mouse mask={:#x} -> {:?}", ev.mask, action);
@@ -513,7 +514,7 @@ impl Injector {
         }
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "irix"))]
     pub fn key(&mut self, ev: &KeyEvent) {
         let action = self.decide_key(ev);
         log::debug!("key down={} press={} -> {:?}", ev.down, ev.press, action);
