@@ -13,9 +13,9 @@ PortGroup           cargo   1.0
 #   - `worksrcdir` descends into the subdirectory. GitHub names an archive
 #     directory `<repo>-<tag>`, so tag `ppc-agent-0.1.0` of repo `rustdesk`
 #     unpacks to `rustdesk-ppc-agent-0.1.0/`.
-github.setup        danifunker rustdesk 0.1.0 ppc-agent-
+github.setup        danifunker rustdesk 1.0.0 ppc-agent-
 name                rustdesk-ppc-agent
-distname            rustdesk-ppc-agent-0.1.0
+distname            rustdesk-ppc-agent-1.0.0
 worksrcdir          ${distname}/rustdesk-ppc-agent
 revision            0
 categories          net
@@ -41,19 +41,29 @@ long_description    A minimal RustDesk agent for PowerPC Macs: it serves screen,
 
 github.tarball_from archive
 
-# TODO(before submitting): fill in from the real release tarball.
+# STALE: these are the ppc-agent-0.1.0 tarball's. Regenerate with
+# `sudo port -v checksum rustdesk-ppc-agent` once the ppc-agent-1.0.0 tag is
+# pushed -- until then a build fails on a checksum mismatch, which is the
+# correct failure but not an obvious one.
 checksums           ${distname}${extract.suffix} \
-                    rmd160  0 \
-                    sha256  0 \
-                    size    0
+                    rmd160  4b56a05c1e2d67c134cffec6ed19d989f388e848 \
+                    sha256  9dbc60b8acfa92dbffcc7b87ee87dea69593042f8a686665ec9a0b25b0cbdbcc \
+                    size    758541
 
-# libvpx        VP8 encode (the agent links it statically)
-# libsodium     the RustDesk handshake (via sodiumoxide)
-# zstd, zlib    clipboard decompression from modern peers
+# libvpx           VP8 encode (the agent links it statically)
+# libsodium        the RustDesk handshake (via sodiumoxide)
+# zstd, zlib       clipboard decompression from modern peers
+# mbedtls3         TLS for an https console -- see src/tls_shim.c for why this
+#                  and not a Rust TLS stack, and why the system one is no use
+# curl-ca-bundle   certificates to verify it against. Not optional in practice:
+#                  Mac OS X 10.4/10.5 roots expired years ago, so the system
+#                  trust store cannot verify most of the public internet
 depends_lib-append  port:libvpx \
                     port:libsodium \
                     port:zstd \
-                    port:zlib
+                    port:zlib \
+                    port:mbedtls3 \
+                    port:curl-ca-bundle
 
 # AltiVec is not optional for this port: both libvpx's encoder paths and the
 # agent's own C shims use it, so a G3 cannot run the result. See the upstream
@@ -70,8 +80,13 @@ patchfiles          protobuf-3.0.0-alpha.2.patch
 
 # SODIUM_LIB_DIR   libsodium-sys looks here rather than running pkg-config
 # PPC_LIBS_DIR     build.rs turns this into -L for the statically linked libs
+# MBEDTLS_DIR      where build.rs looks for mbedtls/ssl.h and the archives.
+#                  Set explicitly rather than left to the search: ${prefix} is
+#                  already first in it, but a port should not depend on the
+#                  guessing order of a build script it does not own.
 build.env-append    SODIUM_LIB_DIR=${prefix}/lib \
-                    PPC_LIBS_DIR=${prefix}/lib
+                    PPC_LIBS_DIR=${prefix}/lib \
+                    MBEDTLS_DIR=${prefix}
 
 cargo.crates \
     block-buffer               0.10.4  3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71 \

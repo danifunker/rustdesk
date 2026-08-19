@@ -17,7 +17,121 @@
 /// Everything else -O2 offers is kept.
 const NO_MISCOMPILE: &str = "-fno-gcse";
 
+/// An environment variable, preferring the target-specific spelling.
+///
+/// `MBEDTLS_INCLUDE_DIR_powerpc_apple_darwin` beats `MBEDTLS_INCLUDE_DIR`, the
+/// same convention `CC_powerpc_apple_darwin` follows here and for the same
+/// reason: **one release run builds for the host and for the Mac**, and the two
+/// do not share a filesystem. Exporting only the plain name for a cross build
+/// points the *host* build at a directory that exists only on the G5, and
+/// cc-rs then fails on a `-I` it cannot open -- which is exactly what happened
+/// the first time `build-release.sh` was run with this.
+fn target_var(name: &str) -> Option<String> {
+    let target = std::env::var("TARGET").unwrap_or_default().replace('-', "_");
+    let specific = format!("{}_{}", name, target);
+    println!("cargo:rerun-if-env-changed={}", specific);
+    println!("cargo:rerun-if-env-changed={}", name);
+    std::env::var(&specific).ok().or_else(|| std::env::var(name).ok())
+}
+
+/// Where mbedTLS is, as (include dir, lib dir).
+///
+/// Searched rather than assumed, because this build has three homes: MacPorts
+/// (`${prefix}`), the cross build's `~/ppc-libs`, and a host checkout testing
+/// the console client before it reaches a G5. The explicit variables win, so
+/// none of the guessing below can surprise a deliberate build.
+fn mbedtls_paths() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+    use std::path::PathBuf;
+    let has_header = |inc: &PathBuf| inc.join("mbedtls").join("ssl.h").is_file();
+
+    if let (Some(inc), Some(lib)) =
+        (target_var("MBEDTLS_INCLUDE_DIR"), target_var("MBEDTLS_LIB_DIR"))
+    {
+        // Not checked for existence on purpose: for the PowerPC target these
+        // name directories on the *Mac*, which this machine cannot see. The
+        // remote cc wrapper passes such a path through untouched -- that is the
+        // same mechanism `-L$PPC_LIBS_DIR` already relies on.
+        return Some((PathBuf::from(inc), PathBuf::from(lib)));
+    }
+    let mut prefixes: Vec<PathBuf> = Vec::new();
+    if let Some(d) = target_var("MBEDTLS_DIR") {
+        prefixes.push(PathBuf::from(d));
+    }
+    println!("cargo:rerun-if-env-changed=PPC_LIBS_DIR");
+    // The cross build puts the target's libraries here; its headers sit beside
+    // them under the same prefix.
+    if let Ok(d) = std::env::var("PPC_LIBS_DIR") {
+        if let Some(parent) = PathBuf::from(d).parent() {
+            prefixes.push(parent.to_path_buf());
+        }
+    }
+    // MacPorts first: on a Mac that has both, the port is the one this is
+    // built and tested against.
+    prefixes.push(PathBuf::from("/opt/local"));
+    prefixes.push(PathBuf::from("/usr/local"));
+    prefixes.push(PathBuf::from("/usr"));
+
+    for p in prefixes {
+        let inc = p.join("include");
+        if has_header(&inc) {
+            // `library/` is where an in-tree mbedTLS build leaves its archives;
+            // `lib/` is where an installed one does.
+            for name in ["lib", "library"] {
+                let lib = p.join(name);
+                if lib.is_dir() {
+                    return Some((inc, lib));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Build the TLS shim if mbedTLS can be found, and say plainly when it cannot.
+///
+/// Not gated on macOS: the console client is ordinary sockets, and being able
+/// to exercise it on the host is what keeps a TLS bug off the G5. When mbedTLS
+/// is absent the crate still builds and `https` fails at runtime with a message
+/// saying so, which is better than a build that cannot be produced at all on a
+/// machine that only ever needed the LAN path.
+fn build_tls() {
+    match mbedtls_paths() {
+        Some((inc, lib)) => {
+            cc::Build::new()
+                .file("src/tls_shim.c")
+                .flag(NO_MISCOMPILE)
+                .include(&inc)
+                .opt_level(2)
+                .compile("tlsshim");
+            println!("cargo:rustc-link-search=native={}", lib.display());
+            // Static by default, because the .app in deploy/ is installed on
+            // Macs that have never heard of MacPorts. `MBEDTLS_STATIC=0` is for
+            // a host build that only has shared objects.
+            let kind = if std::env::var("MBEDTLS_STATIC").as_deref() == Ok("0") {
+                ""
+            } else {
+                "static="
+            };
+            // Order matters to a static link: ssl needs x509 needs crypto.
+            for l in ["mbedtls", "mbedx509", "mbedcrypto"] {
+                println!("cargo:rustc-link-lib={}{}", kind, l);
+            }
+            println!("cargo:rerun-if-changed=src/tls_shim.c");
+        }
+        None => {
+            println!("cargo:rustc-cfg=no_tls");
+            println!(
+                "cargo:warning=mbedTLS not found, so https is not built in and an \
+                 https console will be refused at runtime. Set MBEDTLS_DIR, or \
+                 install the mbedtls3 port."
+            );
+        }
+    }
+}
+
 fn main() {
+    build_tls();
+
     // Only the target build links libvpx; host `cargo test` skips the shim so
     // the pure-Rust modules stay testable without a PowerPC libvpx present.
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {

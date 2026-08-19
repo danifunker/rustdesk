@@ -16,6 +16,7 @@ pub mod rendezvous_proto;
 
 // Always compiled: the platform half is gated inside, so the pure change-detection
 // logic stays reachable from host tests.
+pub mod api;
 pub mod capture;
 pub mod clipboard;
 pub mod config;
@@ -29,6 +30,8 @@ pub mod input;
 pub mod lan;
 pub mod crypto;
 pub mod frame;
+pub mod http;
+pub mod json;
 pub mod png;
 pub mod rendezvous;
 pub mod session;

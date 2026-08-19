@@ -173,6 +173,38 @@ impl Config {
         self.store()
     }
 
+    /// The console this machine reports in to, so it appears in a device list.
+    ///
+    /// Empty by default, and entirely separate from `rendezvous_server`: that
+    /// one makes the machine *reachable*, this one makes it *visible*. A
+    /// deployment can sensibly have either, both or neither -- the console
+    /// builds its list from the HTTP API and not from hbbs registration, so
+    /// registering without reporting in is a machine that connects by id and
+    /// never appears anywhere. See `api` for the contract.
+    pub fn api_server(&self) -> String {
+        self.get("api_server").unwrap_or_default().to_owned()
+    }
+
+    pub fn set_api_server(&mut self, s: &str) -> io::Result<()> {
+        self.set("api_server", s);
+        self.store()
+    }
+
+    /// A CA bundle to verify an https console against.
+    ///
+    /// Empty means the usual places are searched -- see `http::CaBundle`. It is
+    /// a setting rather than a constant because a self-hosted console is very
+    /// often behind a private CA, and because this platform's own trust store
+    /// is too old to verify most of the public internet.
+    pub fn ca_bundle(&self) -> String {
+        self.get("ca_bundle").unwrap_or_default().to_owned()
+    }
+
+    pub fn set_ca_bundle(&mut self, p: &str) -> io::Result<()> {
+        self.set("ca_bundle", p);
+        self.store()
+    }
+
     pub fn password(&self) -> String {
         self.get("password").unwrap_or_default().to_owned()
     }
@@ -202,6 +234,28 @@ impl Config {
         let _ = self.store();
         (pk, sk)
     }
+}
+
+/// Standard base64, with padding.
+///
+/// Lives beside `hex_encode` because it is the same job -- binary identity
+/// bytes rendered as text -- for the two places that need the other alphabet:
+/// the public key `--show-key` prints for a peer to pin, and the `uuid` the
+/// console API expects. No `=` is ever omitted: the console compares the string
+/// it was first sent against the one it is sent later, so the encoding has to
+/// be stable rather than merely decodable.
+pub fn base64_encode(b: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for c in b.chunks(3) {
+        let x = [c[0], *c.get(1).unwrap_or(&0), *c.get(2).unwrap_or(&0)];
+        let n = ((x[0] as u32) << 16) | ((x[1] as u32) << 8) | x[2] as u32;
+        out.push(T[(n >> 18 & 63) as usize] as char);
+        out.push(T[(n >> 12 & 63) as usize] as char);
+        out.push(if c.len() > 1 { T[(n >> 6 & 63) as usize] as char } else { '=' });
+        out.push(if c.len() > 2 { T[(n & 63) as usize] as char } else { '=' });
+    }
+    out
 }
 
 fn hex_encode(b: &[u8]) -> String {
@@ -237,6 +291,31 @@ mod tests {
         assert_eq!(hex_decode(&hex_encode(&b)).unwrap(), b);
         assert!(hex_decode("abc").is_none());
         assert!(hex_decode("zz").is_none());
+    }
+
+    /// RFC 4648 vectors, including both padding lengths. The console pins the
+    /// first uuid string it is sent and ignores any heartbeat that does not
+    /// match it, so an encoder that dropped padding would register the machine
+    /// once and then go quiet.
+    #[test]
+    fn base64_matches_the_standard_alphabet_and_keeps_its_padding() {
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"f"), "Zg==");
+        assert_eq!(base64_encode(b"fo"), "Zm8=");
+        assert_eq!(base64_encode(b"foo"), "Zm9v");
+        assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
+        assert_eq!(base64_encode(b"fooba"), "Zm9vYmE=");
+        assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
+        // The two characters that separate this from the URL-safe alphabet.
+        assert_eq!(base64_encode(&[0xff, 0xef]), "/+8=");
+    }
+
+    /// The same bytes must encode the same way every run, on either endianness.
+    #[test]
+    fn base64_is_stable_for_a_uuid() {
+        let uuid: Vec<u8> = (0..16u8).collect();
+        assert_eq!(base64_encode(&uuid), base64_encode(&uuid));
+        assert_eq!(base64_encode(&uuid), "AAECAwQFBgcICQoLDA0ODw==");
     }
 
     #[test]

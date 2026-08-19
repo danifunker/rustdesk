@@ -20,7 +20,7 @@
 
 [package]
 name = "rustdesk-ppc-agent"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2018"
 build = "build.rs"
 description = "RustDesk agent for PowerPC Mac OS X (10.4/10.5)"

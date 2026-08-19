@@ -8,8 +8,9 @@ exists rather than a port of `src/server/`.
 Status: connects, authenticates and streams VP8 to a real client, with keyboard,
 mouse, trackpad scrolling, the real pointer shape, LAN discovery, screenshots,
 clipboard text (see "Where the agent has to run" below — the clipboard is
-the one feature that constrains it) and registration with a self-hosted
-rendezvous server, so it is reachable by ID rather than only by address.
+the one feature that constrains it), registration with a self-hosted
+rendezvous server, so it is reachable by ID rather than only by address, and
+reporting in to a console so it appears in a device list.
 It reports itself as **1.4.5**, which is a capability declaration rather than a
 label — see `REPORTED_VERSION` in `src/session.rs`. There is deliberately **no
 audio**; see below for why. [`docs/BACKLOG.md`](docs/BACKLOG.md) has the rest of
@@ -78,6 +79,86 @@ Two things worth knowing about that path:
   relay. The agent does not attempt hole punching — see `docs/BACKLOG.md` item
   12 for why that is a property of the deployment rather than a shortcut.
 
+### In a console's device list
+
+Registering makes the machine **reachable**; it does not make it **visible**.
+A console -- [CortenDesk](https://github.com/marcpope/cortendesk), or RustDesk
+Pro -- builds its device list from an HTTP API and *not* from hbbs
+registration, so an agent that only registers connects by ID and appears in no
+list at all. Point it at the console as well and it shows up there:
+
+```bash
+rustdesk-agent --api-server https://console.example.org   # saved, then exit
+rustdesk-agent --api-server http://192.168.1.10:8080      # CortenDesk's container port
+rustdesk-agent --no-api-server                            # stop reporting in
+```
+
+A bare host means `https`. That is the safe guess: assuming `http` would
+silently downgrade a console reachable over TLS, and nothing would say so.
+
+This is entirely separate from `--server`, and a deployment can want either
+without the other. Two POSTs are the whole of it, both **tokenless** -- no
+login, no bearer token, no enrolment secret:
+
+| endpoint | when | what it does |
+|---|---|---|
+| `/api/sysinfo` | at start, and whenever asked | creates the device row: id, uuid, cpu, memory, os, hostname, username, version |
+| `/api/heartbeat` | every 15 s | keeps it online, and is where the console asks for the inventory |
+
+Three things worth knowing:
+
+* **`--no-server` and `--no-api-server` are different switches.** The first
+  stops the machine being reachable by ID; the second only stops it appearing
+  in a list.
+* **The uuid must never change**, for the same reason it must not for hbbs.
+  These endpoints are unauthenticated, and the console pins the first uuid it
+  sees for an ID and then quietly ignores any heartbeat that disagrees -- so a
+  regenerated uuid does not re-register, it goes silent. It is the same value
+  `--server` registers with, so the two always agree.
+* **Fifteen seconds is not a round number.** A console counts a device offline
+  sixty seconds after its last heartbeat, so the interval is three missed beats
+  of slack.
+
+#### https, and the certificates it needs
+
+`https` works, over mbedTLS (`src/tls_shim.c`; `port:mbedtls3`). TLS 1.2 is the
+floor -- this machine's own Secure Transport and OpenSSL 0.9.7 top out at 1.0,
+which is exactly why the system one is not used.
+
+**The system trust store is not used either, and cannot be.** Mac OS X 10.4/10.5
+roots expired years ago: DST Root CA X3 died in 2021 and ISRG Root X1 was never
+there, so a console behind Let's Encrypt cannot be verified against them however
+new the TLS library is. Certificates come from a bundle instead, looked for in
+this order:
+
+1. `--ca-bundle PATH`, if set
+2. `cacert.pem` beside the agent, or in the `.app`'s `Contents/Resources`
+3. `/opt/local/share/curl/curl-ca-bundle.crt` -- the `curl-ca-bundle` port
+4. `/etc/ssl/cert.pem`, then the usual Unix paths
+
+A copy installed from the disk image carries its own, so it needs nothing else
+present. A self-hosted console behind a private CA needs `--ca-bundle` pointing
+at that CA:
+
+```bash
+rustdesk-agent --ca-bundle /path/to/my-ca.pem   # saved, then exit
+rustdesk-agent --ca-bundle ''                   # back to searching
+```
+
+Verification is never skipped and there is no flag to skip it. When it fails the
+agent says which of the three things went wrong -- an untrusted CA, a name that
+does not match, or a date problem -- because they need different fixes. **A date
+problem is worth suspecting first on this hardware**: a G4 or G5 with a dead PRAM
+battery boots in 1970, and every certificate on earth is then not yet valid.
+
+An agent built where mbedTLS was absent says so and keeps serving sessions
+normally; `https` is the only thing that stops working.
+
+The console's Active-sessions view will stay empty either way: it is fed by a
+`conns` list this agent has no connection IDs to fill, and reporting a wrong
+one would close live sessions. The device still shows online and connects
+normally.
+
 ### Where the agent has to run
 
 Three contexts, and they are not equivalent — this cost real debugging twice, so
@@ -123,6 +204,8 @@ INFO clipboard unavailable: the pasteboard needs the Aqua session, ...
 ### Other commands
 
 ```bash
+rustdesk-agent --api-server URL   # report in to a console (see above)
+rustdesk-agent --ca-bundle PATH   # certificates for an https console
 rustdesk-agent --show-id          # the agent's ID
 rustdesk-agent --show-key         # public key a peer can pin
 rustdesk-agent --probe-display    # framebuffer geometry and per-stage timings
@@ -470,6 +553,9 @@ python3 -c "from PIL import Image; im=Image.open('/tmp/out/display.png'); \
 | `src/input.rs` | Quartz Event Services injection |
 | `src/lan.rs` | answers the UDP discovery broadcast |
 | `src/rendezvous.rs` | registers with a server, and answers connection requests |
+| `src/api.rs` | reports in to a console, so the machine appears in a device list |
+| `src/http.rs`, `src/tls_shim.c` | blocking HTTP/1.1 POST, and TLS via mbedTLS |
+| `src/json.rs` | a JSON writer and a top-level field reader, for the above |
 | `probes/` | C programs establishing the hardware floor |
 | `docs/videoperformance.md` | what was measured, and why the design follows |
 | `docs/performance-plan.md` | what is left to do about speed, and what each would buy |

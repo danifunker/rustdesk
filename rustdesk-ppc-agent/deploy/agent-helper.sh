@@ -92,6 +92,21 @@ status)
     srv="$(conf_get rendezvous_server)"; [ -n "$srv" ] || srv="(none - direct IP only)"
     rly="$(conf_get relay_server)";      [ -n "$rly" ] || rly="(whichever the ID server names)"
     key="$(conf_get server_key)";        [ -n "$key" ] && key="(set)" || key="(none)"
+    # Reachable and visible are different things: the ID server makes this Mac
+    # connectable, the console makes it appear in a device list. Both are shown
+    # because having one and not the other is a normal state, and looks like a
+    # fault from either side.
+    con="$(conf_get api_server)"
+    cab="$(conf_get ca_bundle)"
+    if [ -z "$con" ]; then
+        con="(none - not in any device list)"
+        cab=""
+    else
+        case "$con" in
+            http://*) cab="(not used - this console is plain http)" ;;
+            *)        [ -n "$cab" ] || cab="(the usual places)" ;;
+        esac
+    fi
     if [ -n "$(conf_get password)" ]; then pw="(set)"; else pw="NOT SET - nobody can connect"; fi
     ip="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo '?')"
     # Which CPU this copy was built for. The G4 and G5 downloads carry the same
@@ -103,8 +118,14 @@ status)
     case "$arch" in
         *and*) arch="$arch (this Mac runs $(this_slice))" ;;
     esac
-    printf 'Status:      %s\nID:          %s\nThis Mac:    %s\nPassword:    %s\nID server:   %s\nRelay:       %s\nServer key:  %s\nBuilt for:   %s\nBuild:       %s (%s)' \
-        "$st" "$id" "$ip" "$pw" "$srv" "$rly" "$key" "$arch" "$(info_get version)" "$(info_get commit)"
+    printf 'Status:      %s\nID:          %s\nThis Mac:    %s\nPassword:    %s\nID server:   %s\nRelay:       %s\nServer key:  %s\nConsole:     %s\n' \
+        "$st" "$id" "$ip" "$pw" "$srv" "$rly" "$key" "$con"
+    # if/fi rather than the `[ ] &&` idiom used for the assignments above: this
+    # is a statement whose failure would become the block's exit status, which
+    # is a trap for whoever adds `set -e`.
+    if [ -n "$cab" ]; then printf 'CA bundle:   %s\n' "$cab"; fi
+    printf 'Built for:   %s\nBuild:       %s (%s)' \
+        "$arch" "$(info_get version)" "$(info_get commit)"
     ;;
 menu)
     # The action list, which depends on what is installed. Newline separated;
@@ -112,10 +133,11 @@ menu)
     if is_installed; then
         if is_running; then printf 'Stop the agent\n'; else printf 'Start the agent\n'; fi
         printf 'Set the password\nSet the ID server\nSet the server key\nSet the relay server\n'
-        printf 'Show my public key\nShow the log\nWhy is there no websocket or API setting?\nUninstall\n'
+        printf 'Set the console\nSet the CA bundle\n'
+        printf 'Show my public key\nShow the log\nWhy is there no websocket setting?\nUninstall\n'
     else
-        printf 'Install\nSet the password\nSet the ID server\nSet the server key\n'
-        printf 'Why is there no websocket or API setting?\n'
+        printf 'Install\nSet the password\nSet the ID server\nSet the server key\nSet the console\n'
+        printf 'Why is there no websocket setting?\n'
     fi
     ;;
 install)
@@ -159,15 +181,31 @@ set)
             else out="$("$A" --server "$value" 2>&1)"; rc=$?; fi ;;
         key)   out="$("$A" --key "$value" 2>&1)"; rc=$? ;;
         relay) out="$("$A" --relay-server "$value" 2>&1)"; rc=$? ;;
+        console)
+            if [ -z "$value" ]; then out="$("$A" --no-api-server 2>&1)"; rc=$?
+            else out="$("$A" --api-server "$value" 2>&1)"; rc=$?; fi ;;
+        cabundle) out="$("$A" --ca-bundle "$value" 2>&1)"; rc=$? ;;
         *)     echo "Unknown setting: $field"; exit 0 ;;
     esac
     if [ "$rc" -ne 0 ]; then
-        # Usage text is long and unhelpful in a dialog; the first line plus the
-        # likely cause is what someone can act on.
         echo "Could not set $field."
-        echo "The agent refused it (exit $rc). This usually means the installed"
-        echo "agent is older than this app and does not know that setting yet;"
-        echo "reinstall from the same download as this app."
+        # Two different failures, and they need different answers. An agent that
+        # does not know the flag prints its usage text and exits 2, which is
+        # long and unhelpful in a dialog -- that is the version mismatch this
+        # used to assume every failure was. An agent that DOES know the flag and
+        # rejected the value says exactly what is wrong with it ("holds no PEM
+        # certificates", "is not a usable URL"), and replacing that with a guess
+        # about versions sends someone to reinstall over a typo.
+        case "$out" in
+            *USAGE:*|"")
+                echo "The agent refused it (exit $rc). This usually means the installed"
+                echo "agent is older than this app and does not know that setting yet;"
+                echo "reinstall from the same download as this app."
+                ;;
+            *)  echo ""
+                echo "$out"
+                ;;
+        esac
         exit 0
     fi
     case "$field" in
@@ -175,6 +213,8 @@ set)
         server)   [ -n "$value" ] && echo "ID server set to $value." || echo "Registration turned off; this Mac is reachable by IP only." ;;
         key)      [ -n "$value" ] && echo "Server key set." || echo "Server key cleared." ;;
         relay)    [ -n "$value" ] && echo "Relay server set to $value." || echo "Relay override cleared." ;;
+        console)  [ -n "$value" ] && echo "Console set to $value. This Mac will appear in its device list within about 15 seconds." || echo "Console cleared; this Mac will not appear in any device list." ;;
+        cabundle) [ -n "$value" ] && echo "CA bundle set to $value." || echo "CA bundle cleared; the usual places will be searched." ;;
     esac
     # A running agent reads its config at startup, so a change means a restart.
     if is_running; then
