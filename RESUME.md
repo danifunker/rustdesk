@@ -202,6 +202,10 @@ emulation stops the server making syscalls. `probes/capture_test.c` and the
 `pipeline` binary both reproduce the healthy path; the agent under a live peer
 reproduces the wedge within one frame.
 
+`docs/REX3-WEDGE-PROMPT.md` is a self-contained handover for a session working
+on iris: the evidence, the reproduction, what is already ruled out, the pointers
+into `src/rex3.rs`, and the boundaries around the shared machine.
+
 **For the agent:** less capture volume is worth having regardless, and is the
 next piece of work. See §Next steps.
 
