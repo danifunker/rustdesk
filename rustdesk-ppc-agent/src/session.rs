@@ -500,14 +500,25 @@ pub fn serve(stream: TcpStream, ident: &Identity) -> io::Result<()> {
 
     let mut pi = PeerInfo::new();
     pi.hostname = ident.hostname.clone();
-    pi.platform = "Mac OS".to_owned();
+    // The client keys real behaviour off this -- notably how it translates
+    // keystrokes -- so an IRIX machine reporting "Mac OS" would have Command
+    // and Control swapped for it by a client trying to be helpful.
+    //
+    // "Linux" rather than "IRIX" on purpose: clients match this against a known
+    // set, and an unrecognised string gets whatever the fallback happens to be.
+    // IRIX is an X11 desktop with Control-based shortcuts, so Linux is the entry
+    // whose behaviour is actually right.
+    #[cfg(not(target_os = "irix"))]
+    { pi.platform = "Mac OS".to_owned(); }
+    #[cfg(target_os = "irix")]
+    { pi.platform = "Linux".to_owned(); }
     pi.version = REPORTED_VERSION.to_owned();
     let mut d = DisplayInfo::new();
     // The size now, not the size when the process started -- the resolution may
     // have been changed since, and this is what sizes the peer's canvas.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "irix"))]
     let (dw, dh) = crate::capture::display_size().unwrap_or((ident.width, ident.height));
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "irix")))]
     let (dw, dh) = (ident.width, ident.height);
     d.width = dw;
     d.height = dh;
@@ -525,7 +536,7 @@ pub fn serve(stream: TcpStream, ident: &Identity) -> io::Result<()> {
 }
 
 /// Video pump state, kept beside the message loop.
-#[cfg(all(target_os = "macos", not(no_vpx)))]
+#[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
 struct Video {
     cap: crate::capture::Capturer,
     enc: crate::encode::Encoder,
@@ -567,7 +578,7 @@ struct Video {
     broken: bool,
 }
 
-#[cfg(all(target_os = "macos", not(no_vpx)))]
+#[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
 impl Video {
     fn new(bitrate_kbps: u32) -> Result<Self, &'static str> {
         let mut cap = crate::capture::Capturer::new()?;
@@ -802,7 +813,7 @@ impl Video {
 /// not changing, and a live session is the only place some of this shows up at
 /// all. `--probe-display` measures the same stages in isolation; this measures
 /// them under a real client, with input arriving and a socket to write to.
-#[cfg(all(target_os = "macos", not(no_vpx)))]
+#[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
 #[derive(Default)]
 struct FrameTimes {
     probe: std::time::Duration,
@@ -815,7 +826,7 @@ struct FrameTimes {
     key: bool,
 }
 
-#[cfg(all(target_os = "macos", not(no_vpx)))]
+#[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
 impl FrameTimes {
     fn ms(d: std::time::Duration) -> u128 {
         d.as_millis()
@@ -852,7 +863,7 @@ impl FrameTimes {
 /// cursor seed serves, since it is exactly "which shape is this". A shape that
 /// cannot be read falls back to the built-in arrow rather than to nothing --
 /// the pointer being in the right place matters more than its picture.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "irix"))]
 fn send_cursor_data(peer: &mut Peer, id: u64) -> io::Result<()> {
     let c = crate::cursor::current().unwrap_or_else(crate::cursor::arrow);
     let mut cd = CursorData::new();
@@ -869,7 +880,7 @@ fn send_cursor_data(peer: &mut Peer, id: u64) -> io::Result<()> {
 }
 
 /// Send where the pointer is, if it has moved since last time.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "irix"))]
 fn send_cursor_position(
     peer: &mut Peer,
     tracker: &mut crate::cursor::Tracker,
@@ -898,7 +909,7 @@ fn send_cursor_position(
 /// costs only the dirty-band probe -- and once it has been idle for a few
 /// seconds, not even that on every pass. See `IDLE_AFTER`.
 fn message_loop(peer: &mut Peer) -> io::Result<()> {
-    #[cfg(all(target_os = "macos", not(no_vpx)))]
+    #[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
     let mut video = match Video::new(DEFAULT_BITRATE_KBPS) {
         Ok(v) => Some(v),
         Err(e) => {
@@ -916,33 +927,42 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
             None
         }
     };
-    #[cfg(all(target_os = "macos", not(no_vpx)))]
+    #[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
     let mut video_retry_at = std::time::Instant::now() + VIDEO_RETRY;
 
+    // IRIX has no SO_RCVTIMEO: setsockopt returns ENOPROTOOPT, and taking that
+    // as fatal ended the session the instant the video pump started -- the peer
+    // logged in, saw the encoder come up, and was then dropped. The loop's
+    // pacing moves to poll(2) there; see `drain_input` and `sys::wait_readable`.
+    #[cfg(not(target_os = "irix"))]
     peer.stream.set_read_timeout(Some(std::time::Duration::from_millis(POLL_MS)))?;
-    #[cfg(target_os = "macos")]
+    #[cfg(target_os = "irix")]
+    if let Err(e) = peer.stream.set_read_timeout(Some(std::time::Duration::from_millis(POLL_MS))) {
+        log::debug!("no read timeout on this platform ({}); pacing with poll instead", e);
+    }
+    #[cfg(any(target_os = "macos", target_os = "irix"))]
     let mut injector = crate::input::Injector::new();
 
     // The pointer is a hardware overlay and is not in the captured image, so
     // the peer sees none unless we send one. Shape once, then positions as they
     // change. See `crate::cursor`.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "irix"))]
     let mut cursor_tracker = crate::cursor::Tracker::new();
     // When this peer last sent input. Its own cursor position is held back for
     // a moment afterwards -- see `cursor::SUPPRESS_AFTER_INPUT_MS`.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "irix"))]
     let mut last_peer_input = std::time::Instant::now()
         - std::time::Duration::from_millis(crate::cursor::SUPPRESS_AFTER_INPUT_MS + 1);
     // Start from a clean slate: see `input::release_modifiers`.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "irix"))]
     crate::input::release_modifiers();
 
     // The pointer changes shape over a text field, a resize edge, a link. The
     // seed is one call and changes only when the shape does, so it is polled
     // every pass and the image is fetched only when it has actually moved on.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "irix"))]
     let mut cursor_seed = crate::cursor::seed();
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "irix"))]
     send_cursor_data(peer, cursor_seed as u32 as u64)?;
 
     // Liveness. See TEST_DELAY_INTERVAL -- without this the session dies of
@@ -951,11 +971,11 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
     let mut delay_outstanding = false;
     // The peer's refresh button. Handled in the loop rather than here because
     // that is where the video state lives.
-    #[cfg_attr(not(all(target_os = "macos", not(no_vpx))), allow(unused_mut))]
+    #[cfg_attr(not(all(any(target_os = "macos", target_os = "irix"), not(no_vpx))), allow(unused_mut))]
     let mut refresh_requested = false;
     // The peer's screenshot button, carrying the `sid` that has to come back on
     // the response. Same reason as above for living out here.
-    #[cfg_attr(not(all(target_os = "macos", not(no_vpx))), allow(unused_mut))]
+    #[cfg_attr(not(all(any(target_os = "macos", target_os = "irix"), not(no_vpx))), allow(unused_mut))]
     let mut screenshot_requested: Option<(String, i32)> = None;
 
     // Clipboard. `Sync` remembers the last text that crossed in either
@@ -979,7 +999,7 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
     macro_rules! pump_input {
         () => { pump_input!(true) };
         ($wait:expr) => {{
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "irix"))]
             let alive = drain_input(
                 peer,
                 $wait,
@@ -992,7 +1012,7 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
                 &mut cursor_tracker,
                 &mut last_peer_input,
             )?;
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(not(any(target_os = "macos", target_os = "irix")))]
             let alive = drain_input(
                 peer,
                 $wait,
@@ -1032,13 +1052,13 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
     // measured on a real terminal session, frames cost 70 ms and arrived 103 ms
     // apart, the difference being this wait. Only pay it when the last pass
     // found nothing to send.
-    #[cfg_attr(not(all(target_os = "macos", not(no_vpx))), allow(unused_mut))]
+    #[cfg_attr(not(all(any(target_os = "macos", target_os = "irix"), not(no_vpx))), allow(unused_mut))]
     let mut idle_last_pass = true;
 
     loop {
         pump_input!(idle_last_pass);
         keep_alive!();
-        #[cfg(all(target_os = "macos", not(no_vpx)))]
+        #[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
         {
             idle_last_pass = true;
         }
@@ -1057,9 +1077,9 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
         // Both ways a session ends up without a picture: never having had one,
         // and `broken`, which `poll_geometry` sets when the encoder cannot be
         // rebuilt around a new screen size. Neither recovers on its own.
-        #[cfg(all(target_os = "macos", not(no_vpx)))]
+        #[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
         let no_picture = video.as_ref().map_or(true, |v| v.broken);
-        #[cfg(all(target_os = "macos", not(no_vpx)))]
+        #[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
         if no_picture && std::time::Instant::now() >= video_retry_at {
             video_retry_at = std::time::Instant::now() + VIDEO_RETRY;
             match Video::new(DEFAULT_BITRATE_KBPS) {
@@ -1074,7 +1094,7 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
             }
         }
 
-        #[cfg(all(target_os = "macos", not(no_vpx)))]
+        #[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
         if let Some(v) = video.as_mut() {
             // Announce a new size before sending a frame in it: the peer sizes
             // its canvas from what it was last told, so a frame that arrives
@@ -1144,7 +1164,7 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
         // `ScreenshotResponse.msg` is documented as "empty if success", so a
         // refusal is a first-class reply that the client displays -- where
         // silence leaves it waiting on a picture that is never coming.
-        #[cfg(all(target_os = "macos", not(no_vpx)))]
+        #[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
         if let Some((sid, display)) = screenshot_requested.take() {
             let shot = if display != 0 {
                 // The client only offers displays it was told about, so this
@@ -1200,7 +1220,7 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
             }
         }
 
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "irix"))]
         {
             let s = crate::cursor::seed();
             if s != cursor_seed {
@@ -1212,7 +1232,7 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
 
         // Also poll once an iteration: the person at the G5 can move the
         // pointer themselves, and no input event announces that.
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "irix"))]
         send_cursor_position(peer, &mut cursor_tracker, last_peer_input)?;
     }
 }
@@ -1248,9 +1268,9 @@ fn drain_input(
     screenshot_requested: &mut Option<(String, i32)>,
     clip_sync: &mut crate::clipboard::Sync,
     clip_disabled: &mut bool,
-    #[cfg(target_os = "macos")] injector: &mut crate::input::Injector,
-    #[cfg(target_os = "macos")] cursor_tracker: &mut crate::cursor::Tracker,
-    #[cfg(target_os = "macos")] last_peer_input: &mut std::time::Instant,
+    #[cfg(any(target_os = "macos", target_os = "irix"))] injector: &mut crate::input::Injector,
+    #[cfg(any(target_os = "macos", target_os = "irix"))] cursor_tracker: &mut crate::cursor::Tracker,
+    #[cfg(any(target_os = "macos", target_os = "irix"))] last_peer_input: &mut std::time::Instant,
 ) -> io::Result<bool> {
     loop {
         // `wait` is what paces an idle loop, and is right exactly once per
@@ -1258,6 +1278,17 @@ fn drain_input(
         // blocking there costs POLL_MS per band, and it cost it twice --
         // skipping empty drains was not enough, because a drain that *did*
         // find input still ended by waiting POLL_MS for more that never came.
+        // Without a read timeout, waiting has to happen here rather than in
+        // recv(): poll for `wait` ? POLL_MS : 0 and only read when something is
+        // actually there.
+        #[cfg(target_os = "irix")]
+        {
+            let ms = if wait { POLL_MS } else { 0 };
+            if !crate::sys::wait_readable(&peer.stream, ms) {
+                return Ok(true);
+            }
+        }
+        #[cfg(not(target_os = "irix"))]
         if !wait && !input_waiting(&peer.stream) {
             return Ok(true);
         }
@@ -1272,7 +1303,7 @@ fn drain_input(
         };
         match msg.union {
             Some(message::Union::mouse_event(me)) => {
-                #[cfg(target_os = "macos")]
+                #[cfg(any(target_os = "macos", target_os = "irix"))]
                 {
                     injector.mouse(&me);
                     *last_peer_input = std::time::Instant::now();
@@ -1281,7 +1312,7 @@ fn drain_input(
                 let _ = &me;
             }
             Some(message::Union::key_event(ke)) => {
-                #[cfg(target_os = "macos")]
+                #[cfg(any(target_os = "macos", target_os = "irix"))]
                 {
                     injector.key(&ke);
                     *last_peer_input = std::time::Instant::now();
@@ -1290,7 +1321,7 @@ fn drain_input(
             }
             // Touch gestures. Field 26, backported -- see `Injector::touch`,
             // which drops them on anything older than 10.6.
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "irix"))]
             Some(message::Union::pointer_device_event(pd)) => {
                 injector.touch(&pd);
                 *last_peer_input = std::time::Instant::now();
@@ -1351,7 +1382,7 @@ fn drain_input(
                             if *clip_disabled { "disabled" } else { "re-enabled" }
                         );
                     }
-                    #[cfg(target_os = "macos")]
+                    #[cfg(any(target_os = "macos", target_os = "irix"))]
                     if o.show_remote_cursor.enum_value_or_default() == BoolOption::Yes {
                         // Usually flipped mid-session, long after the shape was
                         // sent at login; without this the peer never gets one.
