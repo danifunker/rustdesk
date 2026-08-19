@@ -1,0 +1,35 @@
+# Build output
+ports/rust/*/target/
+ports/rust/*/compat/*.o
+ports/rust/*/compat/*.a
+
+# The private Rust toolchain and crate registry (2.1 GB). Reproduced by
+# copying nightly into ports/rust/rustup and running mogrix's patchers --
+# see RESUME.md, "Rust cross-compilation".
+ports/rust/rustup/
+ports/rust/cargo/
+
+# A private CHD-capable iris build (1.2 GB). Rebuild from ~/repos/iris with
+# CARGO_TARGET_DIR set here; see RESUME.md, "Boot".
+ports/iris-run/iris-target/
+
+# Third-party source trees and their build output. Fetched and built per
+# RESUME.md; not ours to vendor.
+ports/work/
+
+# Emulator run state
+ports/iris-run/*.log
+ports/iris-run/console.log*
+ports/iris-run/scratch.raw
+ports/iris-run/*.png
+ports/iris-run/nohup.out
+
+# Cross-compiled probe binaries: rebuilt with one irix-cc command each, and
+# they are MIPS objects that mean nothing on a build host.
+probes/capture_test
+probes/minimal
+probes/minimal-nodlmalloc
+probes/reopen
+probes/sgicap
+probes/xcapture
+probes/xshmcap

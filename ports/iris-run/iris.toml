@@ -1,0 +1,48 @@
+# IRIS config for the IRIX 6.5.22m dev image, used to test cross-built binaries.
+#
+# COW is deliberately OFF: the base is a compressed CHD, so iris auto-folds the
+# session's diff back into it on a clean exit. That is what makes changes land
+# in Indy-IRIX65_dev.chd rather than sitting in a sidecar for ever.
+#
+# scsi.2 is the scratch volume iris-ci's `put`/`get` use to move files in and
+# out. It is a plain raw file on the host and is NOT part of the CHD.
+
+banks      = [128, 128, 0, 0]
+no_audio   = true
+# headless left off: REX3 must be mapped for the X server to come up.
+# (phase A only needed it so the PROM would talk to serial; console=d is
+# now persisted in nvram, so serial stays usable with graphics enabled.)
+nvram      = "nvram-irix65.bin"
+serial_log = "console.log"
+# Another Claude session (rust-irixlibstd) runs its own iris on the DEFAULT
+# socket /tmp/iris.sock. iris cleans up and rebinds that path on start, so
+# leaving this at the default would silently steal that session's control
+# socket. Keep this instance on its own path; export IRIS_SOCKET to match.
+ci_socket  = "/tmp/iris-rdagent.sock"
+
+
+[scsi.1]
+path    = "/home/dani/Indy-IRIX65_dev.chd"
+cdrom   = false
+overlay = false
+
+[scsi.2]
+path    = "scratch.raw"
+cdrom   = false
+overlay = false
+scratch = true
+size_mb = 64
+
+# 2323 is held by a long-running iris instance from rust-irixlibstd, so this
+# config uses 2324/2222 instead.
+[[port_forward]]
+proto      = "tcp"
+host_port  = 2324
+guest_port = 23
+bind       = "localhost"
+
+[[port_forward]]
+proto      = "tcp"
+host_port  = 2222
+guest_port = 22
+bind       = "localhost"
