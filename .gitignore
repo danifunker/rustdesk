@@ -33,3 +33,6 @@ probes/reopen
 probes/sgicap
 probes/xcapture
 probes/xshmcap
+
+# Probe binary, rebuilt with one irix-cc command
+probes/rex3-wedge-repro

@@ -42,14 +42,27 @@ that simply reads wrong.
 
 ## Reproducing it
 
-The trigger is *volume* of ReadDisplay traffic, not any single call.
+**Be warned: it is intermittent, and no small probe isolates it.** I tried, and
+the negative results are worth as much as the positive one.
+`probes/rex3-wedge-repro.c` is a standalone ~100-line client with four modes;
+measured on this image:
 
-Cheapest reproducer: `probes/xshmcap.c` in `~/repos/irix-rustdeskagent` — step 9
-does one whole-screen `XShmReadDisplayRects` at 1280x1024. Loop that step and it
-wedges. `probes/capture_test.c 6 1` (the `readdisplay` path) does a whole-screen
-read per frame and wedges within a handful of frames.
+| what | result |
+|---|---|
+| 50 back-to-back full-screen `XShmReadDisplayRects` (1280x1024) | no stall |
+| 40 of the same with `XRD_READ_POINTER` (cursor composited) | no stall |
+| 40 `SGICapQueryCopyAndReset` damage polls | no stall |
+| 12 full-screen reads with a **5 s CPU burn between each** | **stalled once**, then a second identical run completed all 12 |
 
-Full end-to-end reproduction, if you want the real workload:
+So it is not the read volume on its own, not cursor compositing, and not the
+damage extension. The one pattern that has produced it outside the real workload
+involves a multi-second CPU-bound gap between reads — which is what a video
+encoder does — but even that is not reliable.
+
+**The workload that reproduces it nearly every time** is a real screen-sharing
+session: capture, several seconds of VP8 encoding, repeat, with a second X
+connection open for input injection. Five sessions out of five wedged after
+exactly one delivered frame.
 
 ```sh
 # host: build (no emulator needed, this is a cross-compile)
@@ -61,8 +74,7 @@ LD_LIBRARYN32_PATH=/usr/sgug/lib32 /tmp/testpeer 127.0.0.1:21118 hunter2 120
 ```
 
 The peer logs in, receives exactly **one** VP8 keyframe at about 23 s, and then
-the server is gone for the rest of the session. Reproduced five times out of
-five.
+the server is gone for the rest of the session. Five times out of five.
 
 Recovery is reliable: `/root/restart-x.sh` kills `Xsgi` by pid and starts a bare
 `Xsgi :0 -bs -c`. Used four times, capture works immediately afterwards every
@@ -72,11 +84,12 @@ time — including rebuilding the client's `Capturer` from scratch.
 
 - **The screen saver.** Armed with `xset s 45 45 s blank`; the screen blanked and
   the server stayed healthy well past the timeout.
-- **One oversized request.** A single whole-screen `XShmReadDisplayRects` used to
-  wedge it every time. Splitting the same read into 128-row strips fixed the
-  agent's `--probe-display`, which now completes a full pass at 1280x1024
-  including a VP8 tuning sweep. The session still wedges, so size alone is not
-  it.
+- **One oversized request.** I believed for a while that a single whole-screen
+  `XShmReadDisplayRects` wedged it every time, and said so; that was wrong.
+  Splitting reads into 128-row strips did fix the agent's `--probe-display`, but
+  a loop of 50 whole-screen reads runs clean, so size is not the variable. Take
+  any claim here that rests on "it always happens when X" with suspicion —
+  including mine.
 - **A redundant double read.** The client was re-reading all 64 bands right after
   a full read — a real bug, since fixed. It changed nothing here.
 - **Which server binary.** Happens with xdm's `Xsgi -bs -nobitscale -c -pseudomap
@@ -126,9 +139,9 @@ strip-sized read against the read that kills it.
 
 ## What done looks like
 
-A session that pulls hundreds of frames through `XShmReadDisplayRects` — via
-`testpeer` against the agent, or a loop over `xshmcap` step 9 — without the
-server going quiet. The agent already handles a *dead* X server by reconnecting,
+A screen-sharing session that runs for minutes and delivers tens of frames
+through `XShmReadDisplayRects` without the server going quiet — `testpeer`
+against the agent is the measure, since the small probes do not provoke it. The agent already handles a *dead* X server by reconnecting,
 so partial progress is useful: even turning the silent wedge into a clean
 connection drop would be an improvement, because the agent recovers from that.
 
