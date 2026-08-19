@@ -491,12 +491,58 @@ cp libzstd.a $PREFIX/lib32/ && cp zstd.h zstd_errors.h $PREFIX/include/
 ```
 
 **zstd should not have been built by hand at all.** mogrix already ships
-`rules/packages/zstd.yaml` — it predates this work and builds zstd through the
-normal pipeline from the Fedora spec. Building it here bypassed that and left
-nothing recording the dependency. The right fix is to build zstd (and ideally
-the other three) through mogrix so the staging tree is reproducible; the rules
-for libsodium, libvpx and mbedTLS exist there now, but nothing has been run
-through the mogrix pipeline end to end.
+`rules/packages/zstd.yaml`, which predates this work. It is correct: all nine of
+its `spec_replacements` match the f40 spec, `mogrix convert` renders a proper
+IRIX spec from it, and the spec ships `libzstd.a` in a `libzstd-static`
+subpackage — exactly what `clipboard.rs` links. Building it by hand bypassed a
+working rule for no reason.
+
+### The mogrix pipeline cannot run on this host
+
+Which is why everything in staging is hand-built. `mogrix setup-cross` clearly
+ran here (it left `/opt/sgug-staging/rpmmacros.irix`), but the package pipeline —
+`fetch` → `convert` → `build --cross` → `stage` — never has: there is no
+`~/mogrix_inputs` or `~/mogrix_outputs`, and no RPM was ever produced. It cannot
+run, for two environmental reasons:
+
+- **No rpm tooling.** `rpmbuild`, `rpm`, `rpm2cpio` and `dnf` are all absent on
+  this Ubuntu 24.04 host, and there is no passwordless sudo to install them.
+- **Docker is installed but not usable** by this user: `permission denied` on
+  `/var/run/docker.sock`, so a Fedora container is not a way round it either.
+
+What *does* work without rpmbuild is the rule engine itself — `mogrix analyze`
+and `mogrix convert` run fine and render the converted spec. That is enough to
+check a rule applies, and it is how the rule bugs below were found. It is not
+enough to prove anything builds.
+
+To actually build: give this user docker group membership, or install
+`rpm`/`rpmbuild`, or run the pipeline on a machine that already has them.
+
+### The rules were describing hand builds, not the specs mogrix converts
+
+Found by rendering each rule against the f40 spec it would be applied to:
+
+| Rule | Status |
+|---|---|
+| `zstd` (upstream's) | correct, all 9 patterns match |
+| `libsodium` | correct — all 4 `configure_flags` reach the converted spec |
+| `libvpx` | **was broken**, now fixed |
+| `mbedtls` | **was broken**, now fixed (rendering only) |
+
+`make_target` is not a key the mogrix engine implements — it appears in no
+Python file. Both `libvpx.yaml` and `mbedtls.yaml` used it for the one point
+each rule says matters most, and it was silently ignored.
+
+libvpx additionally used `configure_flags`, which hooks `%configure`; Fedora's
+libvpx spec calls `./configure` directly, so none of its 14 flags reached the
+build. Both are now `spec_replacements`, verified by rendering.
+
+mbedTLS's rule described the tarball's Makefile (`SHARED=`, `make lib`) while
+Fedora builds it with cmake, so none of it applied. Now expressed as cmake
+options.
+
+**Rendering is verified; nothing has been built.** Treat those two rules as
+reviewed, not tested, until someone runs the pipeline on a host that can.
 
 `clipboard.rs` is what pulls zstd in, via `#[link(name = "zstd")]`.
 
