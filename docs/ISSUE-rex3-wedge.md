@@ -12,7 +12,10 @@ than a guest-software one, but I would not be surprised to be wrong.
 
 - iris `4dc2e94`, built `--features lightning,rex-jit,r5k,chd`
 - Host: Ubuntu 24.04, x86-64, 6 cores
-- Guest: IRIX 6.5.22m, IP22 / R5000, 1280x1024 at depth 8
+- Guest: IRIX 6.5.22m, IP22, 1280x1024 at depth 8
+- **Reproduced on both CPUs**: with `r5k` (guest reports `MIPS R5000`) and
+  without it (guest reports `MIPS R4400 Processor Chip Revision: 4.0`, 66 MHz).
+  Same image, same symptom, so it is not R5000-specific.
 - Run as `iris --config iris.toml --ci --ci-display`
 
 ### What happens
@@ -63,10 +66,12 @@ extension. The only pattern that has produced it outside the real workload
 involves a multi-second CPU-bound gap between reads — which is what a video
 encoder does between frames — and even that is not reliable.
 
-What *does* reproduce it, five sessions out of five, is the real workload:
+What *does* reproduce it, six sessions out of six, is the real workload:
 capture a frame, spend several seconds encoding VP8, repeat, with a second X
 connection open for input injection via XTEST. It wedges after exactly one
-delivered frame every time.
+delivered frame every time — five times on R5000 and once on R4400, where the
+only difference was that the first frame took 49 s instead of 23 s, which is
+what you would expect from the slower CPU.
 
 I can share the standalone probe and the full agent if either would help.
 

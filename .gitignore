@@ -36,3 +36,4 @@ probes/xshmcap
 
 # Probe binary, rebuilt with one irix-cc command
 probes/rex3-wedge-repro
+ports/iris-run/iris-target-r4k/

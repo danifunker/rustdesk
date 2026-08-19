@@ -61,8 +61,16 @@ encoder does — but even that is not reliable.
 
 **The workload that reproduces it nearly every time** is a real screen-sharing
 session: capture, several seconds of VP8 encoding, repeat, with a second X
-connection open for input injection. Five sessions out of five wedged after
+connection open for input injection. Six sessions out of six wedged after
 exactly one delivered frame.
+
+**It is not CPU-specific.** Rebuilt iris without the `r5k` feature so the guest
+comes up as `MIPS R4400 Processor Chip Revision: 4.0` (66 MHz IP22) instead of
+R5000 — same image, same disk, same wedge, same signature. The only difference
+was the first frame arriving at 49 s instead of 23 s. That build is at
+`ports/iris-run/iris-target-r4k/release/iris`; note the `build features:` banner
+does not print `r5k` either way, so `hinv` is how you tell which one you are
+running.
 
 ```sh
 # host: build (no emulator needed, this is a cross-compile)

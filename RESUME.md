@@ -209,6 +209,17 @@ into `src/rex3.rs`, and the boundaries around the shared machine.
 **For the agent:** less capture volume is worth having regardless, and is the
 next piece of work. See §Next steps.
 
+### Not CPU-specific
+
+Rebuilt iris without the `r5k` cargo feature, so the guest comes up as
+`MIPS R4400 Processor Chip Revision: 4.0` (66 MHz IP22) instead of R5000. Same
+image, same disk, same wedge, same signature — the only difference was the first
+frame arriving at 49 s instead of 23 s, which is what the slower CPU predicts.
+The build is at `ports/iris-run/iris-target-r4k/release/iris`.
+
+Note the `build features:` banner does **not** print `r5k` either way, so it is
+no help in telling the two builds apart. `hinv` on the guest is.
+
 ### The agent can crash when the server dies underneath it
 
 `/tmp/core` on the guest was an `IRIX N32 core dump of 'rustdesk-agent'`, from a
@@ -223,6 +234,25 @@ past it. Worth reproducing deliberately (start a capture, kill `Xsgi`, see what
 happens) and fixing before anything else is trusted to survive a restart. Not
 investigated here — there is no `dbx` on the image, so a backtrace needs one
 installed or a build with symbols and a hand-decoded stack.
+
+**A second crash mode, seen on the R4400 run:** after the server wedged, the
+agent retried `rd_capture_open` every retry interval, and then died with
+
+```
+memory allocation of 141320 bytes failed
+```
+
+141320 bytes is exactly the size of the keyframe it had just sent, and the guest
+has 256 MB, so something is consuming memory across failed reconnects rather
+than the frame itself being too large. One candidate is by design and worth
+checking first: `rd_capture_close` deliberately never calls `XCloseDisplay` (see
+the note there), so every *successful* open leaks a `Display`. That is meant to
+be a handful of allocations over a session's lifetime, not a per-retry cost, but
+a reconnect storm against a wedged server is exactly the case that turns "rare"
+into "every few seconds". Measure the RSS across retries before assuming.
+
+Both crash modes are the same work item: **the agent must survive its X server
+dying.** On this platform that is not an edge case.
 
 ---
 
