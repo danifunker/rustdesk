@@ -448,8 +448,39 @@ cd ports/rust/agent-portable
 cargo +nightly build --release
 ```
 
-Verified from a clean target directory in 46 s. If the link fails on an
-unresolved `-lrust_irix_compat`, `env.sh` was not sourced.
+If the link fails on an unresolved `-lrust_irix_compat`, `env.sh` was not
+sourced.
+
+### Build times, and where the build happens
+
+**The build is entirely on the Linux host. iris plays no part in it.** This is a
+cross-compile -- clang-18 plus `ld.lld-irix` targeting `mips-sgi-irix6.5` -- and
+the numbers below were measured with no emulator running at all. The emulator is
+only needed to *run* what comes out, and on current evidence real hardware would
+be a better place to run it than IRIS (see §THE REMAINING BLOCKER).
+
+Measured on this host (6 cores):
+
+| | time |
+|---|---|
+| Full build after `cargo clean` — 44 crates including std, alloc, core, compiler_builtins, protobuf, sodiumoxide | **37 s** (279% CPU, 850 MB peak RSS) |
+| Incremental after editing a Rust file | **6.4 s** |
+| Incremental after editing a C shim | **7.3 s** |
+
+One-time setup, on top of that:
+
+| | time |
+|---|---|
+| Copy nightly into the private `RUSTUP_HOME` (1.6 GB) | about a minute |
+| `patch-rust-sysroot.sh` + `mogrix patch-crates` | seconds |
+| First `cargo build` (downloads the crate registry) | a few minutes, network-bound |
+| zstd 1.5.6 for n32 | under a minute |
+| libsodium, libvpx, mbedTLS for n32 | built in an earlier session; not timed |
+| A CHD-capable iris, if you need to run anything | 5m33s |
+
+What the build *does* need from an IRIX machine is `/opt/irix-sysroot` — headers
+and shared libraries pulled off the 6.5.22m image. That extraction is already
+done and is not part of a normal build.
 
 Binaries land in `target/mips-sgi-irix6.5/release/`. On the guest they need
 `LD_LIBRARYN32_PATH=/usr/sgug/lib32` for `libgcc_s.so.1`.
