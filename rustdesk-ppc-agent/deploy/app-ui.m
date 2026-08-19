@@ -34,7 +34,7 @@
  * used; Cocoa's origin is bottom-left, so this converts once rather than making
  * every frame do the arithmetic. */
 #define WIN_W 580.0
-#define WIN_H 536.0
+#define WIN_H 646.0
 #define TOP(y, h) (WIN_H - (y) - (h))
 
 @interface AgentController : NSObject
@@ -46,6 +46,8 @@
     NSTextField    *idServerField;
     NSTextField    *relayField;
     NSTextField    *keyField;
+    NSTextField    *consoleField;
+    NSTextField    *caField;
     NSButton       *installButton;
     NSButton       *startButton;
     NSButton       *stopButton;
@@ -124,6 +126,8 @@
     [idServerField setStringValue:[self conf:@"rendezvous_server"]];
     [relayField setStringValue:[self conf:@"relay_server"]];
     [keyField setStringValue:[self conf:@"server_key"]];
+    [consoleField setStringValue:[self conf:@"api_server"]];
+    [caField setStringValue:[self conf:@"ca_bundle"]];
     [passwordField setStringValue:@""];
 
     NSString *menu = [self run:[NSArray arrayWithObject:@"menu"]];
@@ -151,8 +155,8 @@
 /* Only changed fields are written, so pressing Save with nothing edited does
  * nothing at all -- and an empty password means "leave it alone" rather than
  * "clear it", which would lock everyone out. Every other field treats empty as
- * a real value, because empty is meaningful for all three: no ID server, no
- * relay override, no key. */
+ * a real value, because empty is meaningful for every one of them: no ID
+ * server, no relay override, no key, no console, and no CA bundle override. */
 - (void)save:(id)sender
 {
     NSMutableString *done = [NSMutableString string];
@@ -179,6 +183,18 @@
     if (![v isEqualToString:[self conf:@"server_key"]]) {
         changed++;
         [done appendString:[self run:[NSArray arrayWithObjects:@"set", @"key", v, nil]]];
+    }
+
+    v = [consoleField stringValue];
+    if (![v isEqualToString:[self conf:@"api_server"]]) {
+        changed++;
+        [done appendString:[self run:[NSArray arrayWithObjects:@"set", @"console", v, nil]]];
+    }
+
+    v = [caField stringValue];
+    if (![v isEqualToString:[self conf:@"ca_bundle"]]) {
+        changed++;
+        [done appendString:[self run:[NSArray arrayWithObjects:@"set", @"cabundle", v, nil]]];
     }
 
     v = [passwordField stringValue];
@@ -287,21 +303,23 @@
     if ([a runModal] == NSAlertSecondButtonReturn) [self openProject:nil];
 }
 
-/* Asked for, and answered honestly rather than with controls that do nothing.
- * See BACKLOG.md item 12 for the measurements behind both halves. */
+/* Asked for, and answered honestly rather than with a control that does
+ * nothing. See BACKLOG.md item 12 for the measurements. This used to say the
+ * same about an API server; item 14 is why it no longer does, and the Console
+ * field above is the result. */
 - (void)whyNot:(id)sender
 {
     [self alert:
-     @"Websockets and an API server are not offered because neither would do "
-     @"anything here.\n\n"
-     @"Websockets: this agent has no websocket transport, and one would not "
-     @"help. The open-source RustDesk server answers websocket registration "
-     @"with NOT_SUPPORT and closes the connection — real registration "
-     @"exists only in its UDP handler.\n\n"
-     @"API server: that field only matters to a client signing in to an "
-     @"account. This agent has no account and never contacts one. Worth "
-     @"knowing that a client which does hold a login token cannot connect to "
-     @"this agent at all, which looks like the agent's fault and is not."];
+     @"There is no websocket setting because this agent has no websocket "
+     @"transport, and one would not help.\n\n"
+     @"The open-source RustDesk server answers websocket registration with "
+     @"NOT_SUPPORT and closes the connection -- real registration exists only "
+     @"in its UDP handler. So the native protocol this agent already speaks is "
+     @"the one that works.\n\n"
+     @"The Console field above is a different thing, and it does work: it is "
+     @"where this Mac reports in so that it appears in a device list. An ID "
+     @"server makes this Mac reachable; a console makes it visible. Neither "
+     @"one implies the other, and having one without the other is normal."];
 }
 
 /* ------------------------------------------------------------------ chrome */
@@ -359,7 +377,7 @@
     /* Status, in a scroll view because the block grows a line whenever
      * something new is worth reporting. */
     NSScrollView *sv = [[[NSScrollView alloc]
-                         initWithFrame:NSMakeRect(20, TOP(20, 130), WIN_W - 40, 130)] autorelease];
+                         initWithFrame:NSMakeRect(20, TOP(20, 152), WIN_W - 40, 152)] autorelease];
     [sv setHasVerticalScroller:YES];
     [sv setBorderType:NSBezelBorder];
     statusView = [[NSTextView alloc] initWithFrame:[[sv contentView] bounds]];
@@ -369,25 +387,35 @@
     [v addSubview:sv];
 
     /* The form. Every setting the agent has, all visible at once. */
-    float y = 166;
-    struct { NSString *label; NSString *hint; } rows[4] = {
+    float y = 188;
+    struct { NSString *label; NSString *hint; } rows[6] = {
         { @"Password:",    @"What someone types to connect. Leave blank to keep the current one." },
         { @"ID server:",   @"The same ID Server your clients use. Empty means direct IP only." },
         { @"Relay server:",@"Optional. Empty means whichever relay the ID server names." },
         { @"Server key:",  @"The same Key your clients use. Only needed if hbbr runs with -k." },
+        /* The console is a different thing from the ID server and the window
+         * has to say so, because having one without the other is a normal
+         * state that looks like a fault: registered but in no list, or listed
+         * but unreachable. */
+        { @"Console:",     @"Optional. Reports in so this Mac appears in a device list." },
+        { @"CA bundle:",   @"Only for an https console with a private CA. Empty is usually right." },
     };
-    NSTextField **targets[4];
+    NSTextField **targets[6];
     passwordField = [self fieldAt:NSMakeRect(130, 0, WIN_W - 150, 22) secure:YES];
     idServerField = [self fieldAt:NSMakeRect(130, 0, WIN_W - 150, 22) secure:NO];
     relayField    = [self fieldAt:NSMakeRect(130, 0, WIN_W - 150, 22) secure:NO];
     keyField      = [self fieldAt:NSMakeRect(130, 0, WIN_W - 150, 22) secure:NO];
+    consoleField  = [self fieldAt:NSMakeRect(130, 0, WIN_W - 150, 22) secure:NO];
+    caField       = [self fieldAt:NSMakeRect(130, 0, WIN_W - 150, 22) secure:NO];
     targets[0] = &passwordField;
     targets[1] = &idServerField;
     targets[2] = &relayField;
     targets[3] = &keyField;
+    targets[4] = &consoleField;
+    targets[5] = &caField;
 
     int i;
-    for (i = 0; i < 4; i++) {
+    for (i = 0; i < 6; i++) {
         [v addSubview:[self labelAt:NSMakeRect(20, TOP(y + 3, 18), 105, 18)
                                text:rows[i].label bold:NO]];
         NSTextField *f = *(targets[i]);
@@ -431,7 +459,7 @@
     [v addSubview:[self buttonAt:NSMakeRect(148, TOP(y, 28), 130, 28)
                            title:@"Public Key" action:@selector(showKey:)]];
     [v addSubview:[self buttonAt:NSMakeRect(286, TOP(y, 28), 274, 28)
-                           title:@"Why no websocket or API?" action:@selector(whyNot:)]];
+                           title:@"Why no websocket?" action:@selector(whyNot:)]];
     y += 42;
 
     /* A rule, then the close row: everything above acts on the agent, the
@@ -466,6 +494,14 @@
  * a settings window. Built after the controller exists so About has something
  * to target: a menu item whose target is nil goes to the responder chain, and
  * a plain NSObject controller is not in it. */
+/* `setAppleMenu:` is how a nib-less app tells AppKit which submenu is the
+ * application menu. It has never been in a public header -- every programmatic
+ * Cocoa app of this vintage declares it the same way -- so it is declared here
+ * rather than left for the compiler to guess a signature for. */
+@interface NSApplication (RustDeskAppleMenu)
+- (void)setAppleMenu:(NSMenu *)menu;
+@end
+
 static void installMenuBar(id controller)
 {
     NSMenu *bar = [[[NSMenu alloc] initWithTitle:APP_NAME] autorelease];
@@ -477,7 +513,6 @@ static void installMenuBar(id controller)
                                                      action:NULL
                                               keyEquivalent:@""] autorelease];
     [bar addItem:appItem];
-    [NSApp setMainMenu:bar];
 
     NSMenu *appMenu = [[[NSMenu alloc] initWithTitle:APP_NAME] autorelease];
     NSMenuItem *aboutItem = [appMenu addItemWithTitle:@"About " APP_NAME
@@ -494,6 +529,25 @@ static void installMenuBar(id controller)
                        action:@selector(terminate:)
                 keyEquivalent:@"q"];
     [appItem setSubmenu:appMenu];
+
+    /* WHY THERE WERE TWO MENUS NAMED AFTER THE APP, one populated and one not.
+     *
+     * Adding a first item to the main menu does not make it the *application*
+     * menu. Told nothing, AppKit synthesises its own -- which is the empty one
+     * -- and leaves the hand-built menu sitting beside it, so About and Quit
+     * end up in the second of two identically named menus. `setAppleMenu:` is
+     * what adopts ours, and there is then one menu with everything in it.
+     *
+     * Guarded rather than called outright: the selector is private, so a system
+     * that does not answer it gets exactly the behaviour it had before instead
+     * of an unrecognised-selector crash on launch. */
+    if ([NSApp respondsToSelector:@selector(setAppleMenu:)])
+        [NSApp setAppleMenu:appMenu];
+
+    /* Last, and not where it used to be. The bar is adopted here, so every menu
+     * it carries has to be finished first -- this ran before the submenu above
+     * existed, which is the other half of why the result looked half-built. */
+    [NSApp setMainMenu:bar];
 }
 
 int main(int argc, const char *argv[])

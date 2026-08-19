@@ -8,11 +8,16 @@ cp -r macports/net/rustdesk-ppc-agent  <powerpc-ports>/net/
 cp    macports/lang/mrustc/files/0026-*.patch  <powerpc-ports>/lang/mrustc/files/
 ```
 
-and one line added to `lang/mrustc/Portfile`, after the existing `0025`:
+and one line added to `lang/mrustc/Portfile`. The numbered series is *not*
+applied through `patchfiles` — it is a list of explicit `system` calls in the
+`pre-patch` block — so this goes immediately after the `0025` line and before
+"Patch the Rust source code with the patch included with mrustc":
 
 ```tcl
-patchfiles-append   0026-minicargo-Preserve-the-semver-pre-release-suffix-in-.patch
+    system -W ${workpath}/${name}-${github.version} "patch -p1 < [shellescape ${filespath}/0026-minicargo-Preserve-the-semver-pre-release-suffix-in-.patch]"
 ```
+
+`revision` on `lang/mrustc` needs bumping too, since the build output changes.
 
 ## What is here
 
@@ -65,10 +70,21 @@ patches plus the `0026` above — that is, the port's exact compiler.
   agent's capture path (`CGDisplayBaseAddress`) and cursor path
   (`CGSGetGlobalCursorData`) are deprecated-but-present in 10.6 and private,
   respectively; both degrade to a logged error rather than a crash.
-* **Checksums are placeholders.** They need a real tagged release; see the TODO
-  at the top of the Portfile.
 * **`supported_archs ppc`** is a statement of what was built and tested, not a
   claim that ppc64 cannot work.
+
+**Checked against the real artifacts**
+
+* The distfile checksums are from the published `ppc-agent-0.1.0` tarball and
+  are **stale after the 1.0.0 bump** -- regenerate them once `ppc-agent-1.0.0`
+  is tagged. That tarball really does unpack to `rustdesk-ppc-agent-<version>/`, with the crate
+  in the `rustdesk-ppc-agent/` subdirectory the Portfile descends into.
+* `protobuf-3.0.0-alpha.2.patch` was dry-run against the crate as
+  **crates.io** serves it (not merely against a `cargo vendor` copy), at
+  `patch.dir ${workpath}` with `-p0`, and applies cleanly. That crate's sha256
+  matches the `cargo.crates` entry.
+* `0026` applies cleanly on top of `0001`-`0025`, checked against a pristine
+  copy of the patched mrustc tree.
 
 ## Two things the port does *not* need, which our own build does
 

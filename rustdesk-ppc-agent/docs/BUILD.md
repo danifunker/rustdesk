@@ -180,7 +180,63 @@ Static libraries the agent links, in `$PPC_LIBS_DIR` (default
 |---|---|
 | `libsodium.a` | `--disable-shared --enable-static`, no `-mcpu` |
 | `libvpx.a` | VP8 encode; carries hand-written AltiVec |
+| `libmbedtls.a`, `libmbedx509.a`, `libmbedcrypto.a` | TLS for an https console. Only these three, in that link order |
 | `libyuv.a`, `libopus.a` | `libopus` is only needed if the reverted audio work is restored |
+
+**mbedTLS needs its headers too**, unlike the others: `build.rs` looks for
+`mbedtls/ssl.h` under `$MBEDTLS_DIR`, then beside `$PPC_LIBS_DIR` (i.e.
+`~/ppc-libs/include`), then `/opt/local`.
+
+For the **cross build**, mbedTLS goes in `$PPC_LIBS_DIR` like the rest, and
+this is the recipe that produced the shipped one:
+
+```bash
+# on the Mac, in the unpacked mbedtls-3.6.x source
+make -j2 lib APPLE_BUILD=0 \
+     CC=/opt/local/libexec/gcc10-bootstrap/bin/gcc \
+     CFLAGS="-O2 -fno-gcse -I/opt/local/include/LegacySupport"
+ranlib library/*.a
+cp -R include/mbedtls include/psa ~/ppc-libs/include/
+cp library/libmbedtls.a library/libmbedx509.a library/libmbedcrypto.a ~/ppc-libs/lib/
+```
+
+then build with the two paths pointing at the *Mac*:
+
+```bash
+MBEDTLS_INCLUDE_DIR_powerpc_apple_darwin=/Users/admin/ppc-libs/include \
+MBEDTLS_LIB_DIR_powerpc_apple_darwin=/Users/admin/ppc-libs/lib ./build-ppc.sh
+```
+
+**Use the target-suffixed spelling**, the same convention as
+`CC_powerpc_apple_darwin`. The plain `MBEDTLS_INCLUDE_DIR` also works and is
+right for a host build, but `build-release.sh` runs the host test suite *and*
+the cross build in one process tree: set only the plain name and the host build
+inherits a `-I` that exists only on the G5, and cc-rs fails on it. Set the plain
+pair to a local mbedTLS if you want the host tests to cover the TLS path too:
+
+```bash
+export MBEDTLS_INCLUDE_DIR_powerpc_apple_darwin=/Users/admin/ppc-libs/include
+export MBEDTLS_LIB_DIR_powerpc_apple_darwin=/Users/admin/ppc-libs/lib
+export MBEDTLS_INCLUDE_DIR=/usr/include MBEDTLS_LIB_DIR=/usr/lib   # host copy
+./build-release.sh --host ppctiger
+```
+
+`ppc-cc-remote.py` passes the Mac paths through untouched, because a path that
+does not exist locally is treated as remote-only -- the same rule that already
+carries `-L$PPC_LIBS_DIR`. `-fno-gcse` is not optional (BACKLOG §1e) and no `-mcpu` is
+deliberate (§13), so one copy serves both the G4 and G5 builds.
+
+**Prefer `port:mbedtls3` over building it by hand** where MacPorts is doing the
+build. A raw `make lib` fails on
+anything before macOS 10.12: `platform_util.c` calls `clock_gettime`, which does
+not exist there. Building it anyway needs
+`-I${prefix}/include/LegacySupport -lMacportsLegacySupport` and `APPLE_BUILD=0`
+(mbedTLS's Makefile passes a `ranlib` flag Darwin 10 rejects), plus a manual
+`ranlib` over the archives. The port applies legacy support itself and builds
+with CMake, so it sidesteps both -- see `BACKLOG.md` §14. A build that cannot find them still
+succeeds -- it prints a warning, sets `no_tls`, and an https console is refused
+at runtime with a message saying so. That is deliberate: a machine that only
+ever needs the LAN path should not be unable to build.
 
 **Build them without any `-mcpu` flag.** They are then generic `ppc` and serve
 every CPU variant; the measurement is in `BACKLOG.md` §13 — none of them
@@ -279,8 +335,8 @@ tree had uncommitted changes. It appears in four places, so a copy that turns up
 without context still identifies itself:
 
 * `Contents/Resources/BUILD-INFO` — `version`, `commit`, `built`, `arch`;
-* **Get Info** in the Finder — `0.1.0 (a1b2c3d+dirty) for G4 and G5, built ...`;
-* the settings window's **status block** — `Build: 0.1.0 (a1b2c3d+dirty)`;
+* **Get Info** in the Finder — `1.0.0 (a1b2c3d+dirty) for G4 and G5, built ...`;
+* the settings window's **status block** — `Build: 1.0.0 (a1b2c3d+dirty)`;
 * the **About** window, which additionally spells out what dirty means: the
   commit does not fully describe the build.
 

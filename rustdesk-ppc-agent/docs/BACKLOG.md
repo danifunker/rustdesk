@@ -567,6 +567,36 @@ This is the good outcome for the G5. Websocket would have meant a websocket
 client **and** TLS on Mac OS X 10.5, against a five-crate dependency list with
 no async runtime. The native protocol needs neither.
 
+### ~~Re-checked against CortenDesk's fork~~ (2026-08-18: it still holds)
+
+Worth re-testing rather than assuming, because the finding above was measured
+against the *OSS* server and the deployment has since moved to CortenDesk --
+which ships hbbs and hbbr from `marcpope/cortendesk-server`, a fork. A fork is
+exactly the kind of thing that could have fixed this.
+
+It did not. In that fork's `src/rendezvous_server.rs`:
+
+* `handle_udp` (line 333) handles `RegisterPk` properly -- line 358.
+* `handle_tcp` (line 491) answers `RegisterPk` with **`NOT_SUPPORT`** -- line 564.
+* the websocket loop calls `self.handle_tcp(..)` -- line 1194.
+
+So registration over websocket is refused by the same branch, in the server this
+deployment actually runs. **TLS did not unblock websockets**, because TLS was
+never the blocker.
+
+### ...but the relay does bridge the two transports
+
+The half that matters turns out to be free. `src/relay_server.rs` runs two
+listeners -- TCP 21117 and ws 21119 -- and both feed `make_pair`, which wraps
+either into a common `StreamTrait` and hands it to `make_pair_`. That function
+keys a **single global `PEERS` map by uuid** (lines 434-456) and pairs whichever
+two peers turn up with the same one, transport unread.
+
+**A browser client on wss and this agent on native TCP therefore meet at the
+relay.** Nothing websocket-shaped is needed in the agent for the web client to
+reach the G5; it is a test, not a feature. Untested as of writing -- the one
+remaining unknown from item 14.
+
 ### Remote connections are relay-only, structurally
 
 Not a tuning problem and not the symmetric-NAT guess. The rendezvous server sits
@@ -1113,3 +1143,240 @@ as clean. A scanner that finds nothing is indistinguishable from a clean result,
 so the script now compiles one source at two `-mcpu` settings and requires the
 970 one to trip it. Same shape as `fb-vigil` in §1d and `docker-proxy` in §12:
 the instrument was the thing that was wrong.
+
+## 14. Appearing in a console's device list
+
+Reachable and visible are different properties, and the agent had the first
+without the second. A console -- CortenDesk, or RustDesk Pro -- builds its
+device list from an HTTP API and **not** from hbbs registration, so a machine
+that registered perfectly showed up in no list at all. That is a worse failure
+than it sounds: to someone looking at the console it is indistinguishable from
+an agent that does not work.
+
+`src/api.rs`, `src/http.rs`, `src/json.rs`. Two POSTs, both **tokenless** --
+`/api/sysinfo` creates the device row, `/api/heartbeat` every 15 s keeps it
+online and is where the console asks for the inventory it does not have. Read
+out of CortenDesk's `app/Http/Controllers/Api/SyncController.php`, which is the
+open implementation of the contract stock RustDesk clients speak; upstream's own
+half is `src/hbbs_http/sync.rs`, which is reqwest on tokio and therefore no use
+here.
+
+### What the contract turns on
+
+| detail | why it decides whether this works |
+|---|---|
+| the uuid is **base64** and pinned | the endpoints are unauthenticated, so the console pins the first uuid it sees for an id and silently ignores heartbeats that disagree. A regenerated uuid does not re-register, it goes quiet -- the same trap `Config::uuid` documents for hbbs, enforced by a different server |
+| **60 s** decides offline | hence 15 s, which is three missed beats of slack rather than a round number |
+| only **`hostname`** drives the re-request | a row with an empty hostname is asked for its inventory on every heartbeat, so a blank there would be a permanent loop. Empty `cpu`/`memory` are harmless, which is what lets `sys` return nothing for them off a Mac |
+| `Content-Type: application/json` is load-bearing | Laravel reads a JSON body only when told the body is JSON. With the wrong type every field arrives empty, the row is created blank, and nothing errors |
+
+### Three things deliberately not done
+
+* **`conns` is omitted.** It is the device's list of live incoming connections
+  and the console reconciles its Active-sessions view against it. The server
+  reads an absent field as "nothing is live here", which is true of an agent
+  with no connection-id concept; sending a wrong list would *close* live
+  sessions, while sending none only leaves a view empty. `/api/audit/conn` is
+  the other half of that feature and is the same deferral.
+* **`strategy` is ignored rather than half-honoured.** A heartbeat reply can
+  carry pushed configuration. Reading it is easy and *applying* it is a feature
+  in its own right, so the reply is parsed for exactly one key.
+* **Redirects are not followed.** A 301 to https would need the TLS layer, and
+  following one across schemes silently is how a request ends up somewhere
+  nobody chose. It is logged with its `Location`, because an http URL for an
+  https console is the likeliest misconfiguration here and the header is the
+  whole diagnosis.
+
+### ~~https~~ (done)
+
+`src/tls_shim.c` over mbedTLS, `port:mbedtls3`, TLS 1.2 as the floor. rustls was
+never an option: `ring` and `aws-lc-rs` have no 32-bit big-endian PowerPC
+support, and the pure-Rust provider is 40-odd crates of const generics. The
+system stack was not either -- Secure Transport on Leopard stops at TLS 1.0.
+
+Four things about it are worth not re-deriving:
+
+* **The trust store is a bundle, not the system's.** Mac OS X 10.4/10.5 roots
+  expired years ago, so the system store cannot verify most of the public
+  internet whatever the library does. `http::CaBundle` searches the app bundle,
+  then `curl-ca-bundle`, then the usual Unix paths; `--ca-bundle` overrides.
+  `bundle.sh` stages a copy into `Contents/Resources` so a disk-image install
+  depends on nothing else being present.
+* **The BIO callbacks are plain `read`/`write` on an fd Rust opened**, not
+  `mbedtls_net_*`, so the socket keeps the timeouts `http` set on it. EAGAIN is
+  a hard error rather than `WANT_READ`: mapping a socket timeout to "try again"
+  turns a wedged console into a spin, because the retry loop has no deadline of
+  its own.
+* **A truncated close is caught by `Content-Length`, not by the shim.** Over TLS
+  a close with no `close_notify` is indistinguishable from a complete reply at
+  the socket, so `parse_response` compares what arrived against what was
+  declared and `rd_tls_read` defers to it.
+* **The certificate error names the actual fault.** Untrusted CA, name
+  mismatch and date problems need different fixes, and on this hardware the
+  date is the one to suspect first -- a dead PRAM battery boots the machine in
+  1970, and every certificate is then not yet valid.
+
+**Verified on the G5, end to end.** Not a probe: the actual agent binary,
+cross-built and run on `ppctiger` (10.5.8, ppc970), against an https console.
+
+```text
+[  0.129] INFO  console: verifying certificates against .../cert.pem
+[  0.176] DEBUG tls: TLSv1.3, TLS1-3-AES-256-GCM-SHA384
+[  0.179] INFO  console: inventory accepted -- the machine is in the device list
+[ 15.208] DEBUG tls: TLSv1.3, TLS1-3-AES-256-GCM-SHA384
+```
+
+and what the console recorded:
+
+```json
+{"cpu": "PowerPC G5 @ 2.3 GHz (2 cores)", "memory": "4 GB",
+ "os": "Mac OS X 10.5", "hostname": "PowerMacG5", "version": "1.4.5"}
+```
+
+**That inventory is the proof `sys`'s sysctl reader is right on big-endian.**
+`hw.memsize` is a uint64 and `hw.cputype` a 32-bit int; a fixed-width read of
+the latter would land in the high half and come back multiplied by 2^32. "4 GB"
+and "PowerPC G5 @ 2.3 GHz" are what a correct read looks like, and nothing
+short of running it on the hardware could have said so.
+
+Rejection was exercised on a Mac too: an unrelated root gives "not correctly
+signed by the trusted CA", and a file with no certificates is refused before
+the handshake.
+
+### Building mbedTLS for the cross build
+
+`port:mbedtls3` covers a MacPorts build. The cross build links out of
+`$PPC_LIBS_DIR` instead, so mbedTLS has to be put there by hand like libsodium
+and libvpx -- see `BUILD.md`. Two flags are not optional and one is a
+convention:
+
+* **`-fno-gcse`**, for the reason in §1e. gcc10-bootstrap miscompiles at `-O2`
+  on this target, the fault is not specific to the shape of code that first
+  showed it, and a miscompiled TLS library would be a miserable thing to debug.
+* **`APPLE_BUILD=0`**, plus a manual `ranlib` pass over the archives.
+* **No `-mcpu`**, per §13, so one copy serves the G4 and G5 builds. Checked the
+  way §13 checks: zero 64-bit instructions in the result.
+
+**The mbedTLS paths must be target-suffixed**, i.e.
+`MBEDTLS_INCLUDE_DIR_powerpc_apple_darwin`, the same convention as
+`CC_powerpc_apple_darwin`. `build-release.sh` runs the host test suite and the
+cross build in one process tree, so exporting only the plain name hands the
+*host* build a `-I` that exists only on the G5 and cc-rs dies on it. Cost one
+release run to find; `build.rs`'s `target_var` is where it is handled.
+
+**`ppc-cc-remote.py` needs no change for this.** `should_mirror_dir` treats a
+path that does not exist locally as remote-only and passes it through, which is
+already how `-L/Users/admin/ppc-libs/lib` reaches the Mac -- so
+`MBEDTLS_INCLUDE_DIR=/Users/admin/ppc-libs/include` just works.
+
+**Two things bite a hand build of mbedTLS on this platform, and neither affects
+the port.** Recorded because the first cost a build and looked like our problem:
+
+* **`clock_gettime` does not exist before macOS 10.12.** `platform_util.c` uses
+  it unconditionally, so a raw `make lib` fails on Darwin 10 with an implicit
+  declaration and an undeclared `CLOCK_MONOTONIC`. The fix is
+  `-I${prefix}/include/LegacySupport` and `-lMacportsLegacySupport`, which this
+  agent already links for its own reasons. **`port:mbedtls3` handles this
+  itself** -- its Portfile carries `PortGroup legacysupport 1.1` with
+  `legacysupport.newest_darwin_requires_legacy 15`, and Darwin 10 is inside
+  that -- so the dependency in our Portfile is sound and needs no patch.
+* **mbedTLS's Makefile calls `ranlib -no_warning_for_no_symbols`**, which Darwin
+  10's ranlib does not accept. `APPLE_BUILD=0` avoids it, and the archives then
+  need one plain `ranlib` pass or the link fails with "archive has no table of
+  contents". Only the Makefile does this; the port builds with CMake.
+
+### The settings window shows it
+
+`deploy/app-ui.m` gained Console and CA bundle rows, and `agent-helper.sh` a
+`Console:` line in the status block. Two things fell out of that:
+
+* The window's "why is there no API setting?" answer was describing a decision
+  that had been reversed, so it now explains the websocket half only -- and says
+  what a console is, since reachable and visible being separate is exactly what
+  someone reading that button is confused about.
+* `set` reported every failure as "the installed agent is older than this app".
+  That guess is right only when the agent printed usage text; an agent that
+  knows the flag and rejected the *value* says why, and that message was being
+  thrown away. It now shows the agent's own words unless the output is usage.
+
+### The certificates have to travel with the binary
+
+Found in use, on the first real deployment: the G5 registered, stayed reachable
+by id, and never appeared in the device list.
+
+```text
+ERROR console disabled: no CA bundle found, so an https console cannot be
+verified ... /Users/admin/rustdesk-ppc-agent/cacert.pem, ...
+```
+
+`bundle.sh` puts `cacert.pem` in the `.app`; `install.sh` copied only the
+*executable* out to `$PREFIX`, so the installed agent had no certificates and
+could not verify anything. The agent looks for the bundle **beside itself**,
+which is right -- what was missing is that the installer never put one there.
+`install.sh` now copies it alongside the binary and says how many roots it
+carries; `--uninstall` already removes the whole prefix, so nothing is left
+behind.
+
+**The failure mode is the point.** It is not a crash and not a refused
+connection: the machine works perfectly by id and is simply absent from a list,
+which reads as the console's fault rather than the agent's. The one line saying
+otherwise is at ERROR in a log nobody opens while things appear to work. Worth
+remembering the next time a feature is "on" and invisible.
+
+One tidy-up came with it: the search path had a `../Resources/cacert.pem` entry
+that could never match. Inside the bundle the agent lives in
+`Contents/Resources`, not `Contents/MacOS`, so the sibling path already covers
+the run-from-bundle case and the extra hop only made the error message longer.
+
+### What is proven, and what is not
+
+Proven, on a host build against a stand-in console that answers what
+`SyncController` answers: first contact end to end (sysinfo, row created,
+heartbeat, no re-request), the request framing, a chunked reply, a path prefix,
+a 500, and a console that is not there. `api::console_tests` is that harness.
+
+**Not proven: the reading itself.** The stand-in was written from the PHP, so
+it agrees with the agent by construction. Only the real container settles
+whether the contract was read correctly, and Docker was not available where
+this was written. That is one run, not a project.
+
+Also unproven, and separate: whether the agent's native TCP relay join meets
+CortenDesk's **browser** client, which speaks WebSocket through a proxy that
+bridges to the native ports. The native mobile app path is the one that
+follows from §12; the browser one is a test nobody has run.
+
+## ~~15. Two application menus, one of them empty~~ (fixed)
+
+Reported from use, and it had been there since the window replaced the
+AppleScript applet: the menu bar carried **two menus named "Agent for RustDesk
+PPC"**, and only the second had About, Project Page and Quit in it.
+
+**Adding a first item to the main menu does not make it the application menu.**
+`installMenuBar` built the bar by hand and never told AppKit which submenu was
+the app's, so AppKit synthesised one -- the empty one -- and left ours beside it
+as an ordinary menu that happened to share the app's name. `setAppleMenu:` is
+what adopts it. It has never been in a public header, which is why it is
+declared in a category and called through `respondsToSelector:`; a system that
+does not answer it gets exactly the behaviour it had before rather than an
+unrecognised-selector crash at launch.
+
+Measured on the G5 rather than reasoned about, with a probe that builds the bar
+both ways and counts what comes out:
+
+```text
+as shipped:  [0] title=Agent for RustDesk PPC   submenu items=5
+with the fix: [0] title=                        submenu items=5
+```
+
+**The cleared title is the adoption**, not a loss: AppKit renders an adopted
+application menu using the bundle's own name, so the item stops carrying a
+literal title of its own. One menu, with everything in it.
+
+Two smaller things came out of the same read:
+
+* `setMainMenu:` was called **before** the submenu was attached. Moved to last,
+  so the bar AppKit adopts is a finished one.
+* `screencapture` over ssh returns a black frame when the display is asleep, so
+  the fix could not be photographed. That is worth knowing before someone
+  spends an afternoon on it -- the framebuffer path the agent itself uses is
+  unaffected, and the probe above is the better instrument anyway.

@@ -227,6 +227,22 @@ ps -axo pid,comm | awk '$2 ~ /rustdesk-agent/ { print $1 }' \
 
 cp "$SRC/rustdesk-agent" "$BIN"
 chmod 755 "$BIN"
+
+# The certificates travel WITH the binary, not just inside the .app.
+#
+# The agent looks for `cacert.pem` beside itself, and the installed binary lives
+# here rather than in Contents/Resources -- so copying only the executable left
+# an agent that could not verify any https console, and said so in a log nobody
+# was reading. The symptom is a machine that registers fine and never appears in
+# the device list, which looks like the console's fault. See BACKLOG.md item 14.
+if [ -f "$SRC/cacert.pem" ]; then
+    cp "$SRC/cacert.pem" "$PREFIX/cacert.pem"
+    chmod 644 "$PREFIX/cacert.pem"
+    note "certificates: $(grep -c 'BEGIN CERTIFICATE' "$PREFIX/cacert.pem" | tr -d ' ') roots, for an https console"
+else
+    note "no cacert.pem in this build -- an https console will need --ca-bundle"
+fi
+
 if [ -d "$SRC/lib" ]; then
     rm -rf "$PREFIX/lib"
     mkdir -p "$PREFIX/lib"

@@ -150,6 +150,29 @@ cp /tmp/com.rustdesk.ppc-agent.plist.in "$D/com.rustdesk.ppc-agent.plist.in"
 cp /tmp/agent-helper.sh "$D/agent-helper.sh"
 cp /tmp/app.icns "$D/app.icns"
 chmod +x "$D/rustdesk-agent" "$D/install.sh" "$D/rustdesk-ctl" "$D/agent-helper.sh"
+
+# Certificates for an https console, carried inside the app.
+#
+# This Mac's own trust store is not an option: Leopard's roots expired years ago
+# -- DST Root CA X3 in 2021, and ISRG Root X1 was never in it -- so a console
+# behind Let's Encrypt cannot be verified against it however new the TLS library
+# is. The agent looks here first (http::CaBundle::search_paths), so a copy
+# installed from the disk image works on a Mac that has never had MacPorts.
+#
+# Staged rather than downloaded: this script runs on a PowerPC Mac whose own
+# TLS cannot reach a modern download in the first place, which is the whole
+# problem in miniature.
+CA_FOUND=""
+for c in /tmp/cacert.pem /opt/local/share/curl/curl-ca-bundle.crt /usr/share/curl/curl-ca-bundle.crt; do
+    if [ -f "$c" ]; then CA_FOUND="$c"; break; fi
+done
+if [ -n "$CA_FOUND" ]; then
+    cp "$CA_FOUND" "$D/cacert.pem"
+    echo "  certificates: $CA_FOUND"
+else
+    echo "  warning: no CA bundle staged, so an https console will need --ca-bundle" >&2
+    echo "           (stage one at /tmp/cacert.pem, or install the curl-ca-bundle port)" >&2
+fi
 # Everything the app needs to identify itself, in one file the settings window
 # and the status block both read. Written rather than worked out at runtime: the
 # app should not have to re-derive its own CPU from the Mach-O header, and it
