@@ -451,6 +451,55 @@ cargo +nightly build --release
 If the link fails on an unresolved `-lrust_irix_compat`, `env.sh` was not
 sourced.
 
+### Prerequisites: the C libraries the agent links
+
+**These are not reproducible from any repo, and that is a gap rather than a
+decision.** All four were built by hand into `/opt/sgug-staging/usr/sgug`, which
+is outside every git tree here, so a fresh clone links against whatever happens
+to be on the machine — or fails with `unable to find library -lzstd` and no
+indication why. The invocations below are recovered from the build trees'
+`config.status` and `config.log`, so they are what was actually run.
+
+Sources live in `ports/work/`, which is gitignored (third-party trees and
+tarballs, not ours to vendor).
+
+```sh
+CC=/opt/sgug-staging/usr/sgug/bin/irix-cc
+PREFIX=/opt/sgug-staging/usr/sgug
+
+# libsodium 1.0.18 -- no patches
+./configure --host=mips-sgi-irix6.5 --prefix=$PREFIX \
+    --disable-shared --enable-static --disable-pie --disable-ssp \
+    CC=$CC AR=/opt/cross/bin/llvm-ar RANLIB=/opt/cross/bin/llvm-ranlib CFLAGS=-O2
+
+# libvpx 1.13.1 -- one patch (see mogrix rules/packages/libvpx.yaml)
+./configure --target=generic-gnu --prefix=$PREFIX \
+    --disable-shared --enable-static \
+    --enable-vp8-encoder --enable-vp8-decoder \
+    --disable-vp9-encoder --disable-vp9-decoder \
+    --disable-examples --disable-tools --disable-docs --disable-unit-tests \
+    --disable-runtime-cpu-detect --disable-webm-io --disable-libyuv
+
+# mbedTLS 3.6.2 -- two patches (see mogrix rules/packages/mbedtls.yaml).
+# make install puts MIPS objects where a host linker may find them; see the
+# note on "relocations in generic ELF (EM: 8)" below.
+
+# zstd 1.5.6 -- no patches
+cd lib && make libzstd.a CC=$CC AR=ar RANLIB=ranlib \
+    CFLAGS="-O2 -DZSTD_MULTITHREAD=0"
+cp libzstd.a $PREFIX/lib32/ && cp zstd.h zstd_errors.h $PREFIX/include/
+```
+
+**zstd should not have been built by hand at all.** mogrix already ships
+`rules/packages/zstd.yaml` — it predates this work and builds zstd through the
+normal pipeline from the Fedora spec. Building it here bypassed that and left
+nothing recording the dependency. The right fix is to build zstd (and ideally
+the other three) through mogrix so the staging tree is reproducible; the rules
+for libsodium, libvpx and mbedTLS exist there now, but nothing has been run
+through the mogrix pipeline end to end.
+
+`clipboard.rs` is what pulls zstd in, via `#[link(name = "zstd")]`.
+
 ### Build times, and where the build happens
 
 **The build is entirely on the Linux host. iris plays no part in it.** This is a
