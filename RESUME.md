@@ -477,10 +477,17 @@ ports/iris-run/gsh.py  marker-based telnet runner (see below)
 ### Building for the target
 
 ```
+./ports/rust/build-compat.sh     # once per clone; see below
 cd ports/rust/agent-portable
-. ../env.sh                  # private RUSTUP_HOME/CARGO_HOME + SODIUM_LIB_DIR etc.
+. ../env.sh                      # private RUSTUP_HOME/CARGO_HOME + SODIUM_LIB_DIR etc.
 cargo +nightly build --release
 ```
+
+`build-compat.sh` builds `librust_irix_compat.a` from mogrix's compat sources.
+It is a build artifact, so it is not in git — and `agent-portable/compat` is a
+symlink to `hello/compat`, which means **a fresh clone has a dangling symlink
+until you run it**. Skipping it fails the link on an unresolved
+`-lrust_irix_compat`, which names the archive but not the reason.
 
 If the link fails on an unresolved `-lrust_irix_compat`, `env.sh` was not
 sourced.
