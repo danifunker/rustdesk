@@ -1,0 +1,59 @@
+# The RustDesk agent's platform-independent modules, compiled for IRIX n32.
+#
+# It includes the PPC agent's sources by path rather than copying them, so this
+# is a compile test of the code that will actually ship, and it cannot drift
+# from the tree next door. Modules arrive in dependency order as each one's
+# external crates are proved out on the target; the platform halves (capture,
+# input, cursor, clipboard, encode, session, main) stay out until their IRIX
+# implementations exist.
+[workspace]
+
+[package]
+name = "agent-portable"
+version = "0.1.0"
+edition = "2018"
+build = "build.rs"
+
+# Named for the tree the sources come from, not for this directory: main.rs and
+# every module refer to the crate as `rustdesk_ppc_agent`, and renaming it here
+# would mean patching those paths in the shared source for no gain.
+[lib]
+name = "rustdesk_ppc_agent"
+path = "src/lib.rs"
+
+[dependencies]
+libc = "0.2"
+log = "0.4"
+# Pinned exactly as the PPC agent pins it: the generated protocol code and the
+# wire behaviour have to match the peer, so the codegen version is not free.
+protobuf = "=3.0.0-alpha.2"   # exact: the checked-in codegen matches this trait shape
+sodiumoxide = "0.2"
+sha2 = "0.10"
+
+[build-dependencies]
+cc = "1.0"
+
+# The real agent, built straight from the PPC tree's main.rs.
+[[bin]]
+name = "rustdesk-agent"
+path = "../../../../rustdesk/rustdesk-ppc-agent/src/main.rs"
+
+[[bin]]
+name = "testpeer"
+path = "src/bin/testpeer.rs"
+
+[[bin]]
+name = "portable-selftest"
+path = "src/bin/selftest.rs"
+
+[[bin]]
+name = "capture-selftest"
+path = "src/bin/capture-selftest.rs"
+
+[[bin]]
+name = "pipeline"
+path = "src/bin/pipeline.rs"
+
+[profile.release]
+opt-level = 2
+panic = "abort"
