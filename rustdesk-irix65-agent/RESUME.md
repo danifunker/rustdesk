@@ -50,6 +50,12 @@ telnet/ssh      host 2324 -> guest 23,  host 2222 -> guest 22
 guest net       192.168.0.2, gateway/host 192.168.0.1
 
 mogrix fork     ~/repos/mogrix, branch danifunker-ports (remote danifunker-origin)
+
+layout          this tree lives at rustdesk/rustdesk-irix65-agent, beside
+                rustdesk-ppc-agent, on the `vintage-agents` branch. The agent's
+                portable modules are included from the PPC tree by #[path], so
+                the two must stay siblings -- the paths are relative and a clone
+                of one without the other will not build.
 ```
 
 **Do not modify ~/repos/iris.** Dani is handling iris changes in a separate

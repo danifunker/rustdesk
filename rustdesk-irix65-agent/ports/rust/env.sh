@@ -7,8 +7,8 @@
 # `mogrix patch-crates` edits crate sources inside the cargo registry -- and
 # neither is namespaced by target. Another effort on this machine
 # (~/repos/rust-irixlibstd, the o32 build) uses the default homes.
-export RUSTUP_HOME=/home/dani/repos/irix-rustdeskagent/ports/rust/rustup
-export CARGO_HOME=/home/dani/repos/irix-rustdeskagent/ports/rust/cargo
+export RUSTUP_HOME=/home/dani/repos/rustdesk/rustdesk-irix65-agent/ports/rust/rustup
+export CARGO_HOME=/home/dani/repos/rustdesk/rustdesk-irix65-agent/ports/rust/cargo
 export PATH="$CARGO_HOME/bin:/home/dani/repos/mogrix/cross/bin:/opt/sgug-staging/usr/sgug/bin:$PATH"
 
 # mio has no epoll or eventfd here; -L points the linker at the compat archive
@@ -18,7 +18,7 @@ export PATH="$CARGO_HOME/bin:/home/dani/repos/mogrix/cross/bin:/opt/sgug-staging
 # this happened to be sourced from, and the link then fails somewhere else with
 # an unresolved -lrust_irix_compat rather than anything that names the cause.
 # agent-portable's compat/ is a symlink to hello's, so one archive serves both.
-export IRIX_COMPAT_DIR=/home/dani/repos/irix-rustdeskagent/ports/rust/hello/compat
+export IRIX_COMPAT_DIR=/home/dani/repos/rustdesk/rustdesk-irix65-agent/ports/rust/hello/compat
 export RUSTFLAGS="--cfg mio_unsupported_force_poll_poll --cfg mio_unsupported_force_waker_pipe -L $IRIX_COMPAT_DIR"
 
 # libsodium-sys: SODIUM_LIB_DIR alone. SODIUM_STATIC now panics ("deprecated,

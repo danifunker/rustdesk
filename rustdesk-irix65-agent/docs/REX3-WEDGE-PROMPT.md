@@ -74,7 +74,7 @@ running.
 
 ```sh
 # host: build (no emulator needed, this is a cross-compile)
-cd ~/repos/irix-rustdeskagent/ports/rust/agent-portable && . ../env.sh
+cd ~/repos/rustdesk/rustdesk-irix65-agent/ports/rust/agent-portable && . ../env.sh
 cargo +nightly build --release          # ~37 s from clean
 
 # guest: /root/agent-restart.sh starts X and the agent; then
@@ -166,7 +166,7 @@ connection drop would be an improvement, because the agent recovers from that.
   2026-08-19 00:08 with only `tlbvmap`), so it cannot open either image. Rebuild
   with `--features lightning,rex-jit,r5k,chd` — 5m33s. A working copy built from
   that same source is at
-  `~/repos/irix-rustdeskagent/ports/iris-run/iris-target/release/iris`.
+  `~/repos/rustdesk/rustdesk-irix65-agent/ports/iris-run/iris-target/release/iris`.
 - The agent's disk is `~/Indy-IRIX65_dev.chd`. Changes must be folded in with
   `chdman copy` and verified; see `RESUME.md` §Disk handling. Keep
   `Indy-IRIX65_dev.chd.bak-before-first-write`.

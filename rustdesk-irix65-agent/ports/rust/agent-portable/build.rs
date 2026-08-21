@@ -8,7 +8,7 @@
 //
 // png.rs also calls zlib's compress2/uncompress, which IRIX 6.5 ships itself.
 fn main() {
-    let ppc = "../../../../rustdesk/rustdesk-ppc-agent";
+    let ppc = "../../../../rustdesk-ppc-agent";
     let sgug = std::env::var("SGUG_LIB_DIR")
         .unwrap_or_else(|_| "/opt/sgug-staging/usr/sgug/lib32".to_owned());
     let sgug_inc = std::env::var("SGUG_INCLUDE_DIR")

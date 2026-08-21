@@ -1,5 +1,5 @@
 Continue the IRIX RustDesk agent port. Read
-`/home/dani/repos/irix-rustdeskagent/RESUME.md` first — it is the source of
+`/home/dani/repos/rustdesk/rustdesk-irix65-agent/RESUME.md` first — it is the source of
 truth for state, environment, what is already verified, what has been ruled
 out, and the mistakes not to repeat. Do not re-derive anything it records.
 
