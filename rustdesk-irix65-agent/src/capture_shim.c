@@ -146,6 +146,8 @@ static int alloc_canvas(rd_capture *c)
     if (c->shminfo.shmaddr == (char *)-1) {
         err_set(c, "shmat: %s", strerror(errno));
         c->shminfo.shmaddr = NULL;
+        shmctl(c->shminfo.shmid, IPC_RMID, NULL);   /* or it leaks; see free_canvas */
+        c->shminfo.shmid = -1;
         return -1;
     }
     c->shminfo.readOnly = False;
@@ -178,6 +180,25 @@ static void free_canvas(rd_capture *c)
     }
     if (c->shminfo.shmaddr && c->shminfo.shmaddr != (char *)-1)
         shmdt(c->shminfo.shmaddr);
+
+    /* Mark the segment for destruction on every path, not just the one where
+     * XShmAttach succeeded.
+     *
+     * alloc_canvas only reached its shmctl(IPC_RMID) after a clean attach, so
+     * an attach that failed -- which is what happens once the server stops
+     * answering -- detached the segment and left it allocated for ever. The
+     * agent retries the open every few seconds while a server is wedged, and
+     * each retry orphaned another 5 MB: 80 segments, roughly 400 MB, measured
+     * on a 256 MB machine, after which even a small allocation fails and the
+     * agent aborts. The failure looked like the wedge and was ours.
+     *
+     * A second IPC_RMID on an already-removed segment just returns EINVAL, and
+     * a segment still attached by the X server is destroyed when it detaches,
+     * so this is safe on every path. */
+    if (c->shminfo.shmid >= 0)
+        shmctl(c->shminfo.shmid, IPC_RMID, NULL);
+    c->shminfo.shmid = -1;
+
     c->shminfo.shmaddr = NULL;
     c->buf = NULL;
     c->shm_ok = 0;
@@ -217,6 +238,10 @@ static rd_capture *open_common(const char *display, int max_path)
 
     c = (rd_capture *)calloc(1, sizeof *c);
     if (!c) return NULL;
+    /* calloc zeroes this, and 0 is a *valid* shm id -- free_canvas would then
+     * happily IPC_RMID a segment belonging to something else. -1 is the only
+     * safe "no segment yet". */
+    c->shminfo.shmid = -1;
     c->path = RD_PATH_GETIMAGE;
     c->force_full = 1;
     strcpy(c->err, "no error");
@@ -303,6 +328,24 @@ static rd_capture *open_common(const char *display, int max_path)
     return c;
 }
 
+int rd_display_size(int *w, int *h)
+{
+    Display *d;
+    if (w) *w = 0;
+    if (h) *h = 0;
+    XSetIOErrorHandler(on_x_io_error);
+    d = XOpenDisplay(NULL);
+    if (!d)
+        return -1;
+    if (w) *w = DisplayWidth(d, DefaultScreen(d));
+    if (h) *h = DisplayHeight(d, DefaultScreen(d));
+    /* Not XCloseDisplay, for the reason given on rd_capture_close: it poisons
+     * every later ReadDisplay connection in this process. The descriptor is
+     * released; the Display allocation is not. */
+    close(ConnectionNumber(d));
+    return 0;
+}
+
 rd_capture *rd_capture_open(const char *display)
 {
     return rd_capture_open_forced(display, RD_PATH_DAMAGE);
@@ -357,9 +400,24 @@ void rd_capture_close(rd_capture *c)
     }
     if (c->shm_ok) free_canvas(c);
     else if (c->buf) free(c->buf);
-    if (c->dpy && !c->dead) {
-        XFlush(c->dpy);
-        close(ConnectionNumber(c->dpy));   /* NOT XCloseDisplay -- see above */
+
+    /* Release the socket whether or not the connection is still alive.
+     *
+     * This used to be guarded by !c->dead alongside the protocol traffic above,
+     * which is the wrong pairing: a dead connection cannot be *talked* to, but
+     * its file descriptor still has to be given back. That is exactly the case
+     * that repeats -- when the server stops answering, the agent drops the
+     * Capturer and builds a new one every retry interval, so every retry leaked
+     * an fd. Measured: 690 consecutive `XOpenDisplay failed` from one agent
+     * while a freshly started process on the same machine captured perfectly,
+     * which is what an exhausted descriptor table looks like from the inside.
+     *
+     * Still not XCloseDisplay: that poisons every later ReadDisplay connection
+     * in the process (see the note above). The Display allocation is leaked on
+     * purpose; the descriptor is not. */
+    if (c->dpy) {
+        if (!c->dead) XFlush(c->dpy);
+        close(ConnectionNumber(c->dpy));
     }
     free(c);
 }

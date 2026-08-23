@@ -57,6 +57,7 @@ struct RdCapture {
 
 extern "C" {
     fn rd_capture_open(display: *const c_char) -> *mut RdCapture;
+    fn rd_display_size(w: *mut c_int, h: *mut c_int) -> c_int;
     fn rd_capture_open_forced(display: *const c_char, max_path: c_int) -> *mut RdCapture;
     fn rd_capture_close(c: *mut RdCapture);
     fn rd_capture_width(c: *const RdCapture) -> c_int;
@@ -96,12 +97,10 @@ pub struct Rect {
 /// Used when a peer logs in: the size the agent saw at startup may be hours
 /// stale by then, and `PeerInfo` is what sizes the peer's canvas.
 pub fn display_size() -> Option<(i32, i32)> {
-    let c = unsafe { rd_capture_open(std::ptr::null()) };
-    if c.is_null() {
+    let (mut w, mut h) = (0 as c_int, 0 as c_int);
+    if unsafe { rd_display_size(&mut w, &mut h) } != 0 {
         return None;
     }
-    let (w, h) = unsafe { (rd_capture_width(c), rd_capture_height(c)) };
-    unsafe { rd_capture_close(c) };
     if w == 0 || h == 0 { None } else { Some((w, h)) }
 }
 
@@ -118,6 +117,7 @@ pub struct Capturer {
     /// Bands the caller asked to be re-read regardless of what the server said.
     forced: Vec<bool>,
     stale: bool,
+    last_refresh: Option<std::time::Instant>,
 }
 
 impl Capturer {
@@ -167,6 +167,7 @@ impl Capturer {
             scaled: Vec::new(),
             forced: vec![false; BANDS],
             stale: false,
+            last_refresh: None,
         })
     }
 
@@ -402,6 +403,14 @@ impl Capturer {
     /// whole `Capturer`. Reporting it without acting on it would leave the
     /// canvas the wrong size, which is a crash rather than a wrong picture.
     pub fn refresh(&mut self) -> bool {
+        // Rate-limited, because `session` calls this at the top of every pass of
+        // the message loop and a resolution does not change several times a
+        // second. Each call is now a bare X connection rather than a whole
+        // capture context, but a connection per frame is still not free.
+        match self.last_refresh {
+            Some(t) if t.elapsed() < std::time::Duration::from_secs(5) => return false,
+            _ => self.last_refresh = Some(std::time::Instant::now()),
+        }
         let (w, h) = match display_size() {
             Some(wh) => wh,
             None => return false,

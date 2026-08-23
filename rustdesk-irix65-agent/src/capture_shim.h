@@ -39,6 +39,16 @@ typedef struct rd_capture rd_capture;
 #define RD_PATH_READDISP 1   /* ReadDisplay, shm, whole screen each frame */
 #define RD_PATH_GETIMAGE 2   /* XGetImage + colormap; no SGI extensions at all */
 
+/* The screen's size, over a bare X connection: no shared memory, no damage
+ * interest, no ReadDisplay probe. Returns 0 on success.
+ *
+ * Separate from rd_capture_open because the caller polls it. Answering it by
+ * building a whole capture context -- which is what this used to do -- meant a
+ * 5 MB shmget, an XShmAttach, an SGICapRegisterInterest and a ReadDisplay read
+ * *per message-loop pass*, which is both the reason the agent generated so much
+ * traffic and the reason it leaked a Display every iteration. */
+int rd_display_size(int *w, int *h);
+
 /* Open the display and set up the best available capture path.
  * `display` may be NULL, meaning $DISPLAY. Returns NULL on failure; call
  * rd_capture_last_error for why. */
