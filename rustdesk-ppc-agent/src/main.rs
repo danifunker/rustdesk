@@ -600,7 +600,13 @@ fn encode_sweep(img: &mut rustdesk_ppc_agent::convert::I420) -> u128 {
     // Spelled out rather than derived from `Tune::default()`, so that moving a
     // default does not quietly change what any row of the sweep means. `plain`
     // is where this started, before any of it was measured.
-    let plain = Tune { static_threshold: 1000, last_ref_only: false, error_resilient: true };
+    let plain = Tune {
+        static_threshold: 1000,
+        last_ref_only: false,
+        error_resilient: true,
+        profile: 0,
+        min_q: 8,
+    };
     let sweep: &[(&str, Tune)] = &[
         ("static 1000", plain),
         ("static 6000", Tune { static_threshold: 6000, ..plain }),
@@ -611,8 +617,14 @@ fn encode_sweep(img: &mut rustdesk_ppc_agent::convert::I420) -> u128 {
         ("15000 + lastref", Tune { static_threshold: 15000, last_ref_only: true, ..plain }),
         (
             "15000 + both",
-            Tune { static_threshold: 15000, last_ref_only: true, error_resilient: false },
+            Tune { static_threshold: 15000, last_ref_only: true, error_resilient: false, ..plain },
         ),
+        // The two that matter on a machine where the encoder *is* the
+        // bottleneck. Profile 2 and 3 drop VP8's whole-frame loop filter --
+        // see `Tune::profile` -- and 3 also drops sub-pixel motion search.
+        ("profile 2 (no loop filter)", Tune { profile: 2, ..plain }),
+        ("profile 3 (no lf, full pel)", Tune { profile: 3, ..plain }),
+        ("profile 3 + min_q 24", Tune { profile: 3, min_q: 24, ..plain }),
     ];
 
     println!("vp8 tuning: ms per frame, median of 3 (bytes for the small change)");

@@ -125,6 +125,23 @@ extern "C" {
 /// must produce, and `--probe-display` compares the two on the target rather
 /// than taking the port on trust.
 pub fn argb_to_i420_rows_rust(src: &[u8], stride: usize, dst: &mut I420, y0: usize, y1: usize) {
+    // Which byte of a captured pixel is which channel.
+    //
+    // The module header is written for the Mac's A,R,G,B, which is what this
+    // was ported from. **IRIX's ReadDisplay hands back A,B,G,R** -- measured on
+    // the machine with a solid red root window, where byte 3 is lit and byte 1
+    // never is -- so reading it as the Mac's order swaps red and blue on every
+    // pixel. That is the exact failure this module's header warns about libyuv
+    // for, and it was live here.
+    //
+    // On the IRIX video path this function is no longer the one that runs:
+    // `Capturer::to_i420_rect` fuses the conversion with the downscale and does
+    // its own channel handling. This stays correct because it is the reference
+    // implementation, and because `pipeline` and `--probe-display` still call it.
+    #[cfg(target_os = "irix")]
+    const CH: [usize; 3] = [3, 2, 1];
+    #[cfg(not(target_os = "irix"))]
+    const CH: [usize; 3] = [1, 2, 3];
     let (w, h) = (dst.width, dst.height);
     let cs = dst.chroma_stride();
     debug_assert!(stride >= w * 4);
@@ -149,7 +166,7 @@ pub fn argb_to_i420_rows_rust(src: &[u8], stride: usize, dst: &mut I420, y0: usi
             let mut lum = [0u8; 4];
             for (i, (row, dx)) in [(r0, 0), (r0, 4), (r1, 0), (r1, 4)].iter().enumerate() {
                 let p = &src[row + x + dx..row + x + dx + 4];
-                let (r, g, b) = (p[1] as i32, p[2] as i32, p[3] as i32);
+                let (r, g, b) = (p[CH[0]] as i32, p[CH[1]] as i32, p[CH[2]] as i32);
                 acc[0] += r;
                 acc[1] += g;
                 acc[2] += b;

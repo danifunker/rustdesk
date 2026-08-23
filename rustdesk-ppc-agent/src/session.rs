@@ -65,6 +65,25 @@ mod login_msg {
 const POLL_MS: u64 = 30;
 /// Modest by modern standards, but the encoder is not the constraint here.
 const DEFAULT_BITRATE_KBPS: u32 = 1500;
+
+/// Integer downscale applied between the framebuffer and the encoder.
+///
+/// **On the G5 this is 1 and stays 1**: half resolution was offered there and
+/// turned down, because the encoder was not the constraint and the sharpness
+/// was worth more than the milliseconds (`docs/performance-plan.md` §4).
+///
+/// On IRIX the same trade comes out the other way and it is not close. VP8's
+/// cost is per macroblock, so it is linear in area, and measured on an emulated
+/// 66 MHz R5000 at 1280x1024 an inter frame costs **10-18 s**. The same frame at
+/// 640x512 costs 1.4 s and at 320x256 half a second. There is no version of
+/// "sharper" that survives a frame every fifteen seconds.
+///
+/// Must be a power of two: the box average folds into the BT.601 weights as a
+/// shift, and a per-pixel integer divide is not affordable on an R5000.
+#[cfg(target_os = "irix")]
+const DEFAULT_SCALE: usize = 2;
+#[cfg(not(target_os = "irix"))]
+const DEFAULT_SCALE: usize = 1;
 /// How long the screen must be still before re-reading a slice of it to cover
 /// anything the sampled change detection missed, and how much to re-read each
 /// time.
@@ -76,7 +95,9 @@ const DEFAULT_BITRATE_KBPS: u32 = 1500;
 /// typing itself cost only 110 ms. Insurance that expensive was worse than what
 /// it insured against. Two bands is ~45 ms, and the rotation covers the whole
 /// screen within about seven ticks of quiet.
+#[cfg_attr(target_os = "irix", allow(dead_code))]
 const SETTLE_REPAINT: std::time::Duration = std::time::Duration::from_millis(900);
+#[cfg_attr(target_os = "irix", allow(dead_code))]
 const REPAIR_BANDS_PER_TICK: usize = crate::capture::BANDS / 8;
 
 /// How long the screen must be still before the probe backs off, and how far
@@ -107,7 +128,33 @@ const IDLE_PROBE_INTERVAL: std::time::Duration = std::time::Duration::from_milli
 /// byte crossed the wire in either direction, and the client dropped the
 /// session 57.4 seconds later. Three times running, to the tenth of a second.
 /// Longest a peer goes without an exact frame. See the settle repaint.
+///
+/// **Counted in frames as well as seconds, and the seconds are the weaker of
+/// the two.** A wall-clock interval assumes frames are quicker than the
+/// interval; on IRIX they were not. At 36 s per frame against a 10 s interval,
+/// every frame was older than the interval, so every frame was forced to be a
+/// key frame -- several times the cost and several times the bytes of the inter
+/// frame that would have done, which made the next frame later still. Five
+/// frames in 182 seconds, all five keyframes, at 138 KB each.
+///
+/// That is a feedback loop rather than a wrong number, and no value of the
+/// interval fixes it. `KEYFRAME_FRAMES` is the bound that holds regardless of
+/// how slow a frame is; the duration is what stops a nearly-still screen going
+/// too long without one.
+#[cfg_attr(target_os = "irix", allow(dead_code))]
 const KEYFRAME_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+const KEYFRAME_FRAMES: u32 = 600;
+
+/// Framebuffer rows the rolling refresh puts back through the encoder on each
+/// tick of a still screen. See `Video::probe`.
+///
+/// 64 is four macroblock rows before the downscale and two after it at 1/2,
+/// which is about 80 macroblocks -- the same size as the small-change case that
+/// measured 246 ms, and small enough that a tick is never mistaken for a stall.
+/// A 1024-row screen laps in sixteen ticks, so nothing stays uncorrected for
+/// more than about fifteen seconds of quiet.
+#[cfg(target_os = "irix")]
+const REFRESH_ROWS: usize = 64;
 
 /// How long to wait before trying to build the video pipeline again, when a
 /// session has no picture.
@@ -520,6 +567,14 @@ pub fn serve(stream: TcpStream, ident: &Identity) -> io::Result<()> {
     let (dw, dh) = crate::capture::display_size().unwrap_or((ident.width, ident.height));
     #[cfg(not(any(target_os = "macos", target_os = "irix")))]
     let (dw, dh) = (ident.width, ident.height);
+    // The size the peer will actually be sent, which is the framebuffer divided
+    // by the downscale. See `Video::served_size` for why the peer is told the
+    // truth about that rather than being handed a small frame in a big canvas.
+    #[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
+    let (dw, dh) = {
+        let sc = clamp_scale(DEFAULT_SCALE, dw.max(0) as usize, dh.max(0) as usize) as i32;
+        (dw / sc, dh / sc)
+    };
     d.width = dw;
     d.height = dh;
     d.name = "Display".to_owned();
@@ -533,6 +588,77 @@ pub fn serve(stream: TcpStream, ident: &Identity) -> io::Result<()> {
     log::info!("peer '{}' ({}) logged in -- entering message loop", peer.name, peer.id);
 
     message_loop(&mut peer)
+}
+
+/// Round a requested downscale to something the converter and the encoder can
+/// both use: a power of two, at least 1, and not so large that the frame stops
+/// being a frame.
+///
+/// Power of two is a hard requirement below `Capturer::to_i420_rect`, where the
+/// box average folds into the BT.601 weights as a shift. VP8 additionally wants
+/// even dimensions for 4:2:0, and refuses anything under 16 pixels; the 32 here
+/// is two macroblocks, which is the smallest size worth serving.
+#[cfg_attr(
+    not(all(any(target_os = "macos", target_os = "irix"), not(no_vpx))),
+    allow(dead_code)
+)]
+fn clamp_scale(scale: usize, w: usize, h: usize) -> usize {
+    let mut s = 1usize;
+    while s * 2 <= scale.max(1) && s < 8 {
+        s *= 2;
+    }
+    while s > 1 && (w / s < 32 || h / s < 32) {
+        s /= 2;
+    }
+    s
+}
+
+/// Bitrate for a given downscale.
+///
+/// Held roughly proportional to area rather than fixed: the configured rate is
+/// for the whole framebuffer, and leaving it there at 1/4 tells the rate
+/// controller it has sixteen times the budget it needs, which it spends on
+/// coefficients nobody asked for and this processor cannot afford to transform.
+#[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
+fn bitrate_for(base_kbps: u32, scale: usize) -> u32 {
+    (base_kbps / (scale * scale) as u32).max(120)
+}
+
+/// The encoder settings this platform runs with.
+///
+/// The Mac keeps the defaults, which were measured there. IRIX takes VP8
+/// **profile 3**, which is not a feature level -- every VP8 decoder must handle
+/// all four profiles -- but a set of encoder cost decisions: no loop filter, and
+/// full-pixel motion compensation only.
+///
+/// The loop filter is a pass over every pixel of every frame whose job is
+/// hiding block edges in natural video. On a desktop, where most macroblocks are
+/// coded as skip and the content is text on flat colour, it is a whole-frame
+/// cost paid to slightly blur the thing the user is trying to read. Measured on
+/// the emulated Indy at 640x512, an inter frame with a small change: **452 ms at
+/// profile 0 against 246 ms at profile 3**, and the full-frame case no slower.
+#[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
+fn video_tune() -> crate::encode::Tune {
+    let t = crate::encode::Tune::default();
+    #[cfg(target_os = "irix")]
+    let t = crate::encode::Tune { profile: 3, ..t };
+    t
+}
+
+/// The downscale a peer's `image_quality` asks for.
+///
+/// `custom_image_quality` is upstream's bitrate percentage and is left to the
+/// bitrate; this is the resolution dial, which is the one that matters on
+/// hardware where the encoder is the bottleneck.
+#[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
+fn scale_for_quality(q: crate::message_proto::ImageQuality) -> Option<usize> {
+    use crate::message_proto::ImageQuality;
+    match q {
+        ImageQuality::NotSet => None,
+        ImageQuality::Best => Some(1),
+        ImageQuality::Balanced => Some(DEFAULT_SCALE),
+        ImageQuality::Low => Some(DEFAULT_SCALE * 2),
+    }
 }
 
 /// Video pump state, kept beside the message loop.
@@ -552,7 +678,9 @@ struct Video {
     /// rotation is up to. Reset to a full screen's worth whenever anything
     /// moves; drained `REPAIR_BANDS_PER_TICK` at a time while it stays still.
     repair_left: usize,
+    #[cfg_attr(target_os = "irix", allow(dead_code))]
     repair_next: usize,
+    #[cfg_attr(target_os = "irix", allow(dead_code))]
     last_repair: std::time::Instant,
     /// When the framebuffer was last sampled, for the idle backoff.
     last_probe: std::time::Instant,
@@ -576,14 +704,71 @@ struct Video {
     /// Set when the encoder could not be rebuilt; the session carries on with
     /// input only rather than dropping the peer.
     broken: bool,
+    /// Integer downscale between the framebuffer and the encoder. See
+    /// `DEFAULT_SCALE`, and `set_scale` for changing it mid-session.
+    scale: usize,
+    /// Frames since the last keyframe. See `KEYFRAME_FRAMES`.
+    since_key: u32,
+    /// The rectangles the last probe reported, in framebuffer coordinates.
+    ///
+    /// IRIX only, because IRIX is the only platform here whose server reports
+    /// exact damage. Two things are driven from it, and both are worth more
+    /// than the band flags they replace: the conversion runs over these
+    /// rectangles rather than whole bands, and the encoder's active map is
+    /// built from them so VP8 never looks at a macroblock nothing touched.
+    #[cfg(target_os = "irix")]
+    rects: Vec<crate::capture::Rect>,
+    /// Macroblocks the last frame actually let the encoder consider, for the
+    /// per-frame log line.
+    #[cfg(target_os = "irix")]
+    last_active: usize,
+    /// Framebuffer row the rolling refresh has reached. See `probe`.
+    #[cfg(target_os = "irix")]
+    refresh_next: usize,
 }
 
 #[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
 impl Video {
-    fn new(bitrate_kbps: u32) -> Result<Self, &'static str> {
+    fn new(bitrate_kbps: u32, scale: usize) -> Result<Self, &'static str> {
         let mut cap = crate::capture::Capturer::new()?;
-        let img = crate::convert::I420::new(cap.width, cap.height);
-        let enc = crate::encode::Encoder::new(img.width, img.height, bitrate_kbps)?;
+        let scale = clamp_scale(scale, cap.width, cap.height);
+        let img = crate::convert::I420::new(cap.width / scale, cap.height / scale);
+        let enc = crate::encode::Encoder::tuned(
+            img.width,
+            img.height,
+            bitrate_for(bitrate_kbps, scale),
+            video_tune(),
+        )?;
+        if scale != 1 {
+            log::info!(
+                "video: {}x{} framebuffer served at {}x{} (1/{})",
+                cap.width, cap.height, img.width, img.height, scale
+            );
+        }
+        // Which capture path we actually got, said out loud.
+        //
+        // Not cosmetic. Everything above assumes exact damage rectangles: the
+        // conversion runs over them, the encoder's active map is built from
+        // them, and the settle repaint is switched off because of them. Without
+        // SGI-SCREEN-CAPTURE the shim answers every poll with "the whole
+        // screen", so each frame becomes a full 1280x1024 ReadDisplay -- which
+        // is both the slowest thing this machine can do and the traffic pattern
+        // that has been seen to stop the X server answering at all.
+        //
+        // That happened during this session's measurements and cost half an
+        // hour, because the only symptom was every frame reporting 1280 of 1280
+        // macroblocks and the agent going quiet. The probes print the path;
+        // the agent did not.
+        #[cfg(target_os = "irix")]
+        log::info!(
+            "capture path: {}{}",
+            cap.path_name(),
+            if cap.path() == crate::capture::PATH_DAMAGE {
+                ""
+            } else {
+                "  -- NO DAMAGE TRACKING: every frame will be a full-screen read"
+            }
+        );
         cap.invalidate();   // the new peer needs a full frame regardless
         Ok(Self {
             cap,
@@ -601,13 +786,62 @@ impl Video {
             want_key: true,
             last_key: std::time::Instant::now(),
             broken: false,
+            scale,
+            since_key: 0,
+            #[cfg(target_os = "irix")]
+            rects: Vec::new(),
+            #[cfg(target_os = "irix")]
+            last_active: 0,
+            #[cfg(target_os = "irix")]
+            refresh_next: 0,
         })
+    }
+
+    /// The size the peer is actually being sent, which is the framebuffer
+    /// divided by `scale`.
+    ///
+    /// This is what goes in `PeerInfo` and `SwitchDisplay`, **not** the
+    /// framebuffer size. Telling the peer the truth about the frames it is
+    /// getting means its canvas, its pointer and the video all agree, and no
+    /// client behaviour has to be taken on trust; the alternative -- a small
+    /// frame sent into a full-size canvas -- depends on how a particular client
+    /// chooses to scale. The cost is that peer coordinates are in this space
+    /// and have to be multiplied back up before injection, which is
+    /// `Injector::set_display_scale` and `cursor::Tracker::set_scale`.
+    fn served_size(&self) -> (i32, i32) {
+        (self.img.width as i32, self.img.height as i32)
+    }
+
+    /// Change the downscale, rebuilding everything around it.
+    ///
+    /// Returns the new served size when it moved, so the caller can tell the
+    /// peer before sending a frame in it.
+    fn set_scale(&mut self, scale: usize) -> Option<(i32, i32)> {
+        let scale = clamp_scale(scale, self.cap.width, self.cap.height);
+        if scale == self.scale {
+            return None;
+        }
+        log::info!("video: scale 1/{} -> 1/{}", self.scale, scale);
+        self.scale = scale;
+        if let Err(e) = self.resize() {
+            log::error!("could not restart the encoder at 1/{}: {}", scale, e);
+            self.broken = true;
+            return None;
+        }
+        Some(self.served_size())
     }
 
     /// Rebuild the conversion and encode buffers around the current geometry.
     fn resize(&mut self) -> Result<(), &'static str> {
-        self.img = crate::convert::I420::new(self.cap.width, self.cap.height);
-        self.enc = crate::encode::Encoder::new(self.img.width, self.img.height, self.bitrate_kbps)?;
+        self.scale = clamp_scale(self.scale, self.cap.width, self.cap.height);
+        self.img =
+            crate::convert::I420::new(self.cap.width / self.scale, self.cap.height / self.scale);
+        self.enc = crate::encode::Encoder::tuned(
+            self.img.width,
+            self.img.height,
+            bitrate_for(self.bitrate_kbps, self.scale),
+            video_tune(),
+        )?;
         self.cap.invalidate();
         self.want_key = true;
         Ok(())
@@ -628,7 +862,8 @@ impl Video {
             log::error!("could not restart the encoder at the new size: {}", e);
             self.broken = true;
         }
-        Some((self.cap.width as i32, self.cap.height as i32))
+        // The served size, not the framebuffer's: see `served_size`.
+        Some(self.served_size())
     }
 
     /// A full-screen PNG, for `ScreenshotResponse`.
@@ -718,9 +953,19 @@ impl Video {
         // Invalidating and then re-probing to discover the bands we had just
         // marked ourselves cost a second full pass: 81 ms where 40 would do, on
         // every tick of the rotation.
+        // **Not on IRIX.** The whole rotation exists because the Mac's change
+        // detection is a sampled checksum that can miss a small change, so the
+        // screen has to be re-read on a timer to bound how long a missed pixel
+        // can stay wrong. SGI-SCREEN-CAPTURE reports every damaged rectangle
+        // and delivers the pixels with the report, so there is nothing to
+        // repair -- and the repair is not free here: a lap is 64 forced
+        // whole-band ReadDisplay round trips, 64 band conversions, and (through
+        // the keyframe rule just below) a forced keyframe with them.
+        #[cfg(not(target_os = "irix"))]
         let repairing = self.repair_left > 0
             && self.last_change.elapsed() >= SETTLE_REPAINT
             && self.last_repair.elapsed() >= SETTLE_REPAINT;
+        #[cfg(not(target_os = "irix"))]
         if repairing {
             self.last_repair = std::time::Instant::now();
             let n = REPAIR_BANDS_PER_TICK.min(self.repair_left);
@@ -730,26 +975,115 @@ impl Video {
                 self.repair_left -= 1;
             }
             log::debug!("repairing {} band(s); {} left to cover", n, self.repair_left);
-            // The one keyframe sent on a schedule: the encoder's static-skip
-            // threshold leaves a block uncoded while its error stays small, so
-            // a faint difference is bounded but not self-correcting.
-            if self.last_key.elapsed() >= KEYFRAME_INTERVAL {
-                self.want_key = true;
-            }
+        }
+
+        // The one keyframe sent on a schedule: the encoder's static-skip
+        // threshold leaves a block uncoded while its error stays small, so a
+        // faint difference is bounded but not self-correcting.
+        //
+        // Bounded by frames *and* seconds, and lifted out of the repair block
+        // that used to hold it. See `KEYFRAME_FRAMES` for the loop that made
+        // every frame a keyframe on IRIX.
+        //
+        // **The seconds are IRIX's problem, not its cure.** Measured under a
+        // real peer at 640x512: a keyframe costs 3.7 s where an inter frame
+        // costs 0.2-0.9 s, so a 10 s interval spent 33 seconds of every 90 on
+        // nine keyframes -- over a third of the session, buying insurance
+        // against a faint difference. What corrects that drift there is the
+        // rolling refresh below, at a fiftieth of the price, so the wall-clock
+        // rule is dropped and only the frame count remains as a backstop.
+        #[cfg(target_os = "irix")]
+        let periodic_key = self.since_key >= KEYFRAME_FRAMES;
+        #[cfg(not(target_os = "irix"))]
+        let periodic_key = self.since_key >= KEYFRAME_FRAMES
+            || (self.last_key.elapsed() >= KEYFRAME_INTERVAL && self.since_key > 0);
+        if periodic_key {
+            self.want_key = true;
         }
 
         let tp = std::time::Instant::now();
         let dirty = self.cap.dirty_bands();
+        // `dirty_bands` polled the server, so the rectangles behind those flags
+        // are already in hand. Keeping them is what lets the conversion and the
+        // encoder work on the change rather than on the screen.
+        #[cfg(target_os = "irix")]
+        {
+            self.rects.clear();
+            self.rects.extend_from_slice(self.cap.last_rects());
+        }
+        // Nothing moved, but the screen may not be exactly right: a macroblock
+        // whose residual sat under the encoder's static threshold was left
+        // uncoded, and nothing will revisit it until something else changes
+        // there. The Mac bounds that by re-reading a slice of VRAM on a timer.
+        //
+        // Here the canvas is already correct -- the server writes damage into
+        // it as it happens -- so there is nothing to re-read. What is needed is
+        // for the *encoder* to look again at a slice it has been skipping, and
+        // the active map says exactly that. A synthesised rectangle over a few
+        // macroblock rows drives the conversion and the map together, costs a
+        // fraction of what a keyframe costs, and only runs while the screen is
+        // still, so it never competes with real work.
+        #[cfg(target_os = "irix")]
+        let mut dirty = dirty;
+        // Set when this pass has nothing but the refresh in it, so the quiet
+        // timers are not restarted by our own housekeeping -- otherwise the
+        // screen never counts as idle and the probe never backs off.
+        #[cfg(target_os = "irix")]
+        let mut refresh_only = false;
+        #[cfg(target_os = "irix")]
+        if !dirty.iter().any(|d| *d)
+            && self.repair_left > 0
+            && self.last_change.elapsed() >= SETTLE_REPAINT
+            && self.last_repair.elapsed() >= SETTLE_REPAINT
+        {
+            let rows = REFRESH_ROWS.min(self.repair_left).min(self.cap.height);
+            let y0 = self.refresh_next.min(self.cap.height.saturating_sub(1));
+            let y1 = (y0 + rows).min(self.cap.height);
+            self.refresh_next = if y1 >= self.cap.height { 0 } else { y1 };
+            self.repair_left -= (y1 - y0).min(self.repair_left);
+            self.last_repair = std::time::Instant::now();
+            if y1 > y0 {
+                self.rects.push(crate::capture::Rect {
+                    x: 0,
+                    y: y0 as i32,
+                    w: self.cap.width as i32,
+                    h: (y1 - y0) as i32,
+                });
+                let bh = self.cap.band_rows().max(1);
+                for b in (y0 / bh)..=((y1 - 1) / bh).min(crate::capture::BANDS - 1) {
+                    dirty[b] = true;
+                }
+                refresh_only = true;
+                log::debug!(
+                    "refresh: rows {}..{} back through the encoder, {} to cover",
+                    y0, y1, self.repair_left
+                );
+            }
+        }
+
         if dirty.iter().any(|d| *d) {
             // A frame is starting: reset the accounting and charge it the probe
             // that found the change.
             self.t = FrameTimes::default();
             self.t.probe = tp.elapsed();
-            self.last_change = std::time::Instant::now();
             // A repair tick dirties bands by design. Letting that restart the
             // rotation would mean it never finished a lap of the screen.
-            if !repairing {
-                self.repair_left = crate::capture::BANDS;
+            #[cfg(not(target_os = "irix"))]
+            {
+                self.last_change = std::time::Instant::now();
+                if !repairing {
+                    self.repair_left = crate::capture::BANDS;
+                }
+            }
+            // Same rule, counted in framebuffer rows because that is what the
+            // rolling refresh consumes. A refresh-only pass must not restart
+            // either clock: it is our own housekeeping, not the screen moving,
+            // and treating it as movement would keep the session permanently
+            // "busy" and stop the probe ever backing off.
+            #[cfg(target_os = "irix")]
+            if !refresh_only {
+                self.last_change = std::time::Instant::now();
+                self.repair_left = self.cap.height;
             }
             return Some(dirty);
         }
@@ -761,12 +1095,69 @@ impl Video {
     /// Deliberately per-band: the caller services input between bands, so a
     /// screen-wide change no longer blocks input for the ~520 ms that reading
     /// and converting a whole frame takes.
+    #[cfg(not(target_os = "irix"))]
     fn band(&mut self, b: usize) {
         let stride = self.cap.stride();
         let t = std::time::Instant::now();
         let (y0, y1) = self.cap.read_band(b);
         let read = t.elapsed();
         crate::convert::argb_to_i420_rows(self.cap.buffer(), stride, &mut self.img, y0, y1);
+        self.t.convert += t.elapsed() - read;
+        self.t.read += read;
+        self.t.bands += 1;
+    }
+
+    /// Read one band, and convert only the parts of it that changed.
+    ///
+    /// Same contract as the Mac's, and a different amount of work behind it.
+    /// Three things differ, all of them because the server here reports exact
+    /// damage rather than being guessed at:
+    ///
+    ///   - The read is usually free. The pixels arrived with the damage report,
+    ///     so `read_band` only goes back to the server for a band something
+    ///     forced.
+    ///   - The conversion runs over the rectangles' intersection with this
+    ///     band, not the whole band. A caret blinking in a terminal is a
+    ///     handful of destination rows, not one sixty-fourth of the screen.
+    ///   - The conversion is fused with the downscale and reads A,B,G,R.
+    ///     `convert::argb_to_i420_rows` reads A,R,G,B, which is the Mac's
+    ///     framebuffer -- against this one it swaps red and blue.
+    #[cfg(target_os = "irix")]
+    fn band(&mut self, b: usize) {
+        let t = std::time::Instant::now();
+        let (y0, y1) = self.cap.read_band(b);
+        let read = t.elapsed();
+        let scale = self.scale as i32;
+        let (dw, dh) = (self.img.width as i32, self.img.height as i32);
+        let (by0, by1) = (y0 as i32, y1 as i32);
+
+        // A forced band was just re-read in full and nothing said which of its
+        // pixels moved, so all of it has to be converted. Otherwise take the
+        // rectangles, which is the whole point.
+        let mut converted = false;
+        for i in 0..self.rects.len() {
+            let r = self.rects[i];
+            let (ry0, ry1) = (r.y.max(by0), (r.y + r.h).min(by1));
+            if ry0 >= ry1 {
+                continue;
+            }
+            // Framebuffer coordinates to destination pixels, rounded outward so
+            // a partial source box is included rather than clipped.
+            let dx0 = r.x / scale;
+            let dy0 = ry0 / scale;
+            let dx1 = ((r.x + r.w + scale - 1) / scale).min(dw);
+            let dy1 = ((ry1 + scale - 1) / scale).min(dh);
+            if self.cap.to_i420_rect(&mut self.img, scale, dx0, dy0, dx1, dy1) {
+                converted = true;
+            }
+        }
+        if !converted {
+            // No rectangle covered this band, which happens when the band was
+            // force-invalidated rather than reported dirty. Convert the band.
+            let dy0 = by0 / scale;
+            let dy1 = ((by1 + scale - 1) / scale).min(dh);
+            self.cap.to_i420_rect(&mut self.img, scale, 0, dy0, dw, dy1);
+        }
         self.t.convert += t.elapsed() - read;
         self.t.read += read;
         self.t.bands += 1;
@@ -787,6 +1178,49 @@ impl Video {
         self.want_key = false;
         if force {
             self.last_key = std::time::Instant::now();
+            self.since_key = 0;
+        } else {
+            self.since_key = self.since_key.saturating_add(1);
+        }
+
+        // Tell the encoder which macroblocks are worth looking at.
+        //
+        // VP8's cost is per macroblock and almost independent of what is in
+        // one, so an ordinary desktop frame -- a caret, a line of text, a
+        // window redraw -- pays for the whole screen to discover that nothing
+        // else moved. Measured on the emulated Indy at 640x512: 3442 ms for the
+        // frame against 986 ms when only the 80 macroblocks that changed were
+        // active, and the difference grows with resolution (11x at 1280x1024).
+        //
+        // Sound only on top of a damage report that cannot miss a change: an
+        // inactive macroblock keeps the previous frame's pixels indefinitely,
+        // so an unreported change is permanent rather than late. That is why
+        // this is IRIX-only -- the Mac's sampled checksum is exactly the case
+        // it would break.
+        #[cfg(target_os = "irix")]
+        {
+            if force || self.rects.is_empty() {
+                self.enc.active_all();
+                self.last_active = self.enc.mb_rows() * self.enc.mb_cols();
+            } else {
+                let scale = self.scale as i32;
+                self.enc.active_none();
+                for i in 0..self.rects.len() {
+                    let r = self.rects[i];
+                    let x0 = r.x / scale;
+                    let y0 = r.y / scale;
+                    let x1 = (r.x + r.w + scale - 1) / scale;
+                    let y1 = (r.y + r.h + scale - 1) / scale;
+                    self.enc.active_rect(x0, y0, x1 - x0, y1 - y0);
+                }
+                self.last_active = self.enc.active_count();
+            }
+        }
+
+        #[cfg(target_os = "irix")]
+        {
+            self.t.active = self.last_active;
+            self.t.total_mb = self.enc.mb_rows() * self.enc.mb_cols();
         }
         let t = std::time::Instant::now();
         let r = self.enc.encode(&self.img, pts, force);
@@ -824,6 +1258,10 @@ struct FrameTimes {
     bands: usize,
     bytes: usize,
     key: bool,
+    /// Macroblocks the encoder was allowed to consider, and how many there are.
+    /// The ratio is the whole story of whether the damage report is paying.
+    active: usize,
+    total_mb: usize,
 }
 
 #[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
@@ -839,8 +1277,13 @@ impl FrameTimes {
         let named = self.probe + self.read + self.convert + self.encode + self.send;
         let other = total.checked_sub(named).unwrap_or_default();
         log::debug!(
-            "frame: {} band(s), probe {}, read {}, conv {}, enc {}{}, send {}, other {} = {} ms, {} B",
+            "frame: {} band(s){}, probe {}, read {}, conv {}, enc {}{}, send {}, other {} = {} ms, {} B",
             self.bands,
+            if self.total_mb > 0 {
+                format!(", {}/{} MB", self.active, self.total_mb)
+            } else {
+                String::new()
+            },
             Self::ms(self.probe),
             Self::ms(self.read),
             Self::ms(self.convert),
@@ -910,7 +1353,7 @@ fn send_cursor_position(
 /// seconds, not even that on every pass. See `IDLE_AFTER`.
 fn message_loop(peer: &mut Peer) -> io::Result<()> {
     #[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
-    let mut video = match Video::new(DEFAULT_BITRATE_KBPS) {
+    let mut video = match Video::new(DEFAULT_BITRATE_KBPS, DEFAULT_SCALE) {
         Ok(v) => Some(v),
         Err(e) => {
             // Worth spelling out: the usual cause is not the display at all but
@@ -929,6 +1372,12 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
     };
     #[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
     let mut video_retry_at = std::time::Instant::now() + VIDEO_RETRY;
+    // The downscale this session is serving at, kept out here because the input
+    // path needs it too: the peer's coordinates are in the served space, so a
+    // click at (100, 100) on a 1/2 frame is (200, 200) on the framebuffer.
+    // `Video` owns the authoritative copy; this follows it.
+    #[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
+    let mut video_scale = video.as_ref().map(|v| v.scale).unwrap_or(DEFAULT_SCALE);
 
     // IRIX has no SO_RCVTIMEO: setsockopt returns ENOPROTOOPT, and taking that
     // as fatal ended the session the instant the video pump started -- the peer
@@ -942,12 +1391,16 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
     }
     #[cfg(any(target_os = "macos", target_os = "irix"))]
     let mut injector = crate::input::Injector::new();
+    #[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
+    injector.set_display_scale(video_scale);
 
     // The pointer is a hardware overlay and is not in the captured image, so
     // the peer sees none unless we send one. Shape once, then positions as they
     // change. See `crate::cursor`.
     #[cfg(any(target_os = "macos", target_os = "irix"))]
     let mut cursor_tracker = crate::cursor::Tracker::new();
+    #[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
+    cursor_tracker.set_scale(video_scale);
     // When this peer last sent input. Its own cursor position is held back for
     // a moment afterwards -- see `cursor::SUPPRESS_AFTER_INPUT_MS`.
     #[cfg(any(target_os = "macos", target_os = "irix"))]
@@ -973,6 +1426,9 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
     // that is where the video state lives.
     #[cfg_attr(not(all(any(target_os = "macos", target_os = "irix"), not(no_vpx))), allow(unused_mut))]
     let mut refresh_requested = false;
+    // The resolution the peer asked for, which until now was logged and ignored.
+    #[cfg_attr(not(all(any(target_os = "macos", target_os = "irix"), not(no_vpx))), allow(unused_mut))]
+    let mut quality_requested: Option<usize> = None;
     // The peer's screenshot button, carrying the `sid` that has to come back on
     // the response. Same reason as above for living out here.
     #[cfg_attr(not(all(any(target_os = "macos", target_os = "irix"), not(no_vpx))), allow(unused_mut))]
@@ -1005,6 +1461,7 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
                 $wait,
                 &mut delay_outstanding,
                 &mut refresh_requested,
+                &mut quality_requested,
                 &mut screenshot_requested,
                 &mut clip_sync,
                 &mut clip_disabled,
@@ -1018,6 +1475,7 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
                 $wait,
                 &mut delay_outstanding,
                 &mut refresh_requested,
+                &mut quality_requested,
                 &mut screenshot_requested,
                 &mut clip_sync,
                 &mut clip_disabled,
@@ -1082,7 +1540,7 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
         #[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
         if no_picture && std::time::Instant::now() >= video_retry_at {
             video_retry_at = std::time::Instant::now() + VIDEO_RETRY;
-            match Video::new(DEFAULT_BITRATE_KBPS) {
+            match Video::new(DEFAULT_BITRATE_KBPS, video_scale) {
                 Ok(v) => {
                     log::info!("video is available again; this session now has a picture");
                     video = Some(v);
@@ -1111,6 +1569,28 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
                 let mut m = Message::new();
                 m.set_misc(mi);
                 peer.send(&m)?;
+            }
+
+            // The peer asked for a different picture size. Announce it before
+            // the first frame arrives in it, exactly as for a real resolution
+            // change: the peer sizes its canvas from what it was last told.
+            if let Some(want) = quality_requested.take() {
+                if let Some((w, h)) = v.set_scale(want) {
+                    video_scale = v.scale;
+                    injector.set_display_scale(video_scale);
+                    cursor_tracker.set_scale(video_scale);
+                    let mut sd = SwitchDisplay::new();
+                    sd.display = 0;
+                    sd.x = 0;
+                    sd.y = 0;
+                    sd.width = w;
+                    sd.height = h;
+                    let mut mi = Misc::new();
+                    mi.set_switch_display(sd);
+                    let mut m = Message::new();
+                    m.set_misc(mi);
+                    peer.send(&m)?;
+                }
             }
 
             // The peer asked for a fresh frame; give it a real keyframe.
@@ -1265,6 +1745,10 @@ fn drain_input(
     wait: bool,
     delay_outstanding: &mut bool,
     refresh_requested: &mut bool,
+    // The downscale the peer's `image_quality` asks for, when it sends one. Out
+    // here rather than acted on in place for the same reason as
+    // `refresh_requested`: the video state lives in the loop, not here.
+    quality_requested: &mut Option<usize>,
     screenshot_requested: &mut Option<(String, i32)>,
     clip_sync: &mut crate::clipboard::Sync,
     clip_disabled: &mut bool,
@@ -1373,6 +1857,14 @@ fn drain_input(
                         o.disable_clipboard.enum_value_or_default(),
                         o.disable_audio.enum_value_or_default()
                     );
+                    // The resolution dial, which the peer has been asking for
+                    // and being ignored on. `custom_image_quality` is upstream's
+                    // bitrate percentage and is a separate question.
+                    #[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
+                    {
+                        *quality_requested =
+                            scale_for_quality(o.image_quality.enum_value_or_default());
+                    }
                     let was = *clip_disabled;
                     *clip_disabled =
                         apply_disable_clipboard(was, o.disable_clipboard.enum_value_or_default());
@@ -1816,6 +2308,38 @@ mod tests {
     fn wrong_password_is_refused() {
         let err = run_login("hunter2", "wrong").unwrap_err();
         assert_eq!(err, "Wrong Password");
+    }
+
+    /// `clamp_scale` is the guard between a number that arrived from the peer
+    /// and the encoder's geometry. A non-power-of-two reaches
+    /// `Capturer::to_i420_rect`, which refuses it and converts nothing; a scale
+    /// large enough to leave a frame under two macroblocks reaches libvpx,
+    /// which refuses to initialise at all. Both are a session with no picture.
+    #[test]
+    fn a_requested_scale_is_rounded_to_something_the_encoder_can_use() {
+        // Rounded down to a power of two, never up: the peer asked for at least
+        // this much detail.
+        assert_eq!(clamp_scale(1, 1280, 1024), 1);
+        assert_eq!(clamp_scale(2, 1280, 1024), 2);
+        assert_eq!(clamp_scale(3, 1280, 1024), 2);
+        assert_eq!(clamp_scale(4, 1280, 1024), 4);
+        assert_eq!(clamp_scale(7, 1280, 1024), 4);
+        assert_eq!(clamp_scale(8, 1280, 1024), 8);
+        // Capped, so a peer cannot ask for a one-pixel display.
+        assert_eq!(clamp_scale(64, 1280, 1024), 8);
+        // Zero is not a divisor.
+        assert_eq!(clamp_scale(0, 1280, 1024), 1);
+    }
+
+    /// A small screen backs the scale off rather than handing libvpx a frame it
+    /// will refuse. 320x240 at 1/8 is 40x30, which is under two macroblocks
+    /// down; 1/4 is 80x60, which is fine.
+    #[test]
+    fn a_small_screen_backs_the_scale_off_instead_of_breaking_the_encoder() {
+        assert_eq!(clamp_scale(8, 320, 240), 4);
+        assert_eq!(clamp_scale(8, 128, 128), 4);
+        assert_eq!(clamp_scale(8, 64, 64), 2);
+        assert_eq!(clamp_scale(8, 32, 32), 1);
     }
 
     #[test]

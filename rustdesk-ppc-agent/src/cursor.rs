@@ -165,11 +165,35 @@ pub const SUPPRESS_AFTER_INPUT_MS: u64 = 300;
 /// moment before the first position arrives, then stops.
 pub struct Tracker {
     last: Option<(i32, i32)>,
+    /// Framebuffer pixels per peer pixel. See [`Tracker::set_scale`].
+    scale: i32,
 }
 
 impl Tracker {
     pub fn new() -> Self {
-        Self { last: None }
+        Self { last: None, scale: 1 }
+    }
+
+    /// Tell the tracker the peer's coordinate space is *downscaled*, and by
+    /// how much.
+    ///
+    /// The mirror of `input::Injector::set_display_scale`. The session tells
+    /// the peer the display is the size of the frames it will receive, so a
+    /// pointer sitting at (200, 200) on the framebuffer is at (100, 100) as far
+    /// as the peer is concerned. Sending the framebuffer figure would put the
+    /// client's pointer off the bottom-right of its own canvas.
+    ///
+    /// Comparison happens *after* scaling, deliberately: at 1/2 the pointer has
+    /// to move two framebuffer pixels before the peer's position changes at
+    /// all, and reporting a position identical to the last one is a message
+    /// that says nothing and, worse, re-triggers the client's "the remote side
+    /// is driving" suppression.
+    pub fn set_scale(&mut self, scale: usize) {
+        let s = scale.max(1) as i32;
+        if s != self.scale {
+            self.scale = s;
+            self.last = None;
+        }
     }
 
     /// Forget the last position, so the next update reports even if the
@@ -185,6 +209,7 @@ impl Tracker {
     /// position is always recorded, as upstream records it, so that once the
     /// suppression window passes only a genuine new movement is reported.
     pub fn update(&mut self, x: i32, y: i32, since_peer_input_ms: u64) -> Option<(i32, i32)> {
+        let (x, y) = (x / self.scale, y / self.scale);
         let changed = self.last != Some((x, y));
         self.last = Some((x, y));
         if !changed || since_peer_input_ms < SUPPRESS_AFTER_INPUT_MS {
@@ -274,5 +299,40 @@ mod tests {
         assert_eq!(t.update(50, 50, 0), None);
         assert_eq!(t.update(50, 50, IDLE), None, "unchanged since the suppressed update");
         assert_eq!(t.update(51, 50, IDLE), Some((51, 50)));
+    }
+
+    /// The mirror of `input::Injector::set_display_scale`: the peer's canvas is
+    /// the served size, so a pointer at (200, 160) on a 1/2 session is at
+    /// (100, 80) as far as the peer is concerned. Sending the framebuffer
+    /// figure would put the client's pointer off its own canvas.
+    #[test]
+    fn positions_are_reported_in_the_peers_coordinate_space() {
+        let mut t = Tracker::new();
+        t.set_scale(2);
+        assert_eq!(t.update(200, 160, u64::MAX), Some((100, 80)));
+    }
+
+    /// Comparison happens after scaling, so a sub-scale wobble is not reported
+    /// at all. It would be a message that says nothing, and worse: an incoming
+    /// position is how the client decides the remote side has taken over, and
+    /// it stops honouring its own mouse until something moves 12 pixels.
+    #[test]
+    fn a_move_too_small_to_show_is_not_reported() {
+        let mut t = Tracker::new();
+        t.set_scale(4);
+        assert_eq!(t.update(400, 400, u64::MAX), Some((100, 100)));
+        assert_eq!(t.update(402, 401, u64::MAX), None);
+        assert_eq!(t.update(404, 400, u64::MAX), Some((101, 100)));
+    }
+
+    /// Changing scale mid-session invalidates the last position: it was
+    /// recorded in the old space, and comparing across the two would either
+    /// suppress the first real report or invent one.
+    #[test]
+    fn changing_scale_forgets_the_last_position() {
+        let mut t = Tracker::new();
+        assert_eq!(t.update(100, 100, u64::MAX), Some((100, 100)));
+        t.set_scale(2);
+        assert_eq!(t.update(200, 200, u64::MAX), Some((100, 100)));
     }
 }

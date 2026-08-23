@@ -1,0 +1,103 @@
+Skip the whole realtime mode picker for a macroblock the active map excludes.
+
+libvpx honours VP8E_SET_ACTIVEMAP already, but the check lives deep inside
+evaluate_inter_mode(), which vp8_pick_inter_mode() only reaches after running
+get_predictor_pointers(), the dot-artifact check (SAD over Y and both chroma
+planes), the skin-map lookup, get_reference_search_order(),
+vp8_find_near_mvs_bias() and part of the mode loop -- all for a macroblock the
+caller has already said is not to be coded.
+
+On hardware where VP8 is the bottleneck that prologue *is* the frame rate.
+Measured on IRIX 6.5.22m / R5000 under IRIS, three interleaved rounds of a frame
+whose active map selects nothing at all (`perfprobe floor`):
+
+               stock          patched
+   160x128      23/30/24 ms   21/18/20 ms
+   320x256      51/50/51 ms   39/34/37 ms
+   640x512     166/172/191 ms 95/91/94 ms     1.9x
+  1280x1024    753/708/712 ms 309/348/340 ms  2.2x
+
+That is the floor under every frame no matter how little changed, and on a
+remote desktop almost nothing changes: at 640x512 it took the ceiling from 5.8
+to 10.5 frames per second.
+
+The answer for an excluded macroblock is a definition rather than a search
+result -- nothing here moved, so code it as ZEROMV against LAST and skip it.
+That is where the existing late exit lands anyway: it sets x->skip, and the mode
+loop then takes its `|| x->skip` branch and breaks. So this changes when the
+decision is made, not what it is.
+
+Placed in vp8cx_encode_inter_macroblock() rather than inside the picker so that
+it covers the RD path as well, and so the work that follows a skip -- building
+the inter predictors, setting mb_skip_coeff, vp8_fix_contexts -- is done here
+exactly as that function does it for any other skipped macroblock.
+
+Verified on the target, not just built: a 100-second session against a moving
+desktop, every frame decoded by the peer, and the decoded picture compared
+against a fresh capture of the same screen -- mean absolute difference 2.40 of
+255, and every large difference inside the one region (an xclock) that was still
+moving. A wrongly-skipped macroblock would show up there as a block of large
+differences and nowhere else.
+
+--- a/vp8/encoder/encodeframe.c
++++ b/vp8/encoder/encodeframe.c
+@@ -1122,6 +1122,59 @@
+ 
+   x->skip = 0;
+ 
++  /* A macroblock the caller has excluded needs no search at all.
++   *
++   * libvpx honours the active map already, but only inside
++   * evaluate_inter_mode() -- by which point vp8_pick_inter_mode() has run
++   * get_predictor_pointers(), the dot-artifact check (SAD over Y and both
++   * chroma planes), the skin-map lookup, get_reference_search_order(),
++   * vp8_find_near_mvs_bias() and part of the mode loop, all to decide
++   * something the caller stated.
++   *
++   * On hardware where VP8 is the bottleneck that prologue is the frame rate.
++   * On IRIX 6.5 / R5000 at 640x512, a frame whose map selects *nothing* still
++   * costs 173 ms -- 0.135 ms per excluded macroblock, 1280 times -- and that is
++   * the floor under every frame however little changed. On a remote desktop,
++   * almost nothing changes.
++   *
++   * The answer here is a definition rather than a search result: nothing moved,
++   * so code it as ZEROMV against LAST and skip it. That is where the existing
++   * late exit lands anyway (it sets x->skip, the mode loop takes its `||
++   * x->skip` branch and breaks), so this changes when the decision is made and
++   * not what it is. Everything below -- the inter predictors, mb_skip_coeff,
++   * vp8_fix_contexts -- then runs as it does for any other skipped macroblock.
++   */
++  if (cpi->active_map_enabled && x->active_ptr[0] == 0) {
++    MB_MODE_INFO *mbmi = &xd->mode_info_context->mbmi;
++    mbmi->mode = ZEROMV;
++    mbmi->ref_frame = LAST_FRAME;
++    mbmi->mv.as_int = 0;
++    mbmi->uv_mode = DC_PRED;
++    mbmi->partitioning = 0;
++    mbmi->need_to_clamp_mvs = 0;
++    x->skip = 1;
++    x->mbs_tested_so_far++;
++    x->count_mb_ref_frame_usage[LAST_FRAME]++;
++
++    xd->pre.y_buffer =
++        cpi->common.yv12_fb[cpi->common.lst_fb_idx].y_buffer + recon_yoffset;
++    xd->pre.u_buffer =
++        cpi->common.yv12_fb[cpi->common.lst_fb_idx].u_buffer + recon_uvoffset;
++    xd->pre.v_buffer =
++        cpi->common.yv12_fb[cpi->common.lst_fb_idx].v_buffer + recon_uvoffset;
++    vp8_build_inter16x16_predictors_mb(xd, xd->dst.y_buffer, xd->dst.u_buffer,
++                                       xd->dst.v_buffer, xd->dst.y_stride,
++                                       xd->dst.uv_stride);
++    mbmi->mb_skip_coeff = 1;
++    if (cpi->common.mb_no_coeff_skip) {
++      x->skip_true_count++;
++      vp8_fix_contexts(xd);
++    } else {
++      vp8_stuff_mb(cpi, x, t);
++    }
++    return 0;
++  }
++
+   if (xd->segmentation_enabled) {
+     x->encode_breakout =
+         cpi->segment_encode_breakout[xd->mode_info_context->mbmi.segment_id];

@@ -54,6 +54,10 @@ path = "src/bin/capture-selftest.rs"
 name = "pipeline"
 path = "src/bin/pipeline.rs"
 
+[[bin]]
+name = "perfprobe"
+path = "src/bin/perfprobe.rs"
+
 [profile.release]
 opt-level = 2
 panic = "abort"

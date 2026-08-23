@@ -10,7 +10,9 @@
 //!
 //!     testpeer <host:port> [password] [seconds]
 
+use rustdesk_ppc_agent::convert::I420;
 use rustdesk_ppc_agent::crypto::{expected_login_hash, SecureChannel};
+use rustdesk_ppc_agent::encode::Decoder;
 use rustdesk_ppc_agent::frame::{read_frame, write_frame};
 use rustdesk_ppc_agent::message_proto::*;
 use protobuf::Message as _;
@@ -56,6 +58,37 @@ fn main() {
     let addr = args.get(0).cloned().unwrap_or_else(|| "127.0.0.1:21118".into());
     let password = args.get(1).cloned().unwrap_or_default();
     let secs: u64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(30);
+    // Optional: `move X Y`, sent once after login. The point is the round trip
+    // rather than the click -- on a downscaled session the peer's coordinates
+    // are in the *served* space, and the position the agent reports back comes
+    // through the same transform in the other direction. Ask for (100, 100) on
+    // a 1/2 session, get (100, 100) back, and both halves of the scaling agree.
+    // `decode` turns on decoding every frame and writing the last one out.
+    //
+    // Off by default, and that is not a preference. The guest is a single
+    // processor: decoding costs it roughly what encoding costs it, and running
+    // both in the same machine measured 0.67 fps against 1.21 for the same
+    // agent and the same screen. A throughput number taken with the decoder
+    // running is a number about the decoder.
+    let want_decode = args.iter().any(|a| a == "decode");
+    // `quality low|balanced|best`, sent as an OptionMessage after login. The
+    // agent turns it into a downscale and answers with a SwitchDisplay, so this
+    // is the only way to check the resolution dial the peer is actually holding.
+    let quality: Option<ImageQuality> = args
+        .iter()
+        .position(|a| a == "quality")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|q| match q.as_str() {
+            "low" => Some(ImageQuality::Low),
+            "balanced" => Some(ImageQuality::Balanced),
+            "best" => Some(ImageQuality::Best),
+            _ => None,
+        });
+    let mouse_at: Option<(i32, i32)> = args.iter().position(|a| a == "move").and_then(|i| {
+        let x = args.get(i + 1)?.parse().ok()?;
+        let y = args.get(i + 2)?.parse().ok()?;
+        Some((x, y))
+    });
 
     println!("connecting to {}", addr);
     let stream = match TcpStream::connect(&addr) {
@@ -102,7 +135,7 @@ fn main() {
             let hash = early_hash.unwrap();
             println!("hash: salt {} chars, challenge {} chars",
                      hash.salt.len(), hash.challenge.len());
-            finish_login(&mut c, &hash, &password, secs);
+            finish_login(&mut c, &hash, &password, secs, mouse_at, want_decode, quality);
             return;
         }
     };
@@ -167,10 +200,18 @@ fn main() {
     };
     println!("hash: salt {} chars, challenge {} chars", hash.salt.len(), hash.challenge.len());
 
-    finish_login(&mut c, &hash, &password, secs);
+    finish_login(&mut c, &hash, &password, secs, mouse_at, want_decode, quality);
 }
 
-fn finish_login(c: &mut Peer, hash: &Hash, password: &str, secs: u64) {
+fn finish_login(
+    c: &mut Peer,
+    hash: &Hash,
+    password: &str,
+    secs: u64,
+    mouse_at: Option<(i32, i32)>,
+    want_decode: bool,
+    quality: Option<ImageQuality>,
+) {
     // Log in.
     let mut req = LoginRequest::new();
     req.my_id = "testpeer".into();
@@ -219,6 +260,56 @@ fn finish_login(c: &mut Peer, hash: &Hash, password: &str, secs: u64) {
         }
     }
 
+    // Ask for a picture size. The agent answers with a SwitchDisplay carrying
+    // the size it will now send, which the loop below prints.
+    if let Some(q) = quality {
+        let mut o = OptionMessage::new();
+        o.image_quality = ::protobuf::ProtobufEnumOrUnknown::new(q);
+        let mut mi = Misc::new();
+        mi.set_option(o);
+        let mut m = Message::new();
+        m.set_misc(mi);
+        match c.send(&m) {
+            Ok(_) => println!("asked for image_quality {:?}", q),
+            Err(e) => println!("option send failed: {}", e),
+        }
+    }
+
+    // Optionally drive the pointer, so the coordinate scaling can be checked
+    // against a running agent rather than only in a unit test.
+    if let Some((x, y)) = mouse_at {
+        let mut me = MouseEvent::new();
+        me.mask = 0;   // kind 0: a plain absolute move
+        me.x = x;
+        me.y = y;
+        let mut m = Message::new();
+        m.set_mouse_event(me);
+        match c.send(&m) {
+            Ok(_) => println!("sent a pointer move to ({}, {}) in the served space", x, y),
+            Err(e) => println!("mouse send failed: {}", e),
+        }
+    }
+
+    // Decode what arrives. The frames have to go through in order and none may
+    // be skipped -- an inter frame is a difference against its predecessor --
+    // so this decodes every one and keeps the last, which is then written out
+    // as a PPM anyone can look at. That is the only check that covers the whole
+    // chain: capture, byte order, downscale, colour conversion, encode, decode.
+    let mut dec = if !want_decode {
+        None
+    } else {
+        match Decoder::new() {
+            Ok(d) => Some(d),
+            Err(e) => {
+                println!("no decoder ({}); frames will be counted but not checked", e);
+                None
+            }
+        }
+    };
+    let mut pic = I420::new(16, 16);
+    let mut decoded = 0u32;
+    let mut decode_errs = 0u32;
+
     // 6. Watch the video pump.
     println!("\nwatching for {} s ...", secs);
     let start = Instant::now();
@@ -240,11 +331,29 @@ fn finish_login(c: &mut Peer, hash: &Hash, password: &str, secs: u64) {
                                 first_frame_ms = Some(start.elapsed().as_secs() as f64 * 1000.0
                                     + start.elapsed().subsec_millis() as f64);
                             }
+                            if let Some(d) = dec.as_mut() {
+                                match d.decode(&f.data, &mut pic) {
+                                    Ok(_) => decoded += 1,
+                                    Err(_) => decode_errs += 1,
+                                }
+                            }
                         }
                     }
                 }
-                Some(message::Union::cursor_data(_)) | Some(message::Union::cursor_position(_)) => {
+                Some(message::Union::cursor_position(cp)) => {
                     cursors += 1;
+                    if mouse_at.is_some() && cursors < 8 {
+                        println!("  agent reports the pointer at ({}, {})", cp.x, cp.y);
+                    }
+                }
+                Some(message::Union::cursor_data(_)) => {
+                    cursors += 1;
+                }
+                Some(message::Union::misc(mi)) => {
+                    others += 1;
+                    if let Some(misc::Union::switch_display(sd)) = mi.union {
+                        println!("  agent switched the display to {}x{}", sd.width, sd.height);
+                    }
                 }
                 _ => others += 1,
             },
@@ -271,9 +380,47 @@ fn finish_login(c: &mut Peer, hash: &Hash, password: &str, secs: u64) {
     }
     println!("  cursor msgs    {}", cursors);
     println!("  other msgs     {}", others);
+    if dec.is_some() {
+        println!("  decoded        {} ok, {} refused", decoded, decode_errs);
+        if decoded > 0 {
+            write_ppm("/tmp/decoded.ppm", &pic);
+        }
+    }
     println!("{}", if frames > 0 {
         "VERDICT: the agent is serving video to a peer."
     } else {
         "VERDICT: logged in but no video arrived."
     });
+}
+
+
+/// Write an I420 picture out as a PPM, converting through the inverse of the
+/// coefficients `convert.rs` uses.
+///
+/// PPM because it needs no library on either side and `od` can read a pixel out
+/// of it over telnet, which is how this gets checked when there is no way to
+/// display an image on the machine under test.
+fn write_ppm(path: &str, img: &I420) {
+    let (w, h) = (img.width, img.height);
+    if w == 0 || h == 0 {
+        return;
+    }
+    let cs = img.chroma_stride();
+    let mut out = format!("P6\n{} {}\n255\n", w, h).into_bytes();
+    out.reserve(w * h * 3);
+    for y in 0..h {
+        for x in 0..w {
+            let yy = img.y[y * w + x] as i32 - 16;
+            let u = img.u[(y / 2) * cs + x / 2] as i32 - 128;
+            let v = img.v[(y / 2) * cs + x / 2] as i32 - 128;
+            let c = |n: i32| if n < 0 { 0u8 } else if n > 255 { 255 } else { n as u8 };
+            out.push(c((298 * yy + 409 * v + 128) >> 8));
+            out.push(c((298 * yy - 100 * u - 208 * v + 128) >> 8));
+            out.push(c((298 * yy + 516 * u + 128) >> 8));
+        }
+    }
+    match std::fs::write(path, &out) {
+        Ok(_) => println!("  wrote {} ({}x{}) -- the picture the peer actually got", path, w, h),
+        Err(e) => println!("  could not write {}: {}", path, e),
+    }
 }

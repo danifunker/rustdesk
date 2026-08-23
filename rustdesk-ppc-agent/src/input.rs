@@ -259,11 +259,29 @@ pub struct Injector {
     /// Buttons currently held, so a move can be reported as the drag it is —
     /// posting a plain move mid-drag breaks selection and drag-and-drop.
     buttons_down: u8,
+    /// Framebuffer pixels per peer pixel. See [`Injector::set_display_scale`].
+    display_scale: f64,
 }
 
 impl Injector {
     pub fn new() -> Self {
-        Self { buttons_down: 0 }
+        Self { buttons_down: 0, display_scale: 1.0 }
+    }
+
+    /// Tell the injector that the peer's coordinates are in a *downscaled*
+    /// space, and by how much.
+    ///
+    /// The session tells the peer the display is the size of the frames it will
+    /// receive, not the size of the framebuffer — see `Video::served_size` —
+    /// so on IRIX at 1/2 a click the peer reports at (100, 100) belongs at
+    /// (200, 200). Applied here rather than at the call site because
+    /// `decide_mouse` is the pure, host-tested half of this module and a
+    /// coordinate transform is exactly the kind of decision it exists to hold.
+    ///
+    /// Absolute positions and relative deltas both scale; scroll deltas do not,
+    /// because a wheel notch is not a distance on the screen.
+    pub fn set_display_scale(&mut self, scale: usize) {
+        self.display_scale = scale.max(1) as f64;
     }
 
     /// Decide what a mouse event means, and track which buttons are held.
@@ -272,7 +290,8 @@ impl Injector {
     /// the kind (0 move, 1 down, 2 up, 3 wheel, **4 trackpad**) and the rest is
     /// the button (1 left, 2 right, 4 middle).
     pub fn decide_mouse(&mut self, ev: &MouseEvent) -> MouseAction {
-        let (x, y) = (ev.x as f64, ev.y as f64);
+        let sc = self.display_scale;
+        let (x, y) = (ev.x as f64 * sc, ev.y as f64 * sc);
         let kind = ev.mask & 0x7;
         let button = ev.mask >> 3;
         // The three buttons `CGPostMouseEvent` carries, and nothing else.
@@ -351,8 +370,8 @@ impl Injector {
                 let ty = self.drag_type();
                 MouseAction::MoveBy {
                     ty,
-                    dx: ev.x.clamp(-MAX_RELATIVE_DELTA, MAX_RELATIVE_DELTA) as f64,
-                    dy: ev.y.clamp(-MAX_RELATIVE_DELTA, MAX_RELATIVE_DELTA) as f64,
+                    dx: ev.x.clamp(-MAX_RELATIVE_DELTA, MAX_RELATIVE_DELTA) as f64 * sc,
+                    dy: ev.y.clamp(-MAX_RELATIVE_DELTA, MAX_RELATIVE_DELTA) as f64 * sc,
                 }
             }
             _ => MouseAction::Ignore,
@@ -649,6 +668,55 @@ mod tests {
     }
 
     /// Back and forward exist in the client's mask and have no equivalent here:
+    /// A downscaled session hands the injector peer coordinates in the
+    /// *served* space, not the framebuffer's. Getting this backwards puts every
+    /// click at a quarter of the distance from the top-left corner, which looks
+    /// like a broken pointer rather than a wrong constant.
+    #[test]
+    fn peer_coordinates_scale_back_up_to_the_framebuffer() {
+        let mut inj = Injector::new();
+        inj.set_display_scale(2);
+        match inj.decide_mouse(&mouse(0, 100, 80)) {
+            MouseAction::MoveOrDrag { x, y, .. } => assert_eq!((x, y), (200.0, 160.0)),
+            other => panic!("{:?}", other),
+        }
+        // A press carries coordinates too, and they are in the same space.
+        match inj.decide_mouse(&mouse(LEFT | DOWN, 10, 20)) {
+            MouseAction::Button { x, y, .. } => assert_eq!((x, y), (20.0, 40.0)),
+            other => panic!("{:?}", other),
+        }
+    }
+
+    /// Relative deltas are a distance on the screen and scale with it. Scroll
+    /// deltas are not: a wheel notch is a line, not a length, so scaling one
+    /// would make the wheel jump further on a downscaled session for no reason.
+    #[test]
+    fn relative_deltas_scale_but_scroll_does_not() {
+        let mut inj = Injector::new();
+        inj.set_display_scale(4);
+        match inj.decide_mouse(&mouse(5, 3, -7)) {
+            MouseAction::MoveBy { dx, dy, .. } => assert_eq!((dx, dy), (12.0, -28.0)),
+            other => panic!("{:?}", other),
+        }
+        match inj.decide_mouse(&mouse(3, 0, -1)) {
+            MouseAction::Scroll { dx, dy, pixels } => {
+                assert_eq!((dx, dy, pixels), (0, -1, false))
+            }
+            other => panic!("{:?}", other),
+        }
+    }
+
+    /// The default has to be 1, or every platform that never calls the setter
+    /// silently doubles its own coordinates.
+    #[test]
+    fn an_unscaled_session_is_the_default() {
+        let mut inj = Injector::new();
+        match inj.decide_mouse(&mouse(0, 100, 80)) {
+            MouseAction::MoveOrDrag { x, y, .. } => assert_eq!((x, y), (100.0, 80.0)),
+            other => panic!("{:?}", other),
+        }
+    }
+
     /// `CGPostMouseEvent` carries three buttons. They used to fall through to
     /// left, which is a stray click on whatever the pointer is over -- and from
     /// 1.3.8 a mobile peer's back gesture sends back rather than right.

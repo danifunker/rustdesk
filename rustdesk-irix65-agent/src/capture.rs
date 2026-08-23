@@ -44,7 +44,15 @@ pub const BANDS: usize = 64;
 /// Most rectangles fetched from one poll. Beyond this the shim merges them into
 /// their bounding box rather than dropping any, so the canvas and the report
 /// can never disagree.
-const MAX_RECTS: usize = 64;
+///
+/// **Raised from 64 after the merge showed up in a live session.** A busy
+/// `xterm` reported enough rectangles to overflow 64, and the bounding box that
+/// replaced them covered 434 of the frame's 1280 macroblocks where the actual
+/// change was nearer 180 -- so the merge was costing a third of the conversion
+/// and a third of the encode, on precisely the frames that were already the
+/// expensive ones. Four kilobytes of `int` is not a reason to throw away a
+/// damage report the server has already worked out.
+const MAX_RECTS: usize = 256;
 
 pub const PATH_DAMAGE: i32 = 0;
 pub const PATH_READDISPLAY: i32 = 1;
@@ -80,6 +88,22 @@ extern "C" {
         src_stride: c_int,
         dst: *mut u8,
         factor: c_int,
+    ) -> c_int;
+    fn rd_abgr_to_i420_rect(
+        src: *const u8,
+        src_len: usize,
+        src_stride: c_int,
+        yp: *mut u8,
+        up: *mut u8,
+        vp: *mut u8,
+        dst_w: c_int,
+        dst_h: c_int,
+        chroma_stride: c_int,
+        factor: c_int,
+        dx0: c_int,
+        dy0: c_int,
+        dx1: c_int,
+        dy1: c_int,
     ) -> c_int;
 }
 
@@ -467,7 +491,66 @@ impl Capturer {
         }
         (&self.scaled, dw, dh)
     }
+
+    /// Downscale **and** convert to I420 in one walk of the canvas, over a
+    /// rectangle of the destination.
+    ///
+    /// This is the frame loop's hot path and it replaces three separate costs:
+    /// `scaled()`'s pass over the canvas, the full-size ABGR intermediate it
+    /// wrote, and `convert::argb_to_i420_rows`' pass back over that. It also
+    /// fixes the byte order — the shared converter reads A,R,G,B, which is the
+    /// Mac's framebuffer and not this one.
+    ///
+    /// `factor` must be a power of two; anything else is refused rather than
+    /// quietly rounded, because the box average folds into the BT.601 weights
+    /// as a shift and a per-pixel divide is not affordable here.
+    ///
+    /// Bounds are in destination pixels and are snapped outward to even.
+    /// Returns false if the arguments did not make sense, in which case nothing
+    /// was written.
+    pub fn to_i420_rect(
+        &self,
+        img: &mut crate::convert::I420,
+        factor: i32,
+        dx0: i32,
+        dy0: i32,
+        dx1: i32,
+        dy1: i32,
+    ) -> bool {
+        let src = unsafe { rd_capture_buffer(self.inner) };
+        if src.is_null() {
+            return false;
+        }
+        let cs = img.chroma_stride() as c_int;
+        let (w, h) = (img.width as c_int, img.height as c_int);
+        let rc = unsafe {
+            rd_abgr_to_i420_rect(
+                src,
+                self.stride * self.height,
+                self.stride as c_int,
+                img.y.as_mut_ptr(),
+                img.u.as_mut_ptr(),
+                img.v.as_mut_ptr(),
+                w,
+                h,
+                cs,
+                factor as c_int,
+                dx0 as c_int,
+                dy0 as c_int,
+                dx1 as c_int,
+                dy1 as c_int,
+            )
+        };
+        rc == 0
+    }
+
+    /// The whole screen through `to_i420_rect`.
+    pub fn to_i420(&self, img: &mut crate::convert::I420, factor: i32) -> bool {
+        let (w, h) = (img.width as i32, img.height as i32);
+        self.to_i420_rect(img, factor, 0, 0, w, h)
+    }
 }
+
 
 unsafe fn last_error(c: *const RdCapture) -> String {
     let p = rd_capture_last_error(c);

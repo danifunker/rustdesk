@@ -27,6 +27,8 @@ extern "C" {
         static_thresh: c_int,
         last_ref_only: c_int,
         error_resilient: c_int,
+        profile: c_int,
+        min_q: c_int,
     ) -> *mut VpxEnc;
     fn vpxenc_encode(
         e: *mut VpxEnc,
@@ -43,6 +45,12 @@ extern "C" {
         is_key: *mut c_int,
     ) -> c_int;
     fn vpxenc_free(e: *mut VpxEnc);
+    fn vpxenc_mb_rows(e: *const VpxEnc) -> c_int;
+    fn vpxenc_mb_cols(e: *const VpxEnc) -> c_int;
+    fn vpxenc_amap_clear(e: *mut VpxEnc);
+    fn vpxenc_amap_rect(e: *mut VpxEnc, x: c_int, y: c_int, w: c_int, h: c_int);
+    fn vpxenc_amap_off(e: *mut VpxEnc);
+    fn vpxenc_amap_active(e: *const VpxEnc) -> c_int;
 }
 
 /// Fastest setting VP8 accepts. Quality is not the constraint here; wall-clock is.
@@ -82,6 +90,23 @@ pub struct Tune {
     pub last_ref_only: bool,
     /// Code each frame independently of the entropy state. Pointless over TCP.
     pub error_resilient: bool,
+    /// VP8 bitstream profile, 0-3. **Not a feature level** -- every VP8 decoder
+    /// must handle all four -- but a set of encoder cost decisions:
+    ///
+    /// ```text
+    ///   0  normal loop filter, six-tap sub-pixel MC   (libvpx default)
+    ///   1  simple loop filter, bilinear MC
+    ///   2  no loop filter,     bilinear MC
+    ///   3  no loop filter,     simple filter, full-pixel MC only
+    /// ```
+    ///
+    /// The loop filter is a pass over every pixel of every frame, and its job
+    /// is hiding block edges in natural video. See `Default` for what it
+    /// measured here.
+    pub profile: u32,
+    /// `rc_min_quantizer`: the floor on quality, and so on how many
+    /// coefficients there are to transform, quantise and tokenise.
+    pub min_q: u32,
 }
 
 impl Default for Tune {
@@ -105,6 +130,8 @@ impl Default for Tune {
             static_threshold: 1000,
             last_ref_only: false,
             error_resilient: true,
+            profile: 0,
+            min_q: 8,
         }
     }
 }
@@ -156,12 +183,57 @@ impl Encoder {
                 tune.static_threshold as c_int,
                 tune.last_ref_only as c_int,
                 tune.error_resilient as c_int,
+                tune.profile as c_int,
+                tune.min_q as c_int,
             )
         };
         if inner.is_null() {
             return Err("vpx encoder init failed");
         }
         Ok(Self { inner, width, height })
+    }
+
+    /// Macroblocks across and down. The active map is one byte per macroblock,
+    /// so these are what a caller needs to reason about its granularity: on a
+    /// 640x512 frame the whole screen is 40 x 32 = 1280 of them, and a line of
+    /// text in a terminal is about six.
+    pub fn mb_rows(&self) -> usize {
+        unsafe { vpxenc_mb_rows(self.inner) as usize }
+    }
+
+    pub fn mb_cols(&self) -> usize {
+        unsafe { vpxenc_mb_cols(self.inner) as usize }
+    }
+
+    /// Begin describing which macroblocks the next inter frame should look at.
+    /// Everything is inactive until `active_rect` says otherwise.
+    ///
+    /// **Only sound on top of a damage report that cannot miss a change.** An
+    /// inactive macroblock keeps the previous frame's pixels indefinitely, so a
+    /// change that goes unreported is a permanent artefact rather than a late
+    /// one. IRIX's SGI-SCREEN-CAPTURE reports exact rectangles; the Mac's
+    /// sampled checksum does not, which is why this is not wired in there.
+    pub fn active_none(&mut self) {
+        unsafe { vpxenc_amap_clear(self.inner) };
+    }
+
+    /// Mark the macroblocks a rectangle of the *encoded* frame touches.
+    /// Coordinates are in encoder pixels, so a caller working at a scale factor
+    /// has to divide first.
+    pub fn active_rect(&mut self, x: i32, y: i32, w: i32, h: i32) {
+        unsafe { vpxenc_amap_rect(self.inner, x, y, w, h) };
+    }
+
+    /// Go back to considering every macroblock.
+    pub fn active_all(&mut self) {
+        unsafe { vpxenc_amap_off(self.inner) };
+    }
+
+    /// How many macroblocks the current map would encode, for logging. The
+    /// ratio against `mb_rows() * mb_cols()` is the whole story of whether the
+    /// damage report is buying anything.
+    pub fn active_count(&self) -> usize {
+        unsafe { vpxenc_amap_active(self.inner) as usize }
     }
 
     /// Encode one frame. The returned slice is owned by the encoder and stays
@@ -215,3 +287,104 @@ impl Drop for Encoder {
 
 // The encoder is only used from the single session thread.
 unsafe impl Send for Encoder {}
+
+
+/// A VP8 decoder, for checking the picture rather than the pipeline.
+///
+/// Every stage of the encode path has been verified against something that
+/// agrees with it — the converter against its own reference, the encoder
+/// against its own round trip — and none of that answers whether the frame the
+/// peer receives looks like the screen. A red/blue swap satisfies every one of
+/// those checks, and did, for two sessions.
+///
+/// Used by `testpeer`, not by the agent. It exists so that a change to the
+/// encoder's settings can be checked by looking at the result: dropping the
+/// loop filter and sub-pixel motion compensation (see [`Tune::profile`]) leaves
+/// a perfectly decodable stream whether or not it still resembles the desktop.
+pub struct Decoder {
+    inner: *mut VpxDec,
+    /// Last decoded geometry, so a caller can size its planes.
+    pub width: usize,
+    pub height: usize,
+}
+
+#[repr(C)]
+struct VpxDec {
+    _private: [u8; 0],
+}
+
+extern "C" {
+    fn vpxdec_new() -> *mut VpxDec;
+    fn vpxdec_decode(
+        d: *mut VpxDec,
+        data: *const u8,
+        len: usize,
+        y: *mut u8,
+        u: *mut u8,
+        v: *mut u8,
+        ycap: usize,
+        uvcap: usize,
+        w: *mut c_int,
+        h: *mut c_int,
+    ) -> c_int;
+    fn vpxdec_free(d: *mut VpxDec);
+}
+
+impl Decoder {
+    pub fn new() -> Result<Self, &'static str> {
+        let inner = unsafe { vpxdec_new() };
+        if inner.is_null() {
+            return Err("vpx decoder init failed");
+        }
+        Ok(Self { inner, width: 0, height: 0 })
+    }
+
+    /// Decode one frame into `img`, resizing it if the stream says to.
+    ///
+    /// Frames must be fed in order and none may be skipped: an inter frame is a
+    /// difference against its predecessor, so a gap does not produce a slightly
+    /// wrong picture, it produces a wrong one that stays wrong until the next
+    /// keyframe.
+    pub fn decode(&mut self, data: &[u8], img: &mut I420) -> Result<(), &'static str> {
+        let (mut w, mut h) = (0 as c_int, 0 as c_int);
+        let call = |img: &mut I420, w: &mut c_int, h: &mut c_int| unsafe {
+            vpxdec_decode(
+                self.inner,
+                data.as_ptr(),
+                data.len(),
+                img.y.as_mut_ptr(),
+                img.u.as_mut_ptr(),
+                img.v.as_mut_ptr(),
+                img.y.len(),
+                img.u.len(),
+                w,
+                h,
+            )
+        };
+        match call(img, &mut w, &mut h) {
+            0 => {}
+            // -2 means the planes were too small, and it reports the size that
+            // would do. Grow and decode the *same* frame again rather than
+            // dropping it: see the note above about gaps.
+            -2 => {
+                *img = I420::new(w as usize, h as usize);
+                if call(img, &mut w, &mut h) != 0 {
+                    return Err("vpx decode failed after resizing");
+                }
+            }
+            _ => return Err("vpx decode failed"),
+        }
+        self.width = w as usize;
+        self.height = h as usize;
+        Ok(())
+    }
+}
+
+impl Drop for Decoder {
+    fn drop(&mut self) {
+        unsafe { vpxdec_free(self.inner) };
+        self.inner = std::ptr::null_mut();
+    }
+}
+
+unsafe impl Send for Decoder {}

@@ -1,22 +1,24 @@
 # RESUME — RustDesk agent for IRIX (SGI MIPS)
 
-Pick-up point. Last updated 2026-08-19, end of the session that **got the agent
-itself running on IRIX**: a peer connects over the real protocol, logs in, and
-receives VP8 video, and mouse injection works.
+Pick-up point. Last updated 2026-08-23, end of the session that **made it
+fast enough to watch**: 0.03 frames per second to 1.3-1.4, with small changes
+arriving in about 100 ms. See §PERFORMANCE for what moved and by how much.
+(The host is shared and loaded; the same build measured 0.80 to 1.40 fps at
+different moments. Ratios within a run are the trustworthy part.)
 
-The previous session's blocker was not real. Cross-compiled X11 clients were
-never at fault: the X server on the image had wedged, and *every* client hung
-against it, IRIX's own included. A freshly started server answers our binaries
-immediately. See §THE BLOCKER, RESOLVED.
+Before that, the session of 2026-08-19 **got the agent itself running**: a peer
+connects over the real protocol, logs in, receives VP8 video, and mouse
+injection works.
 
 Capture is built and verified on hardware, in C and in Rust. Rust std builds for
 `mips-sgi-irix6.5`, the whole agent compiles and links, and `rustdesk-agent`
-serves a real session.
+serves a real session at a rate a person could use.
 
-**The one thing standing between this and a usable remote desktop is not in the
-agent.** The emulated X server wedges after roughly one full-screen frame, so
-throughput cannot be demonstrated under IRIS. Everything above the X server
-works; see §THE AGENT RUNS and §THE REMAINING BLOCKER.
+**What is not yet proven is a real login session.** Every measurement here was
+taken against a bare `Xsgi :0 -bs -c`. Starting xdm on the emulator still wedges
+the X server — CPU time frozen, IRIX's own `xdpyinfo` hanging — so a logged-in
+4Dwm desktop has never been captured. The authority question that worried us is
+answered and the answer is good; see §A REAL LOGIN SESSION.
 
 ---
 
@@ -38,18 +40,27 @@ rust            ports/rust/rustup   PRIVATE RUSTUP_HOME (nightly 1.99.0, IRIX-pa
                 ports/rust/cargo    PRIVATE CARGO_HOME  (IRIX-patched crate registry)
                 source ports/rust/env.sh before any cargo command
 
-emulator        ports/iris-run/iris-target/release/iris   PRIVATE build, has chd
-                (~/repos/iris/target/release/iris no longer does — see Boot)
+emulator        ~/iris-upstream/target/release/{iris,iris-ci}   upstream at 02c4e155,
+                which has the hostr readback fix. --cpu is a RUNTIME option now
+                (--cpu r5000); the CPU is no longer a build feature, and there is
+                no private build any more. Do NOT go back to an older one.
+                ~/repos/iris has uncommitted work that is not ours: do not touch.
 disk            ~/Indy-IRIX65_dev.chd            IRIX 6.5.22m, R5000, /usr/sgug populated
 backup          ~/Indy-IRIX65_dev.chd.bak-before-first-write   pristine, keep
 run config      ports/iris-run/iris.toml         ci_socket is now /tmp/iris-rdagent.sock
 nvram           ports/iris-run/nvram-irix65.bin  has console=d; do not lose it
 shells          ports/iris-run/irixsh.py         telnet driver (superseded, see gsh.py)
                 ports/iris-run/gsh.py            marker-based telnet runner — use this
+harness         ports/iris-run/serve.sh          serve the build on :8099
+                ports/iris-run/guest/*.sh        what runs on the guest; fetch.sh
+                                                 pulls the lot in one command
 telnet/ssh      host 2324 -> guest 23,  host 2222 -> guest 22
 guest net       192.168.0.2, gateway/host 192.168.0.1
 
 mogrix fork     ~/repos/mogrix, branch danifunker-ports (remote danifunker-origin)
+libvpx          BUILT BY HAND in ports/work/libvpx-1.13.1 and copied to staging,
+                and it now carries a local performance patch — see §PERFORMANCE
+                and patches/. A stock libvpx costs about half the frame rate.
 
 layout          this tree lives at rustdesk/rustdesk-irix65-agent, beside
                 rustdesk-ppc-agent, on the `vintage-agents` branch. The agent's
@@ -93,9 +104,14 @@ Every one of these was run on IRIX 6.5.22m / R5000 under IRIS, not just built.
 | **Rust std for n32** | `-Zbuild-std` builds std for `mips-sgi-irix6.5`; `hello-irix` runs (HashMap, format!, env, fs, current_exe). |
 | **Agent portable modules** | json, convert, zstd_frame, frame, http, png, crypto, config, sys, encode + both protobuf modules compile **and run**: 20/20 checks pass on the Indy, including a real TCP GET and libsodium round trips. |
 | **The whole chain** | `pipeline` runs capture -> downscale -> I420 -> VP8 encode on the Indy and reports per-stage timings. See below. |
-| **The agent** | `rustdesk-agent` builds from the PPC `main.rs` and serves a session: `testpeer` logs in over the real protocol and receives a VP8 keyframe. |
+| **The agent** | `rustdesk-agent` builds from the PPC `main.rs` and serves a session: `testpeer` logs in over the real protocol and receives continuous VP8 video. |
 | **Input injection** | XTEST, via `src/input_shim.c`. Absolute moves, relative moves and display clamping all verified by `--probe-live`. |
 | **Rust process spawning** | `std::process::Command` spawn/kill/wait works — verified by having the self-test start `xclock` to generate damage. |
+| **The colours, end to end** | Three xterms with red, green and blue backgrounds, captured, downscaled, converted, VP8-encoded, and **decoded by the peer**: 255/1/5, 0/254/2, 2/0/255. The byte order was wrong before this and is the reason the check exists. |
+| **The stream tracks the screen** | 100 s against a moving desktop, then the decoded frame compared with a fresh capture: mean absolute difference **2.40 of 255**, and every large difference inside the one region still moving. This is what makes the active map safe to rely on. |
+| **Coordinate scaling** | A peer on a 1/2 session asked for a pointer move at (100, 100); the pointer landed at native (200, 200). |
+| **`image_quality`** | The peer's dial reaches the picture size: Best -> 1280x1024, Balanced -> 640x512, Low -> 320x256, each announced with a `SwitchDisplay` before the first frame in it. |
+| **VP8 decode on IRIX** | `encode::Decoder` / `vpxdec_*`. 129 of 129 frames decoded in a live session; libvpx's VP8 decoder works on this big-endian 32-bit target too, not just its encoder. |
 
 ---
 
@@ -117,11 +133,15 @@ uses. Run on the guest against the agent over loopback:
 
 ```
 LOGGED IN: 1 displays, hostname 'IRIS', platform 'Linux'
-  display 'Display' 1280x1024 at 0,0, online true
-  video frames   1 (1 key), 141320 bytes total
-  first frame    23425 ms after login
+  display 'Display' 640x512 at 0,0, online true
+  video frames   126 (1 key), 415629 bytes total
+  first frame    5434 ms after login
+  average        3298 bytes/frame, 1.40 fps over 90.1 s
 VERDICT: the agent is serving video to a peer.
 ```
+
+(That is after §PERFORMANCE. The same line on 2026-08-19 read `video frames 1 (1
+key)` at 1280x1024, with the first one arriving 23 seconds after login.)
 
 So: TCP, framing, the direct-IP handshake, the password hash, `PeerInfo`, the
 video pump, VP8 encoding and delivery all work. **Mouse injection works too**,
@@ -175,10 +195,23 @@ shipped static.
 
 ---
 
-## THE REMAINING BLOCKER: the emulated X server wedges under capture load
+## THE WEDGE UNDER CAPTURE LOAD — fixed upstream, kept for the evidence
 
-Reproducible, and it is the reason the frame count above is 1 rather than
-hundreds:
+**This one is closed.** Upstream iris `02c4e155` ("fix hostr readback issues")
+corrects the REX3 host-read path, and the X server no longer wedges under our
+capture traffic. Everything below is the record of what it looked like, kept
+because a *second* wedge is still live — the one xdm's visual-login rendering
+provokes, see §A REAL LOGIN SESSION — and it has the same signature.
+
+Fixing it also exposed three faults of our own that it had been masking, all
+three ours and all three found by measuring rather than reading: a leaked shm
+segment per failed open (80 orphans, ~400 MB on a 256 MB guest), a leaked file
+descriptor per dead connection (1309 consecutive `XOpenDisplay failed` from one
+agent while a fresh process captured perfectly), and `display_size()` building an
+entire capture context on every pass of the message loop. **When something looks
+like a platform problem, measure the agent first.**
+
+What it used to look like:
 
 - Peer logs in, the agent captures and encodes, one keyframe is delivered at
   ~23 s.
@@ -334,6 +367,268 @@ works immediately afterwards including a rebuilt `Capturer`.
 
 ---
 
+## PERFORMANCE — 0.03 fps to 1.3
+
+The agent worked and was unwatchable: five frames in 182 seconds, all five
+keyframes at 138 KB each. It now serves 114-126 frames in 90 seconds against a
+deliberately busy screen, and a small change — a caret, a clock hand, a line of
+text — arrives in about **100 ms**.
+
+Measured under a real peer on the emulated 66 MHz R5000 Indy, 1280x1024
+framebuffer, with an `xclock` ticking and an `xterm` scrolling `date` and a
+directory listing every two seconds. Divide by roughly 3 for a real Indy; an O2
+is faster again.
+
+```
+before   video frames   5 (5 key), 694064 bytes over 182 s  = 0.03 fps
+after    video frames 126 (1 key), 415629 bytes over  90 s  = 1.40 fps
+```
+
+Per frame, from the agent's own `FrameTimes` line (`-v`):
+
+```
+small change   frame:  2 band(s),   4/1280 MB, probe   2, conv   0, enc  95  =  104 ms
+window redraw  frame: 27 band(s), 436/1280 MB, probe 106, conv 140, enc 283  =  541 ms
+new peer       frame: 64 band(s), 1280/1280 MB, probe 648, conv 445, enc 3557 (KEY) = 4672 ms
+```
+
+### What actually moved, in the order it paid
+
+**1. Encode what the peer is being sent, not the whole framebuffer.**
+`Video` now carries a scale factor; `I420` and the encoder are built at
+`cap.width/scale`, and `PeerInfo` reports that size rather than the
+framebuffer's. Wired to the peer's `image_quality`, which until now was logged
+and ignored: Best is 1/1, Balanced 1/2, Low 1/4. VP8's cost is per macroblock,
+so this is linear in area and it is the single biggest lever.
+
+Because the peer is told the truth about the size it will receive, its canvas,
+its pointer and the video all agree and no client behaviour has to be taken on
+trust. The price is that peer coordinates are in that space:
+`Injector::set_display_scale` multiplies them back up and
+`cursor::Tracker::set_scale` divides the other way. Verified against a running
+agent — the peer asked for (100, 100) on a 1/2 session and the pointer landed at
+native (200, 200).
+
+**2. Encode only the macroblocks that changed.** `VP8E_SET_ACTIVEMAP` takes one
+byte per 16x16 macroblock, and the SGI-SCREEN-CAPTURE damage rectangles say
+exactly which those are. A frame that used to pay for 1280 macroblocks to
+discover that four had moved now pays for four.
+
+This is **only sound because the damage report cannot miss a change** — an
+inactive macroblock keeps its pixels for ever, so an unreported change would be
+permanent rather than late. That is why it is IRIX-only: the Mac's sampled
+checksum is exactly the case it would break.
+
+**3. A libvpx patch, because libvpx checked the map too late.** It honours the
+active map inside `evaluate_inter_mode()`, by which point the realtime picker
+has already run the predictor setup, the dot-artifact check (SAD over Y and both
+chroma planes), the skin-map lookup and the near-MV search — for a macroblock
+the caller said not to code. Exiting at the top of
+`vp8cx_encode_inter_macroblock()` instead, three interleaved A/B rounds on the
+target:
+
+| frame size | stock | patched |
+|---|---|---|
+| 320x256 | 51/50/51 ms | 39/34/37 ms |
+| 640x512 | 166/172/191 ms | 95/91/94 ms |
+| 1280x1024 | 753/708/712 ms | 309/348/340 ms |
+
+That is the cost of a frame whose active map selects **nothing at all** — the
+floor under every frame however little changed. At 640x512 it took the ceiling
+from 5.8 to 10.5 fps. `patches/libvpx-vp8-active-map-early-out.patch`, and the
+same patch is now listed in mogrix's `rules/packages/libvpx.yaml`.
+
+**4. VP8 profile 3: no loop filter, no sub-pixel motion.** The profile is not a
+feature level — every VP8 decoder must handle all four — it is a set of encoder
+cost decisions. The loop filter is a pass over every pixel of every frame whose
+job is hiding block edges in natural video; on a desktop it is a whole-frame
+cost paid to slightly blur the text someone is trying to read. Measured at
+640x512 on a small change: **452 ms at profile 0 against 246 ms at profile 3**,
+and the full-frame case no slower. `Tune::profile`, IRIX-only via `video_tune()`.
+
+**5. The keyframe feedback loop, cut.** `KEYFRAME_INTERVAL` is 10 s; frames took
+36 s; so every frame was older than the interval and every frame was forced to
+be a keyframe — several times the cost of the inter frame that would have done,
+which made the next frame later still. On IRIX the wall-clock rule is gone.
+Measured directly: nine keyframes in 90 s at 3.7 s each is 33 seconds of a
+90-second session, over a third of it, spent on insurance.
+
+What replaces it is a **rolling refresh through the active map**: while the
+screen is still, a few macroblock rows go back through the encoder each tick, so
+a block the static threshold left uncoded is corrected within about fifteen
+seconds of quiet, at a fiftieth of a keyframe's price. It laps once and stops,
+so a genuinely static desktop still costs nothing.
+
+**6. The settle repaint, deleted on IRIX.** The Mac re-reads a slice of VRAM on
+a timer because its change detection is a sampled checksum that can miss. This
+server reports every damaged rectangle and delivers the pixels with the report,
+so there is nothing to repair — and the repair was not free: a lap is 64 forced
+whole-band ReadDisplay round trips, 64 band conversions, and a forced keyframe
+with them.
+
+**7. Downscale fused with the colour conversion, over the damage.**
+`Capturer::to_i420_rect` walks the canvas once instead of twice with a full-size
+ABGR intermediate in between, takes a destination rectangle so a frame costs
+what the damage costs, and has a hand-unrolled kernel for the 1/2 case. The
+general path reaches each source pixel through two loops whose trip count is a
+runtime value, so nothing unrolls; at four iterations apiece the
+compare-and-branch is a large fraction of the work. Live, on a scrolling xterm:
+**260-490 ms before, 140-230 ms after**, for byte-identical output.
+
+**8. `MAX_RECTS` 64 -> 256.** A busy xterm reported more rectangles than 64, and
+the bounding box the shim merged them into covered 434 of the frame's 1280
+macroblocks where the real change was nearer 180 — a third of the conversion and
+a third of the encode, on exactly the frames that were already the expensive
+ones.
+
+### The colours were wrong, and now are not
+
+`convert.rs` reads **A,R,G,B**, which is the Mac's framebuffer. IRIX's
+ReadDisplay hands back **A,B,G,R**. Red and blue were swapped on every pixel,
+and it had survived two sessions of checking because the C shim and the Rust
+reference agreed with each other and both were wrong.
+
+Settled by measurement, not by reading. `xsetroot -solid red`, then count
+sampled pixels by which byte is lit: **byte 3 lit on 5119 of 5120, byte 1 lit on
+none**. Fixed in `convert.rs` and `png.rs` (screenshots had it too) via a `CH`
+constant, and `to_i420_rect` has the right order built in.
+
+Then verified through the whole chain rather than by inspection. `testpeer` now
+carries a VP8 **decoder** (`encode::Decoder`, `vpxdec_*` in `vpx_shim.c`) and
+writes the frame it decoded as a PPM. Three xterms with red, green and blue
+backgrounds, read back out of that PPM on the guest:
+
+```
+red xterm    255 001 005
+green xterm  000 254 002
+blue xterm   002 000 255
+```
+
+Capture, byte order, downscale, conversion, VP8 encode and VP8 decode, correct
+end to end. **This is the check to repeat after any encoder change** — "still
+decodes" is not the same claim as "still looks like the screen".
+
+### And the peer's picture really does track the screen
+
+The active map is the part of this design that could fail silently, so it is
+checked directly. `perfprobe verify` reads what the peer decoded, captures the
+same screen now, converts it the same way, and reports the difference. After a
+100-second session against a moving desktop:
+
+```
+mean absolute difference 2.40 of 255
+7794 pixels (2.38%) differ by more than 24
+worst macroblock at 48,32: mean 93.0
+```
+
+The worst block is inside the `xclock`, which was still ticking; 2.38% is very
+nearly exactly the clock's share of the frame. A macroblock that had rotted
+would show up as a cluster of large differences somewhere else, and there is
+none.
+
+### The dial, measured
+
+`image_quality` from the peer, one run, three 60-second sessions back to back
+against the same screen (`ports/iris-run/guest/quality-sweep.sh`):
+
+| peer asks | served | fps | bytes/frame |
+|---|---|---|---|
+| Best | 1280x1024 | 0.12 | 4337 |
+| Balanced | 640x512 | 0.80 | 3367 |
+| Low | 320x256 | 1.43 | 1084 |
+
+**Take the ratios, not the absolutes.** This host is shared and its load moved
+between 6 and 15 across the session; the same Balanced configuration measured
+0.80, 1.26 and 1.40 fps at different moments, and the sweep above ran during the
+worst of it. That is why the sweep is one run of three sessions rather than
+three runs — within a run the comparison holds. Individually and at a quieter
+moment: Best 0.60, Balanced 1.40, Low 1.72.
+
+Balanced prints no "switched the display" line because 1/2 is already the
+default and `set_scale` correctly declines to rebuild for a no-op.
+
+Full resolution is now *slow* rather than impossible — before this session a
+single 1280x1024 inter frame cost 10-18 seconds.
+
+Note how little Low buys over Balanced. The reason is in the per-frame line:
+below about 640x512 the cost stops being the encoder and becomes `probe`, which
+is the server copying damaged pixels into the shared canvas at framebuffer
+resolution. That does not scale with the encode size and there is no hint in the
+ReadDisplay extension to make it — `XRD_READ_ALPHA`, `XRD_TRANSPARENT`,
+`XRD_READ_POINTER` and the layer masks are the whole list.
+
+### Where the remaining time goes
+
+At 640x512 on a busy frame: `probe` ~110-320 ms (the server's damage copy, at
+framebuffer resolution), `conv` ~140-230 ms, `enc` ~280-430 ms. On a small
+change the whole frame is ~100 ms and `enc` is nearly all of it.
+
+The next lever, if this needs to go faster again, is **tiles as displays** —
+`docs/performance-plan.md` option 9. It is the only remaining option that
+changes the cost model rather than tuning it: a fixed grid of tiles declared as
+separate displays in `PeerInfo`, each with its own encoder, only the tiles that
+moved sent. It would give full-resolution text at the frame rate 640x512 gets
+now. It is large, it needs N encoders, and it depends on client behaviour that
+must be read in the client's source first.
+
+---
+
+## A REAL LOGIN SESSION — the authority answer is good, the emulator is not
+
+Every measurement in this file was taken against a bare `Xsgi :0 -bs -c` started
+by `/root/restart-x.sh`, which has **no access control at all**. That is not how
+a real machine runs, and the obvious worry was authority: xdm normally starts
+the server with `-auth` and a MIT-MAGIC-COOKIE that lives in xdm's authdir and
+is copied into the *logged-in user's* `~/.Xauthority`. An agent running outside
+any session would get `No protocol specified` and go blind the moment somebody
+logged in — and blind at the login screen too, which is where remote access
+matters most.
+
+**Tested, and the answer is that it does not arise on this image.** xdm here
+starts the server as
+
+```
+/usr/bin/X11/Xsgi -bs -nobitscale -c -pseudomap 4sight -solidroot sgilightblue
+```
+
+with **no `-auth`**. Access is host-based through `/etc/X0.hosts`, which already
+contains `IRIS` and `localhost`. X access control is a disjunction — an allowed
+host *or* a valid cookie — so the agent needs no cookie. Keep `/etc/X0.hosts`;
+it turned out to be irrelevant to the bare server and it is the whole mechanism
+under xdm.
+
+**What could not be tested is everything after that, because the xdm-started
+server wedges under IRIS.** Same signature as §THE BLOCKER, RESOLVED, and it is
+*not* our client and *not* authority:
+
+```
+Xsgi 5558   0:02   ... -solidroot sgilightblue      at T
+Xsgi 5558   0:02   ... -solidroot sgilightblue      at T+30s   CPU time frozen
+DISPLAY=:0 xdpyinfo  -> killed after 25 s                      IRIX's own client hangs
+```
+
+No `ng1 pixel dma` warning on the console this time, and `iris-ci screenshot`
+came back all black. Upstream iris `02c4e155` ("fix hostr readback issues")
+cured the wedge our *capture load* used to provoke; this is a second one, which
+xdm's visual-login rendering still provokes. **Worth reporting to the iris side
+as a distinct case** — `ports/iris-run/guest/xdm-check.sh` reproduces it in one
+run, and `xdm-stop.sh` puts the bare server back.
+
+So three things stay unproven and all three need real hardware or a fixed
+emulator:
+
+- **The agent surviving the server restart xdm does between logins.** This is
+  already the open item in §The agent can crash when the server dies underneath
+  it, and under xdm it stops being an edge case: it happens at every logout.
+- **Keyboard injection with something focused.** `rd_key`/`rd_key_char` have
+  never had a real keystroke put through them because the bare server has no
+  window manager and nothing to type into.
+- **Damage volume on a real 4Dwm desktop.** Everything measured here is one
+  xterm and a clock. Watch the `N/1280 MB` figure in the frame line: if it sits
+  near the total, the rectangles are being merged and `MAX_RECTS` wants raising
+  again.
+
+---
 ## Capture: what the server gives us, measured
 
 `probes/xcapture.c`, `probes/xshmcap.c` and `probes/sgicap.c` established all of
@@ -448,8 +743,10 @@ src/capture_shim.c     C implementation: damage / readdisplay / getimage paths,
                        X I/O error handling via setjmp so a dead server does not
                        take the process with it (Xlib's default handler exits)
 src/capture.rs         Rust side. Keeps the PowerPC agent's BANDS vocabulary so
-                       session.rs needs no changes, and adds poll_rects() for the
-                       finer answer.
+                       session.rs needs no changes, adds poll_rects() for the
+                       finer answer, and to_i420_rect() -- the frame loop's hot
+                       path, which fuses the downscale with the A,B,G,R -> I420
+                       conversion over a destination rectangle.
 probes/rawx.c          hand-rolled X11 setup, no Xlib — the probe that split the blocker
 probes/xcapture.c      format and cost probe (byte order, XRD_READ_POINTER)
 probes/xshmcap.c       shm + XShmReadDisplayRects: geometry, cost by shape, colormap
@@ -474,10 +771,41 @@ ports/rust/agent-portable/
                          capture-selftest   the capture module through its Rust API
                          pipeline [factors] capture -> scale -> convert -> encode, timed
                                             (defaults to 1/4 and 1/2)
-ports/iris-run/iris-target/
-                       a private CHD-capable iris build — the shared one lost the
-                       chd feature. Use ./iris-target/release/{iris,iris-ci}.
+                         perfprobe [modes]  where a frame's milliseconds go, one
+                                            stage and one FRAME at a time. Modes:
+                                              bytes    the memory byte order, settled
+                                              convert  fused against two-pass
+                                              encode   keyframe against inter
+                                              amap     the active map's saving
+                                              dump     write a PPM of the converted screen
+                                              floor    the fixed cost of a frame, by scale
+                                              sweep    encoder settings against a real frame
+                                              verify   the peer's picture against the screen
+                                              loop     a damage-driven steady state
+                                            No argument runs everything but `verify`.
 ports/iris-run/gsh.py  marker-based telnet runner (see below)
+ports/iris-run/serve.sh
+                       serves the build and the guest scripts on :8099, which is
+                       where the guest's wget fetches from. Copies guest/*.sh
+                       into the build directory first -- they live in git
+                       because target/ is an artifact and losing the harness
+                       with it costs an afternoon.
+ports/iris-run/guest/  the guest-side harness, all fetched by fetch.sh:
+                         fetch.sh          pull the current build onto the guest
+                         run-agent.sh      restart the agent, listening, with -v
+                         setup-screen.sh   xclock + a scrolling xterm, so the
+                                           damage path has work to do. A blank
+                                           root looks exactly like a broken agent.
+                         quality-sweep.sh  the image_quality dial, one run
+                         decode-check.sh   three coloured xterms -> decode -> pixels
+                         colour-check.sh   the same without a session
+                         fidelity-check.sh does the peer's picture track the screen
+                         mouse-check.sh    the coordinate scaling, against a live agent
+                         ab-floor.sh       the libvpx patch, interleaved A/B
+                         xdm-check.sh      can the agent capture an xdm-owned display
+                         xdm-stop.sh       put the bare server back afterwards
+                         cleanpty.sh       reap stale telnet logins (see gsh.py)
+patches/               libvpx-vp8-active-map-early-out.patch, and why it exists
 ```
 
 ### Building for the target
@@ -677,50 +1005,50 @@ carry one `R_MIPS_REL32` relocation, which runs fine despite `irix-ld`'s
 
 ## Next steps, in the order they pay
 
-1. **Encode at a reduced size.** The agent currently captures, converts and
-   encodes the full 1280x1024, which measured ~6.1 s per VP8 frame on its own.
-   `Capturer::scaled` exists and works; what is missing is threading a scale
-   factor through `Video` — the `I420` and the encoder are built at
-   `cap.width/height`, and `Video::band` converts native-resolution rows. This
-   is the single biggest win available and it also cuts the capture volume that
-   provokes the server wedge.
+Items 1 to 4 of the previous list are **done** — see §PERFORMANCE. What is left:
 
-   Wire it to `image_quality` / `custom_image_quality` while you are there: they
-   arrive in `session.rs` (search `image_quality`) and are currently logged and
-   ignored.
+1. **Get a real login session working.** §A REAL LOGIN SESSION has the detail.
+   The authority question is answered and the answer is good; what blocks it is
+   that xdm's server wedges under IRIS, so this needs real hardware or a fixed
+   emulator. Three things ride on it: the agent surviving the server restart
+   between logins, keyboard injection with something focused, and damage volume
+   on a desktop rather than one xterm.
 
-2. **Check the colours.** Still unverified end to end, and the single most
-   likely remaining bug. `convert.rs` was written for the Mac's **A,R,G,B**;
-   IRIX hands us **A,B,G,R**. `--probe-display` shows the C shim and the Rust
-   path produce *identical* planes, which proves they agree with each other and
-   nothing about whether either is right for this byte order. Decode a delivered
-   frame and look at it — red and blue swapped is easy to miss and miserable to
-   find remotely.
+2. **The agent must survive its X server dying.** Already the open item in §The
+   agent can crash when the server dies underneath it, and under xdm it stops
+   being an edge case: it happens at every logout. The retry path exists and the
+   two known leaks are fixed, but it has never been exercised against a real
+   restart. `rd_capture_close` deliberately never calls `XCloseDisplay`, so each
+   reconnect leaks a `Display` — a handful over a session's life is the design,
+   a reconnect storm is not. Measure RSS across retries before assuming.
 
-3. **Use the rectangles.** `dirty_bands` throws away most of what the server
-   said; `poll_rects` keeps it. Encoding only the changed regions is the obvious
-   next saving, and it keeps reads small, which is what the emulated server
-   wants.
+3. **Tiles as displays**, if it needs to go faster again. The only remaining
+   option that changes the cost model rather than tuning it, and the only route
+   to full-resolution text at the frame rate 640x512 gets now. See the end of
+   §PERFORMANCE and `docs/performance-plan.md` option 9. Large, needs N
+   encoders, and depends on client behaviour that must be read in the client's
+   source first.
 
-4. **Cut the downscale cost** once it is in the path: it walks the whole canvas
-   regardless of how little changed. Scaling only the damaged rectangles, or
-   fusing the scale with the I420 conversion so the canvas is walked once, would
-   take a large bite out of both.
+4. **Keyboard injection is written but unproven.** `rd_key`/`rd_key_char` have
+   never had a real keystroke put through them, because the bare X server has no
+   window manager and nothing focused to type into. Blocked on (1), or drive an
+   `xterm` with `--probe-keys X Y`.
 
-5. **Keyboard injection is written but unproven.** The mouse path is verified;
-   `rd_key`/`rd_key_char` have never had a real keystroke put through them,
-   because the bare X server has no window manager and nothing focused to type
-   into. Start `4Dwm` or an `xterm` and drive it from `testpeer`, or use
-   `--probe-keys X Y`.
-
-6. **The clipboard and cursor paths are compiled but untested on IRIX.**
+5. **The clipboard and cursor paths are compiled but untested on IRIX.**
    `cursor.rs` matters less than it did — `cursor_embedded` is honoured, so the
    agent should never need to send a shape — but the code that decides that has
    not been exercised against a peer.
-6. **Input, clipboard, cursor** shims: `XTEST` is advertised, and cursor work is
-   mostly retired by `cursor_embedded`.
-7. **The remaining portable module is `sys.rs`**, plus `api.rs`, `lan.rs`,
-   `rendezvous.rs` and `session.rs`, which were not attempted tonight.
+
+6. **`custom_image_quality` is still ignored.** `image_quality` is now wired to
+   the picture size (§PERFORMANCE); upstream's `custom_image_quality` is a
+   bitrate percentage and would belong on `bitrate_for`.
+
+7. **The libvpx patch has not been through the mogrix pipeline.** It is listed in
+   `rules/packages/libvpx.yaml` and lives in both `patches/` here and
+   `patches/packages/libvpx/` there, but this host cannot run `mogrix build`
+   (§The mogrix pipeline cannot run on this host), so it is rendered-and-checked
+   rather than built. The library it produced *was* built and measured — by hand,
+   in `ports/work/libvpx-1.13.1`, and copied into staging.
 
 ---
 
@@ -728,40 +1056,46 @@ carry one `R_MIPS_REL32` relocation, which runs fine despite `irix-ld`'s
 
 ### Boot
 
-**The shared `~/repos/iris/target/release/iris` no longer has CHD support.** The
-other session rebuilt it mid-evening with only `tlbvmap`, and it now refuses the
-image with "CHD image support not compiled in". Rather than rebuild in their
-target directory — they are actively editing that source — this session built a
-private copy:
-
-```
-cd ~/repos/iris
-CARGO_TARGET_DIR=<agent repo>/ports/iris-run/iris-target \
-  cargo build --release --features lightning,rex-jit,r5k,chd
-```
-
-which took 5m33s and left `ports/iris-run/iris-target/release/{iris,iris-ci}`.
-**Use those.** Check `iris: build features:` on the first line of the log — if
-`chd` is missing, that is why nothing boots.
+Use **`~/iris-upstream/target/release/iris`**, upstream at `02c4e155` ("fix
+hostr readback issues"). Anything older wedges the X server within one frame of
+capture load. `--cpu` is a runtime option now — the CPU is no longer a build
+feature — so there is no private build to maintain and nothing to rebuild.
 
 ```
 cd ports/iris-run
-DISPLAY=:1 ./iris-target/release/iris --config iris.toml --ci --ci-display
+DISPLAY=:1 ~/iris-upstream/target/release/iris \
+    --config iris.toml --ci --ci-display --cpu r5000 > iris.log 2>&1 &
 ```
 
 **`iris-ci start` is required.** Under `--ci` the CPU thread is created paused;
 without `start` the machine sits there doing nothing and `console.log` stays
-empty. This cost 20 minutes tonight — it looks exactly like a hung boot.
+empty. It looks exactly like a hung boot.
 
 ```
 export IRIS_SOCKET=/tmp/iris-rdagent.sock        # NOT the default /tmp/iris.sock
-iris-ci start
-iris-ci serial-wait --timeout 900 "login:"
+~/iris-upstream/target/release/iris-ci start
 ```
 
 Boot to a usable telnet takes about 5 minutes; **telnetd answers well before the
 serial console prints its login banner**, so do not use the banner as the
-readiness test — check port 2324 instead.
+readiness test — poll `gsh.py 'echo up'` instead.
+
+Then, on the host, in another shell:
+
+```
+./serve.sh          # the build and guest/*.sh on :8099
+```
+
+and on the guest, once:
+
+```
+wget -q http://192.168.0.1:8099/fetch.sh -O /tmp/fetch.sh && chmod 755 /tmp/fetch.sh
+sh /tmp/fetch.sh    # pulls the binaries and every helper script
+```
+
+after which the whole loop is `sh /tmp/fetch.sh; sh /tmp/run-agent.sh` and
+whichever check you want. `iris-ci login root` gets you a serial shell when
+telnet will not answer — see the pty note in §Mistakes.
 
 ### Talking to the guest
 
@@ -830,7 +1164,29 @@ straight after a clean `/etc/halt`. That is not evidence of an unclean
 shutdown. `xfs_repair -L` is fine on a throwaway copy and must never be run on
 the real image.
 
-### What changed on the disk this session
+### What changed on the disk, 2026-08-23 (the performance session)
+
+**Nothing.** `~/Indy-IRIX65_dev.chd` is byte-for-byte the image the previous
+session verified and left, and no sidecar is pending.
+
+The session's diff was 106 MB of pure test churn — `/tmp` binaries, the guest
+helper scripts, `SYSLOG`, `wtmp`, the XFS log — and was **discarded**, not
+folded, which is what the previous session did with the same kind of diff. The
+helper scripts are not lost with it: they now live in git at
+`ports/iris-run/guest/` and `serve.sh` copies them into the build directory, so
+`fetch.sh` puts them back on the guest in one command.
+
+The guest was halted cleanly (`echo yes | /etc/halt`, waited for "Okay to power
+off"), the emulator killed by pid, and the diff moved aside rather than deleted
+in case it is wanted:
+`/tmp/claude-.../scratchpad/discarded-diff-20260823.chd`. It will not survive a
+reboot of the host, which is the intention.
+
+Two things on the guest are worth folding *if* someone wants them permanent, and
+neither was: `/tmp/*.sh` (the harness, but it is in git and refetched in one
+step) and nothing else. There is no reason to write to this image at present.
+
+### What changed on the disk, 2026-08-19
 
 Folded into `~/Indy-IRIX65_dev.chd`:
 
@@ -914,6 +1270,32 @@ Disk cost of this session's working set, for when space gets tight:
   with `stty columns 1000` — backticks and semicolons come back mangled and bash
   reports a syntax error on something you did not write. Put anything long in a
   script, fetch it with wget, and run that. `/root/agent-restart.sh` is one.
+- **A telnet session that negotiates and then never prints a login prompt is
+  out of ptys, not wedged.** IRIX has eleven `/dev/ttyq*`, `gsh.py` used to drop
+  its socket without logging out, and after a few dozen runs telnetd could not
+  allocate one. It is indistinguishable from a hung guest and cost half an hour.
+  `who` on the serial console is what shows it; `guest/cleanpty.sh` reaps them;
+  `gsh.py` now sends `exit` in a `finally`.
+- **`iris-ci get` needs a shell on the serial console**, and hangs for its whole
+  timeout if the console is sitting at a login prompt. `iris-ci login root`
+  first. For small answers it is usually cheaper not to move the file at all:
+  `dd bs=1 skip=N count=3 | od -An -tu1` reads a pixel out of a PPM over telnet.
+- **`ps | grep <name>` matches the shell running the grep**, and on IRIX so does
+  `pgrep -f`. This bit again this session: `pgrep -f "http.server 8099"` matched
+  its own `bash -c` line and reported a server that was not running.
+- **A libvpx build tree carries the absolute path it was configured at.**
+  `libs-generic-gnu.mk` had `SRC_PATH` pointing at `~/repos/irix-rustdeskagent`,
+  which no longer exists, and `make` worked anyway until something needed
+  `libvpx_g.a` rebuilt — at which point it failed on a missing `libs.mk` rather
+  than on anything to do with the actual problem.
+- **Measure the encoder per frame, not per configuration.** `pipeline` averaged
+  two rounds, one of them a forced keyframe. That single decision hid the largest
+  fact about this encoder — a keyframe costs three to four times an inter frame —
+  and an average of the two describes neither. `perfprobe encode` reports each.
+- **A/B on a shared host has to be interleaved.** The first attempt at measuring
+  the libvpx patch ran stock then patched, and reported a 3x improvement at one
+  scale and none at another. That is not a result, it is the load average moving.
+  Three interleaved rounds gave a clean and consistent answer.
 - **Do not trust a self-test that fails on working code.** Two "failures" in the
   first portable self-test run were wrong assertions in the test — `json::field`
   returns values still quoted, and `escape_into` writes the quotes.
@@ -930,15 +1312,34 @@ change what macOS builds:
 
 ```
 src/session.rs   gates widened to any(macos, irix); poll(2) pacing instead of
-                 SO_RCVTIMEO on IRIX; platform string "Linux" on IRIX
-src/main.rs      gates widened to any(macos, irix)
-src/input.rs     gates widened to any(macos, irix) so the shim is used
+                 SO_RCVTIMEO on IRIX; platform string "Linux" on IRIX.
+                 2026-08-23: a scale factor through `Video` and out to
+                 `PeerInfo`/`SwitchDisplay`; the active map built from the damage
+                 rectangles; the rolling refresh; `image_quality` acted on; the
+                 settle repaint and the wall-clock keyframe rule switched off on
+                 IRIX only. The Mac's paths are the `#[cfg(not(irix))]` arm of
+                 each and are byte-for-byte what they were.
+src/main.rs      gates widened to any(macos, irix); the `--probe-display` sweep
+                 gained the profile and min_q rows
+src/input.rs     gates widened to any(macos, irix) so the shim is used;
+                 `Injector::set_display_scale`, default 1
+src/cursor.rs    `Tracker::set_scale`, default 1
+src/convert.rs   channel order by platform (`CH`) -- IRIX is A,B,G,R
+src/png.rs       the same, so screenshots are not red/blue swapped either
+src/encode.rs    `Tune::profile` and `Tune::min_q`; the active-map API;
+                 `Decoder`, for checking the picture rather than the pipeline
+src/vpx_shim.c   the active map, the profile and quantizer floor, and a VP8
+                 decoder
 src/sys.rs       added wait_readable (IRIX only)
 ```
 
-Backups of the originals were left in /tmp during the session; if the Mac build
-needs to be checked, `any(macos, irix)` reduces to `macos` there by definition,
-and `wait_readable` is behind `cfg(target_os = "irix")`.
+**Nothing here changes what macOS builds.** `any(macos, irix)` reduces to
+`macos` there by definition; every IRIX behaviour change is behind
+`cfg(target_os = "irix")` with the previous code as the `not(irix)` arm; the two
+new setters default to 1 and the Mac never calls them; and `Tune`'s new fields
+default to the values the shim used before. The host test suite went from 188 to
+196 passing, with the six new tests covering exactly the pure logic that was
+added (`clamp_scale`, the injector's scaling, the tracker's).
 
 `~/repos/mogrix` on `danifunker-ports`, uncommitted:
 
@@ -950,11 +1351,20 @@ M pyproject.toml                               mcm-engine pinned to a local path
 M scripts/build-runtime-objects.sh             -O2 -fno-builtin for safe_mem
 M scripts/patch-rust-sysroot.sh    NEW TONIGHT nine patterns for the 2026-08 std
                                                layout, plus tolerate a missing file
-M mogrix/crate_patcher.py           NEW TONIGHT REGISTRY_BASE honours CARGO_HOME
+M mogrix/crate_patcher.py                       REGISTRY_BASE honours CARGO_HOME
+M rules/packages/libvpx.yaml       NEW 08-23    lists the active-map patch
 ?? cross/lib/{dso_handle,safe_mem}.c, irix-shared.lds
 ?? rules/packages/{libsodium,libvpx,mbedtls}.yaml
 ?? patches/packages/{libvpx,mbedtls}/
+?? patches/packages/libvpx/libvpx-vp8-active-map-early-out.patch  NEW 08-23
 ```
+
+Left uncommitted deliberately, matching how the rest of the mogrix work here has
+been handled. The libvpx patch also lives in this repo at
+`patches/libvpx-vp8-active-map-early-out.patch`, so it is not only in an
+uncommitted tree — but the mogrix copy is the one that would make it
+reproducible, and it has **not** been through a mogrix session with the MCP
+knowledge server connected, which its `CLAUDE.md` requires.
 
 **Still missing from a fresh mogrix clone** (Dani should ask unxmaal):
 `compat/runtime/*` (gitignored) and `cross/lib/elf_utils.py`. `soft_float_stubs.c`

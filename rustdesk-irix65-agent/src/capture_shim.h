@@ -119,6 +119,41 @@ int rd_capture_is_dead(const rd_capture *c);
 int rd_scale_abgr(const unsigned char *src, int sw, int sh, int src_stride,
                   unsigned char *dst, int factor);
 
+/*
+ * Box-filter downscale **fused with the A,B,G,R -> I420 conversion**, over a
+ * destination rectangle.
+ *
+ * Replaces `rd_scale_abgr` followed by `rd_argb_to_i420_rows`. Three things
+ * change, and each was worth measuring on its own:
+ *
+ *   - One walk of the canvas instead of two, with no full-size intermediate
+ *     written and read back. At 1/2 on the emulated Indy the two steps cost
+ *     386 + 306 ms; there is a whole scaled framebuffer's worth of memory
+ *     traffic in the gap between them.
+ *   - A destination rectangle, so a frame costs what the damage costs rather
+ *     than what the screen costs. The server hands us exact rectangles; the
+ *     band model threw them away.
+ *   - The right byte order. `rd_argb_to_i420_rows` reads A,R,G,B, which is the
+ *     Mac's framebuffer, not this one -- it swaps red and blue here.
+ *
+ * `factor` must be a power of two (1, 2, 4, 8). That is not an arbitrary
+ * restriction: it is what lets the box average fold into the BT.601 weights as
+ * a shift, and a per-pixel integer divide on an R5000 is ~35 cycles times three
+ * channels times every destination pixel.
+ *
+ * dx0/dy0/dx1/dy1 are in **destination** pixels, half-open, and are snapped
+ * outward to even -- a 4:2:0 chroma sample is shared by a 2x2 destination
+ * block, so a bound falling inside one would leave half of it unwritten.
+ *
+ * Returns 0 on success, -1 if the arguments do not make sense (in which case
+ * nothing is written).
+ */
+int rd_abgr_to_i420_rect(const unsigned char *src, size_t src_len, int src_stride,
+                         unsigned char *yp, unsigned char *up, unsigned char *vp,
+                         int dst_w, int dst_h, int chroma_stride,
+                         int factor,
+                         int dx0, int dy0, int dx1, int dy1);
+
 #ifdef __cplusplus
 }
 #endif

@@ -132,14 +132,33 @@ def main():
         cmds = args
     timeout = int(os.environ.get("GSH_TIMEOUT", "300"))
     t = login()
-    for c in cmds:
-        out, rc = run(t, c, timeout)
-        print("$ " + c)
-        if out:
-            print(out)
-        print("[rc=%s]" % ("TIMEOUT" if rc is None else rc))
-        print()
-        sys.stdout.flush()
+    try:
+        for c in cmds:
+            out, rc = run(t, c, timeout)
+            print("$ " + c)
+            if out:
+                print(out)
+            print("[rc=%s]" % ("TIMEOUT" if rc is None else rc))
+            print()
+            sys.stdout.flush()
+    finally:
+        # Log out, always.
+        #
+        # Dropping the socket without this leaves the guest's `login` and
+        # `telnetd` behind holding a pty, and IRIX has few of them. After a few
+        # dozen runs telnetd accepts the connection, completes the option
+        # negotiation, and then never prints a login prompt -- which is
+        # indistinguishable from a wedged guest and cost half an hour to
+        # recognise. `who` on the serial console is what shows it.
+        try:
+            t.send("exit")
+            time.sleep(0.3)
+        except Exception:
+            pass
+        try:
+            t.s.close()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

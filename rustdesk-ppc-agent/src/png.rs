@@ -181,14 +181,22 @@ pub fn pack_rgb_rows_rust(fb: &[u8], stride: usize, width: usize, height: usize)
 
 fn pack_rgb_rows_into(fb: &[u8], stride: usize, width: usize, height: usize, dst: &mut [u8]) {
     let row = 1 + width * 3;
+    // Which byte of a captured pixel is which channel. The Mac's framebuffer is
+    // A,R,G,B; IRIX's ReadDisplay hands back **A,B,G,R** -- measured, and the
+    // difference is exactly a red/blue swap, which in a screenshot is a bug
+    // nobody notices until they are looking at a photograph.
+    #[cfg(target_os = "irix")]
+    const CH: [usize; 3] = [3, 2, 1];
+    #[cfg(not(target_os = "irix"))]
+    const CH: [usize; 3] = [1, 2, 3];
     for y in 0..height {
         let src = &fb[y * stride..y * stride + width * 4];
         let out = &mut dst[y * row..(y + 1) * row];
         out[0] = 0; // filter type None
         for (px, o) in src.chunks_exact(4).zip(out[1..].chunks_exact_mut(3)) {
-            o[0] = px[1]; // R
-            o[1] = px[2]; // G
-            o[2] = px[3]; // B
+            o[0] = px[CH[0]]; // R
+            o[1] = px[CH[1]]; // G
+            o[2] = px[CH[2]]; // B
         }
     }
 }
