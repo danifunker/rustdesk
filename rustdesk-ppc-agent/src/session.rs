@@ -637,11 +637,20 @@ fn bitrate_for(base_kbps: u32, scale: usize) -> u32 {
 /// cost paid to slightly blur the thing the user is trying to read. Measured on
 /// the emulated Indy at 640x512, an inter frame with a small change: **452 ms at
 /// profile 0 against 246 ms at profile 3**, and the full-frame case no slower.
+///
+/// It also takes **screen content mode 2**, which tells VP8 it is looking at a
+/// desktop rather than a camera. Three heuristics in the realtime mode picker
+/// are conditioned on that and all three are wrong here: the dot-artifact check
+/// and the skin-map lookup are camera work, and the ZEROMV rate-distortion bias
+/// is tuned for natural video. Mode 2 also keeps a golden frame updated, which
+/// is what a mostly-static screen wants. Measured on a frame with 30% of its
+/// macroblocks active -- what a scrolling xterm actually reports -- **364 ms at
+/// profile 3 alone against 294 ms with it**.
 #[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
 fn video_tune() -> crate::encode::Tune {
     let t = crate::encode::Tune::default();
     #[cfg(target_os = "irix")]
-    let t = crate::encode::Tune { profile: 3, ..t };
+    let t = crate::encode::Tune { profile: 3, screen_content: 2, ..t };
     t
 }
 
@@ -1221,6 +1230,14 @@ impl Video {
         {
             self.t.active = self.last_active;
             self.t.total_mb = self.enc.mb_rows() * self.enc.mb_cols();
+            self.t.rects = self.rects.len();
+            let area: u64 = self
+                .rects
+                .iter()
+                .map(|r| (r.w.max(0) as u64) * (r.h.max(0) as u64))
+                .sum();
+            let screen = (self.cap.width as u64) * (self.cap.height as u64);
+            self.t.rect_pct = if screen > 0 { (area * 100 / screen) as usize } else { 0 };
         }
         let t = std::time::Instant::now();
         let r = self.enc.encode(&self.img, pts, force);
@@ -1262,6 +1279,14 @@ struct FrameTimes {
     /// The ratio is the whole story of whether the damage report is paying.
     active: usize,
     total_mb: usize,
+    /// Rectangles the server reported, and the share of the framebuffer they
+    /// cover. Together with `active` these say whether the report is tight: if
+    /// the covered share is much smaller than the active share, the rectangles
+    /// are being rounded up to macroblocks badly; if the two agree and both are
+    /// large, the server is reporting coarsely and the change is smaller than
+    /// either number suggests.
+    rects: usize,
+    rect_pct: usize,
 }
 
 #[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
@@ -1280,7 +1305,10 @@ impl FrameTimes {
             "frame: {} band(s){}, probe {}, read {}, conv {}, enc {}{}, send {}, other {} = {} ms, {} B",
             self.bands,
             if self.total_mb > 0 {
-                format!(", {}/{} MB", self.active, self.total_mb)
+                format!(
+                    ", {} rect(s) covering {}%, {}/{} MB",
+                    self.rects, self.rect_pct, self.active, self.total_mb
+                )
             } else {
                 String::new()
             },

@@ -50,7 +50,7 @@ struct vpxenc {
  */
 struct vpxenc *vpxenc_new(int width, int height, int bitrate_kbps, int cpu_used, int threads,
                           int static_thresh, int last_ref_only, int error_resilient,
-                          int profile, int min_q)
+                          int profile, int min_q, int screen_content)
 {
     struct vpxenc *e;
     vpx_codec_enc_cfg_t cfg;
@@ -123,6 +123,17 @@ struct vpxenc *vpxenc_new(int width, int height, int bitrate_kbps, int cpu_used,
         return NULL;
     }
     vpx_codec_control_(&e->codec, VP8E_SET_CPUUSED, cpu_used);
+    /* Tell VP8 this is a desktop, not a camera.
+     *
+     * Three things in the realtime mode picker are conditioned on it and all
+     * three are wrong for screen content: the dot-artifact check (a camera
+     * denoising heuristic), the skin-map lookup (there is no skin on a
+     * desktop), and a ZEROMV rate-distortion bias tuned for natural video.
+     * Mode 2 additionally keeps a golden frame updated, which is what a mostly
+     * static screen wants. Costs nothing to ask for; see the Rust `Tune`. */
+    if (screen_content >= 0 && screen_content <= 2)
+        vpx_codec_control_(&e->codec, VP8E_SET_SCREEN_CONTENT_MODE,
+                           (unsigned int)screen_content);
     /* Below this much residual error a macroblock is declared unchanged and
      * coded as a skip, which is the single cheapest thing that can happen to
      * it. A desktop is mostly *exactly* static, so the threshold only has to be

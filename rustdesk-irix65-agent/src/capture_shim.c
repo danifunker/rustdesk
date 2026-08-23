@@ -772,7 +772,7 @@ int rd_abgr_to_i420_rect(const unsigned char *src, size_t src_len, int src_strid
                          int factor,
                          int dx0, int dy0, int dx1, int dy1)
 {
-    int by, bx, sh;
+    int by, bx, sh, step;
 
     if (!src || !yp || !up || !vp) return -1;
     if (dst_w < 2 || dst_h < 2 || chroma_stride < dst_w / 2) return -1;
@@ -891,6 +891,65 @@ int rd_abgr_to_i420_rect(const unsigned char *src, size_t src_len, int src_strid
                     ua[bx] = U_OF(cr, cg, cb, 4);
                     va[bx] = V_OF(cr, cg, cb, 4);
                 }
+            }
+        }
+        return 0;
+    }
+
+    /* Above 1/2, sample the box rather than averaging all of it.
+     *
+     * The conversion's cost is dominated by *reading the source*, not by
+     * writing the output or by the arithmetic: at factor 4 each destination
+     * pixel averages sixteen source pixels, so shrinking the output does not
+     * shrink the work. Measured under a live peer on a scrolling xterm, the
+     * conversion cost 130-190 ms at 1/2 and still 100-120 ms at 1/4, where the
+     * encode had fallen from 380 ms to 118 ms -- so at 1/4 this had become one
+     * of the two largest items in the frame.
+     *
+     * Averaging a 2x2 sample of each box instead of all of it reads a quarter
+     * of the source at factor 4 and a sixteenth at factor 8. The quality
+     * argument is that at 1/4 a 1280x1024 desktop is already 320x256: text is
+     * unreadable either way, and what the box filter is buying at that point is
+     * a slightly smoother version of something nobody is reading. At 1/2, where
+     * text is marginal and each box is only four pixels anyway, the full
+     * average is kept.
+     *
+     * `step` is the gap between the two samples in each direction, so the pair
+     * straddles the box rather than sitting in its corner.
+     */
+    step = (factor >= 4) ? (factor / 2) : 1;
+    if (step > 1) {
+        /* Two samples per axis regardless of factor: the shift is fixed at 2. */
+        for (by = dy0 / 2; by < dy1 / 2; by++) {
+            const unsigned char *brow = src + (size_t)(by * 2 * factor) * src_stride;
+            unsigned char *ya = yp + (size_t)(by * 2) * dst_w;
+            unsigned char *yb = ya + dst_w;
+            unsigned char *ua = up + (size_t)by * chroma_stride;
+            unsigned char *va = vp + (size_t)by * chroma_stride;
+
+            for (bx = dx0 / 2; bx < dx1 / 2; bx++) {
+                int q, cr = 0, cg = 0, cb = 0;
+                int sr[4], sg[4], sb[4];
+
+                for (q = 0; q < 4; q++) {
+                    const unsigned char *s0 = brow
+                        + (size_t)((q >> 1) * factor) * src_stride
+                        + (size_t)((bx * 2 + (q & 1)) * factor) * 4;
+                    const unsigned char *s1 = s0 + (size_t)step * src_stride;
+                    int o = step * 4;
+                    int ab = s0[1] + s0[o + 1] + s1[1] + s1[o + 1];
+                    int ag = s0[2] + s0[o + 2] + s1[2] + s1[o + 2];
+                    int ar = s0[3] + s0[o + 3] + s1[3] + s1[o + 3];
+                    sr[q] = ar; sg[q] = ag; sb[q] = ab;
+                    cr += ar; cg += ag; cb += ab;
+                }
+
+                ya[bx * 2]     = Y_OF(sr[0], sg[0], sb[0], 2);
+                ya[bx * 2 + 1] = Y_OF(sr[1], sg[1], sb[1], 2);
+                yb[bx * 2]     = Y_OF(sr[2], sg[2], sb[2], 2);
+                yb[bx * 2 + 1] = Y_OF(sr[3], sg[3], sb[3], 2);
+                ua[bx] = U_OF(cr, cg, cb, 4);
+                va[bx] = V_OF(cr, cg, cb, 4);
             }
         }
         return 0;

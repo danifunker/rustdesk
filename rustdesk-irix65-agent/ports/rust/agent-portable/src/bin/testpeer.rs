@@ -71,6 +71,24 @@ fn main() {
     // agent and the same screen. A throughput number taken with the decoder
     // running is a number about the decoder.
     let want_decode = args.iter().any(|a| a == "decode");
+    // `spin` drives the pointer in a circle for the whole session, one move
+    // every 120 ms.
+    //
+    // This is the measurement the fixed workloads could not give. A screen that
+    // changes once a second reports one frame a second however fast the agent
+    // is -- the frame rate is the rate of change, not the capability -- and a
+    // scrolling xterm goes to the other extreme and repaints its whole window.
+    // A moving pointer is small, continuous, and exactly what a person does
+    // most of: the cursor is composited into the capture on this platform, so
+    // moving it dirties a few macroblocks and nothing else.
+    // `spin [ms]` -- default 40 ms, i.e. 25 moves a second, which is faster
+    // than the agent can serve. That is deliberate: at one move per 120 ms the
+    // agent kept up with every single one and the measurement described the
+    // *peer*, not the agent.
+    let spin_ms: Option<u64> = args.iter().position(|a| a == "spin").map(|i| {
+        args.get(i + 1).and_then(|v| v.parse().ok()).unwrap_or(40)
+    });
+    let spin = spin_ms.is_some();
     // `quality low|balanced|best`, sent as an OptionMessage after login. The
     // agent turns it into a downscale and answers with a SwitchDisplay, so this
     // is the only way to check the resolution dial the peer is actually holding.
@@ -135,7 +153,7 @@ fn main() {
             let hash = early_hash.unwrap();
             println!("hash: salt {} chars, challenge {} chars",
                      hash.salt.len(), hash.challenge.len());
-            finish_login(&mut c, &hash, &password, secs, mouse_at, want_decode, quality);
+            finish_login(&mut c, &hash, &password, secs, mouse_at, want_decode, quality, spin_ms);
             return;
         }
     };
@@ -200,7 +218,7 @@ fn main() {
     };
     println!("hash: salt {} chars, challenge {} chars", hash.salt.len(), hash.challenge.len());
 
-    finish_login(&mut c, &hash, &password, secs, mouse_at, want_decode, quality);
+    finish_login(&mut c, &hash, &password, secs, mouse_at, want_decode, quality, spin_ms);
 }
 
 fn finish_login(
@@ -211,7 +229,10 @@ fn finish_login(
     mouse_at: Option<(i32, i32)>,
     want_decode: bool,
     quality: Option<ImageQuality>,
+    spin_ms: Option<u64>,
 ) {
+    let spin = spin_ms.is_some();
+    let spin_gap = Duration::from_millis(spin_ms.unwrap_or(40).max(10));
     // Log in.
     let mut req = LoginRequest::new();
     req.my_id = "testpeer".into();
@@ -315,8 +336,46 @@ fn finish_login(
     let start = Instant::now();
     let (mut frames, mut bytes, mut keyframes, mut cursors, mut others) = (0u32, 0usize, 0u32, 0u32, 0u32);
     let mut first_frame_ms = None;
-    let _ = c.stream.set_read_timeout(Some(Duration::from_secs(secs.max(5))));
+    // Short reads when driving the pointer, so a move goes out on schedule
+    // rather than whenever a frame happens to arrive.
+    let _ = c.stream.set_read_timeout(Some(if spin {
+        spin_gap
+    } else {
+        Duration::from_secs(secs.max(5))
+    }));
+    let mut spun = 0u32;
+    let mut last_spin = Instant::now();
+    if spin {
+        // IRIX has no SO_RCVTIMEO -- setsockopt returns ENOPROTOOPT and the
+        // read timeout above is silently not in force. The first version of
+        // this measurement therefore blocked in recv until a frame arrived and
+        // sent exactly one pointer move per frame: 302 moves, 301 frames, and a
+        // "frame rate" that was really the round trip of its own loop. The
+        // agent hit the same trap in its message loop and answers it with
+        // poll(2); so does this.
+        println!("  (pacing with poll: this platform has no SO_RCVTIMEO)");
+    }
     while start.elapsed() < Duration::from_secs(secs) {
+        // Only read when there is something to read, so the pointer keeps its
+        // own schedule instead of inheriting the agent's.
+        #[cfg(target_os = "irix")]
+        if spin && !rustdesk_ppc_agent::sys::wait_readable(&c.stream, 5) {
+            if last_spin.elapsed() >= spin_gap {
+                last_spin = Instant::now();
+                let a = spun as f64 * 0.35;
+                let mut me = MouseEvent::new();
+                me.mask = 0;
+                me.x = (320.0 + 120.0 * a.cos()) as i32;
+                me.y = (256.0 + 120.0 * a.sin()) as i32;
+                let mut m = Message::new();
+                m.set_mouse_event(me);
+                if c.send(&m).is_err() {
+                    break;
+                }
+                spun += 1;
+            }
+            continue;
+        }
         match c.recv() {
             Ok(m) => match m.union {
                 Some(message::Union::video_frame(vf)) => {
@@ -358,14 +417,39 @@ fn finish_login(
                 _ => others += 1,
             },
             Err(e) => {
-                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut {
+                if (e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut)
+                    && spin
+                {
+                    // Expected: the short timeout is the pointer's clock.
+                }
+                else if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut {
                     println!("(read timed out)");
                     break;
-                }
+                } else {
                 println!("recv error: {}", e);
                 break;
+                }
             }
         }
+        if spin && last_spin.elapsed() >= spin_gap {
+            last_spin = Instant::now();
+            // A circle of radius 120 about the middle of a 640x512 frame, in
+            // the peer's own coordinate space -- the agent scales it back up.
+            let a = spun as f64 * 0.35;
+            let mut me = MouseEvent::new();
+            me.mask = 0;
+            me.x = (320.0 + 120.0 * a.cos()) as i32;
+            me.y = (256.0 + 120.0 * a.sin()) as i32;
+            let mut m = Message::new();
+            m.set_mouse_event(me);
+            if c.send(&m).is_err() {
+                break;
+            }
+            spun += 1;
+        }
+    }
+    if spin {
+        println!("  pointer moves sent {} (one every {} ms)", spun, spin_gap.as_millis());
     }
 
     let el = start.elapsed().as_secs() as f64 + start.elapsed().subsec_millis() as f64 / 1000.0;

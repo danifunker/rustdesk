@@ -29,6 +29,7 @@ extern "C" {
         error_resilient: c_int,
         profile: c_int,
         min_q: c_int,
+        screen_content: c_int,
     ) -> *mut VpxEnc;
     fn vpxenc_encode(
         e: *mut VpxEnc,
@@ -107,6 +108,12 @@ pub struct Tune {
     /// `rc_min_quantizer`: the floor on quality, and so on how many
     /// coefficients there are to transform, quantise and tokenise.
     pub min_q: u32,
+    /// `VP8E_SET_SCREEN_CONTENT_MODE`, 0-2. Tells VP8 it is looking at a
+    /// desktop rather than a camera, which turns off three heuristics that are
+    /// wrong here — the dot-artifact check, the skin-map lookup, and a ZEROMV
+    /// bias tuned for natural video — and, at 2, keeps a golden frame updated
+    /// for the static parts.
+    pub screen_content: u32,
 }
 
 impl Default for Tune {
@@ -132,6 +139,7 @@ impl Default for Tune {
             error_resilient: true,
             profile: 0,
             min_q: 8,
+            screen_content: 0,
         }
     }
 }
@@ -185,6 +193,7 @@ impl Encoder {
                 tune.error_resilient as c_int,
                 tune.profile as c_int,
                 tune.min_q as c_int,
+                tune.screen_content as c_int,
             )
         };
         if inner.is_null() {

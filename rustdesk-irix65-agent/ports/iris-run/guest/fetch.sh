@@ -10,7 +10,7 @@ cd /tmp
 for f in rustdesk-agent testpeer perfprobe perfprobe-stock pipeline capture-selftest portable-selftest; do
     $W -q $H/$f -O /tmp/$f.new && mv /tmp/$f.new /tmp/$f && chmod 755 /tmp/$f
 done
-for f in run-agent.sh setup-screen.sh colour-check.sh mouse-check.sh decode-check.sh ab-floor.sh fidelity-check.sh xdm-check.sh xdm-stop.sh quality-sweep.sh cleanpty.sh fetch.sh; do
+for f in run-agent.sh setup-screen.sh colour-check.sh mouse-check.sh decode-check.sh ab-floor.sh fidelity-check.sh xdm-check.sh xdm-stop.sh quality-sweep.sh screen-typing.sh workload-compare.sh fps-matrix.sh cleanpty.sh fetch.sh; do
     $W -q $H/$f -O /tmp/$f.new && mv /tmp/$f.new /tmp/$f && chmod 755 /tmp/$f
 done
 ls -l /tmp/rustdesk-agent /tmp/testpeer /tmp/perfprobe

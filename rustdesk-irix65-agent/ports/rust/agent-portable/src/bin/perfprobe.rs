@@ -365,59 +365,128 @@ fn main() {
         }
     }
 
+    // ---------------------------------------------------------------- costs
+    // The cost model, fitted rather than assumed: encode the same frame with a
+    // growing number of active macroblocks and read the intercept and the slope
+    // off the line. The intercept is what a frame costs before any macroblock is
+    // considered -- the source copy into libvpx's lookahead buffer, the border
+    // extension, the walk over every macroblock, the bitstream -- and the slope
+    // is what an active macroblock costs. Knowing which of the two dominates is
+    // the difference between optimising the encoder and optimising the loop.
+    if all || want("costs") {
+        println!("\n=== the encoder's cost model, fitted ===");
+        for &factor in &[2i32, 4] {
+            let (w, h) = ((cap.width / factor as usize) & !1, (cap.height / factor as usize) & !1);
+            let mut enc = match Encoder::new(w, h, (1000 / (factor * factor)).max(120) as u32) {
+                Ok(e) => e,
+                Err(e) => { println!("  refused: {}", e); continue; }
+            };
+            let total = enc.mb_rows() * enc.mb_cols();
+            let mut img = I420::new(w, h);
+            cap.to_i420(&mut img, factor);
+            let _ = enc.encode(&img, 0, true);
+            let _ = enc.encode(&img, 100, false);
+
+            println!("  {}x{} (1/{}), {} macroblocks", w, h, factor, total);
+            let mut pts = 200i64;
+            let mut samples: Vec<(f64, f64)> = Vec::new();
+            // Fractions of the frame, by macroblock rows.
+            for &num in &[0usize, 1, 2, 4, 8] {
+                let rows = (enc.mb_rows() * num) / 8;
+                enc.active_none();
+                if rows > 0 {
+                    enc.active_rect(0, 0, w as i32, (rows * 16) as i32);
+                }
+                let act = enc.active_count();
+                let mut ms_sum = 0.0;
+                for _ in 0..2 {
+                    let t = Instant::now();
+                    let _ = enc.encode(&img, pts, false);
+                    pts += 100;
+                    ms_sum += ms(t);
+                }
+                let avg = ms_sum / 2.0;
+                println!("    {:5} of {} active: {:7.1} ms", act, total, avg);
+                samples.push((act as f64, avg));
+            }
+            enc.active_all();
+            // Least squares over the samples: t = intercept + slope * active.
+            let n = samples.len() as f64;
+            let sx: f64 = samples.iter().map(|s| s.0).sum();
+            let sy: f64 = samples.iter().map(|s| s.1).sum();
+            let sxx: f64 = samples.iter().map(|s| s.0 * s.0).sum();
+            let sxy: f64 = samples.iter().map(|s| s.0 * s.1).sum();
+            let denom = n * sxx - sx * sx;
+            if denom.abs() > 1e-6 {
+                let slope = (n * sxy - sx * sy) / denom;
+                let inter = (sy - slope * sx) / n;
+                println!(
+                    "    => {:.0} ms before any macroblock, {:.3} ms per active one",
+                    inter, slope
+                );
+                println!(
+                    "       a 1/8-of-screen change therefore costs {:.0} ms",
+                    inter + slope * (total as f64 / 8.0)
+                );
+            }
+        }
+    }
+
     // ---------------------------------------------------------------- sweep
     // The encoder settings, swept against a real frame. Every one of these
     // costs picture quality in some way, so the point is to find out how much
     // wall-clock each is actually buying before spending any of it.
     if all || want("sweep") {
         use rustdesk_ppc_agent::encode::Tune;
-        println!("\n=== encoder settings, 640x512, inter frames ===");
+        println!("\n=== encoder settings, 640x512 ===");
+        println!("    'busy' is 30% of the macroblocks active, which is what a");
+        println!("    scrolling xterm actually reports; 'small' is 80 of 1280.");
         let factor = 2i32;
         let (w, h) = ((cap.width / factor as usize) & !1, (cap.height / factor as usize) & !1);
         let mut img = I420::new(w, h);
         cap.to_i420(&mut img, factor);
 
-        let base = Tune::default();
+        let base = Tune { profile: 3, ..Tune::default() };
         let cases: &[(&str, Tune)] = &[
-            ("baseline (profile 0, min_q 8)", base),
-            ("profile 1  simple lf, bilinear", Tune { profile: 1, ..base }),
-            ("profile 2  NO loop filter", Tune { profile: 2, ..base }),
-            ("profile 3  no lf, full-pixel MC", Tune { profile: 3, ..base }),
-            ("min_q 24", Tune { min_q: 24, ..base }),
-            ("min_q 40", Tune { min_q: 40, ..base }),
-            ("static_threshold 15000", Tune { static_threshold: 15000, ..base }),
-            ("profile 3 + min_q 24", Tune { profile: 3, min_q: 24, ..base }),
-            ("profile 3 + min_q 24 + thresh 15000",
-             Tune { profile: 3, min_q: 24, static_threshold: 15000, ..base }),
+            ("profile 0 (libvpx default)", Tune::default()),
+            ("profile 3  (what we ship)", base),
+            ("profile 3 + screen content 1", Tune { screen_content: 1, ..base }),
+            ("profile 3 + screen content 2", Tune { screen_content: 2, ..base }),
+            ("profile 3 + last ref only", Tune { last_ref_only: true, ..base }),
+            ("profile 3 + min_q 24", Tune { min_q: 24, ..base }),
+            ("profile 3 + no err resil", Tune { error_resilient: false, ..base }),
+            ("profile 3 + thresh 15000", Tune { static_threshold: 15000, ..base }),
         ];
 
         for (name, tune) in cases {
-            let mut enc = match Encoder::tuned(w, h, 250, *tune) {
+            let mut enc = match Encoder::tuned(w, h, 375, *tune) {
                 Ok(e) => e,
-                Err(e) => { println!("  {:38} refused: {}", name, e); continue; }
+                Err(e) => { println!("  {:32} refused: {}", name, e); continue; }
             };
+            let mbr = enc.mb_rows() as i32;
             let _ = enc.encode(&img, 0, true);
             let _ = enc.encode(&img, 100, false);
-            // Whole frame, and the same frame with an 80-macroblock patch, so
-            // the fixed per-frame cost and the per-macroblock cost separate.
-            let mut full = 0.0;
-            for i in 0..2 {
-                let t = Instant::now();
-                let _ = enc.encode(&img, 200 + i * 100, false);
-                full += ms(t);
+            let mut pts = 200i64;
+            let mut out = [0.0f64; 2];
+            let mut bytes = [0usize; 2];
+            // [0] busy: the top 30% of macroblock rows. [1] small: five rows.
+            for (i, rows) in [(mbr * 3) / 10, 5].iter().enumerate() {
+                enc.active_none();
+                enc.active_rect(0, 0, w as i32, rows * 16);
+                let mut acc = 0.0;
+                for _ in 0..3 {
+                    let t = Instant::now();
+                    bytes[i] = enc.encode(&img, pts, false).map(|f| f.data.len()).unwrap_or(0);
+                    pts += 100;
+                    acc += ms(t);
+                }
+                out[i] = acc / 3.0;
             }
-            full /= 2.0;
-            enc.active_none();
-            enc.active_rect(0, 0, 160, 128);
-            let mut patch = 0.0;
-            let mut bytes = 0;
-            for i in 0..2 {
-                let t = Instant::now();
-                bytes = enc.encode(&img, 500 + i * 100, false).map(|f| f.data.len()).unwrap_or(0);
-                patch += ms(t);
-            }
-            patch /= 2.0;
-            println!("  {:38} full {:7.0} ms   patch(80MB) {:6.0} ms   {} B", name, full, patch, bytes);
+            enc.active_all();
+            println!(
+                "  {:32} busy {:6.0} ms ({:5} B)   small {:6.0} ms ({:4} B)",
+                name, out[0], bytes[0], out[1], bytes[1]
+            );
         }
     }
 

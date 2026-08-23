@@ -1,10 +1,15 @@
 # RESUME — RustDesk agent for IRIX (SGI MIPS)
 
-Pick-up point. Last updated 2026-08-23, end of the session that **made it
-fast enough to watch**: 0.03 frames per second to 1.3-1.4, with small changes
-arriving in about 100 ms. See §PERFORMANCE for what moved and by how much.
-(The host is shared and loaded; the same build measured 0.80 to 1.40 fps at
-different moments. Ratios within a run are the trustworthy part.)
+Pick-up point. Last updated 2026-08-23, end of the session that **made it fast
+enough to use**. Ordinary interaction — a pointer moving, text appearing — runs
+at **5-20 fps on the emulator**, which is three times that on a real Indy. A
+full-window repaint is still 1.3-1.9 fps and that is close to the floor of this
+design; §Where the wall is says why and what would move it. Before this session
+the whole thing ran at 0.03 fps.
+
+Read §How fast is it, honestly before quoting any single number: the two ends of
+the workload range differ by an order of magnitude, and the host these were
+measured on is shared and loaded.
 
 Before that, the session of 2026-08-19 **got the agent itself running**: a peer
 connects over the real protocol, logs in, receives VP8 video, and mouse
@@ -526,10 +531,111 @@ nearly exactly the clock's share of the frame. A macroblock that had rotted
 would show up as a cluster of large differences somewhere else, and there is
 none.
 
-### The dial, measured
+### Three more, and where the wall is
+
+A second pass, after the numbers above, asking whether 5-10 fps was reachable.
+Two of the three paid; the third answered a different question than it was
+asked.
+
+**9. VP8 screen content mode 2.** `VP8E_SET_SCREEN_CONTENT_MODE` tells the
+encoder it is looking at a desktop rather than a camera. Three heuristics in the
+realtime mode picker are conditioned on it and all three are wrong here: the
+dot-artifact check and the skin-map lookup are camera work, and there is a
+ZEROMV rate-distortion bias tuned for natural video. Mode 2 also keeps a golden
+frame updated, which is what a mostly-static screen wants. Swept against a frame
+with 30% of its macroblocks active — what a scrolling xterm actually reports:
+
+```
+  profile 0 (libvpx default)       busy 560 ms    small 327 ms
+  profile 3  (what we shipped)     busy 364 ms    small 193 ms
+  profile 3 + screen content 1     busy 327 ms    small 291 ms
+  profile 3 + screen content 2     busy 294 ms    small 215 ms
+  profile 3 + last ref only        busy 357 ms    small 193 ms   (still a no-op)
+  profile 3 + min_q 24             busy 296 ms    small 187 ms   (costs quality)
+  profile 3 + thresh 15000         busy 278 ms    small 139 ms   (half-character bug)
+```
+
+Mode 2 is now the default on IRIX. `last_ref_only` measures nothing here either,
+exactly as it measured nothing on the G5 — that result now has two machines
+behind it.
+
+**10. Above 1/2, sample the box instead of averaging it.** The conversion's cost
+is dominated by *reading the source*, not by writing the output: at 1/4 each
+destination pixel averages sixteen source pixels, so shrinking the output does
+not shrink the work. It showed up plainly once the encoder stopped dominating —
+at 1/4 on a scrolling xterm the encode had fallen to 118 ms and the conversion
+was still 100-120 ms, one of the two largest items left.
+
+Averaging a 2x2 sample of each box reads a quarter of the source at 1/4 and a
+sixteenth at 1/8. Full-screen conversion at 1/4: **317 ms -> 121 ms**. The
+quality argument is that at 1/4 a 1280x1024 desktop is already 320x256, text is
+unreadable either way, and what the full box buys there is a smoother version of
+something nobody is reading. At 1/2, where text is marginal and a box is only
+four pixels anyway, the full average is kept.
+
+**11. iris `jitv2` is not usable here yet.** Built upstream at `02c4e155` with
+`--features lightning,rex-jit,jitv2,r5k,chd` on the theory that a CPU JIT would
+make the whole measurement loop faster. It boots IRIX in about the same time as
+the interpreter (290 s), gives roughly 15-20% on the encoder floor — and then
+**the X server vanishes mid-session**, with no core, nothing in `/tmp/xsgi.log`,
+and the emulator log churning `mega_flush ... 50624 functions compiled`.
+Reverted. The build is at `~/iris-jitv2-target` if anyone wants to chase it;
+worth telling the iris side that jitv2 plus Xsgi loses the server.
+
+**Two emulators against one CHD, again.** Starting the jitv2 build did not kill
+the previous emulator — the `kill -TERM` did not take, and for ten minutes two
+processes had the same disk open. The base image was untouched (iris writes to
+the `.diff.chd` sidecar) and the diff was discarded, but this is the second time
+this trap has been walked into. The new one gives itself away in the log:
+`TCP port forward 127.0.0.1:2324 failed to bind: Address already in use`.
+
+### Where the wall is
+
+At 320x256 on a scrolling xterm, per frame: **probe 109-205 ms, conv 100-120 ms
+(now ~35), enc 113-122 ms.** The encoder is no longer the largest item, and
+`probe` — the X server copying damaged pixels into the shared canvas at
+*framebuffer* resolution — cannot be reduced from this side. There is no scaling
+hint in the ReadDisplay extension (`XRD_READ_ALPHA`, `XRD_TRANSPARENT`,
+`XRD_READ_POINTER` and the layer masks are the whole list), so a change covering
+29% of a 1280x1024 screen costs 1.5 MB of copying whatever size it is served at.
+
+So a full-window repaint is close to the floor of this design, and the remaining
+option is the structural one: **tiles as displays**, which would let a small
+change be a small *frame* rather than a small part of a big one.
+
+### How fast is it, honestly
+
+One number for "the agent" is close to meaningless: the two ends of the workload
+range differ by an order of magnitude, and a remote desktop spends its life at
+the cheap one. Measured with `ports/iris-run/guest/fps-matrix.sh`, 45 s each,
+emulated R5000 — divide by roughly 3 for a real Indy, and an O2 is faster again:
+
+| | 640x512 (Balanced) | 320x256 (Low) |
+|---|---|---|
+| pointer moving, 6.7 moves/s | 4.5 fps | 5.0 fps |
+| a word typed per second | 1.6 fps | — |
+| xterm repainting its whole window twice a second | 1.3 fps | 1.9 fps |
+
+**The first two rows are the rate of change, not the ceiling.** A screen that
+changes six times a second reports six frames a second however fast the agent
+is. The agent kept up with every single pointer move at Low, and nearly every
+one at Balanced. What the ceiling actually is comes from the per-frame line:
+
+```
+small change   640x512:  probe 3, conv 0, enc 96   = 106 ms   ~9 fps
+small change   320x256:  probe 3, conv 0, enc 40   =  49 ms  ~20 fps
+whole window   640x512:  probe 115, conv 154, enc 389 = 705 ms
+whole window   320x256:  probe 152, conv 102, enc 113 = 378 ms
+```
+
+So: **ordinary interaction is comfortably in the 5-20 fps range on the emulator
+already**, and full-window repaints are not, at either size. Driving the pointer
+harder than 6.7 moves a second does not raise the number — it lowers it, because
+each move is an XTEST round trip on a one-processor machine and input starts
+competing with the encoder (25 moves/s gave 3.1 fps).
 
 `image_quality` from the peer, one run, three 60-second sessions back to back
-against the same screen (`ports/iris-run/guest/quality-sweep.sh`):
+against the scrolling screen (`quality-sweep.sh`):
 
 | peer asks | served | fps | bytes/frame |
 |---|---|---|---|
@@ -538,24 +644,16 @@ against the same screen (`ports/iris-run/guest/quality-sweep.sh`):
 | Low | 320x256 | 1.43 | 1084 |
 
 **Take the ratios, not the absolutes.** This host is shared and its load moved
-between 6 and 15 across the session; the same Balanced configuration measured
-0.80, 1.26 and 1.40 fps at different moments, and the sweep above ran during the
-worst of it. That is why the sweep is one run of three sessions rather than
-three runs — within a run the comparison holds. Individually and at a quieter
-moment: Best 0.60, Balanced 1.40, Low 1.72.
+between 4 and 15 across the session; the same Balanced configuration measured
+0.80, 1.26, 1.30 and 1.40 fps at different moments, and the sweep above ran
+during the worst of it. That is why the sweep is one run of three sessions
+rather than three runs — within a run the comparison holds.
 
 Balanced prints no "switched the display" line because 1/2 is already the
 default and `set_scale` correctly declines to rebuild for a no-op.
 
 Full resolution is now *slow* rather than impossible — before this session a
 single 1280x1024 inter frame cost 10-18 seconds.
-
-Note how little Low buys over Balanced. The reason is in the per-frame line:
-below about 640x512 the cost stops being the encoder and becomes `probe`, which
-is the server copying damaged pixels into the shared canvas at framebuffer
-resolution. That does not scale with the encode size and there is no hint in the
-ReadDisplay extension to make it — `XRD_READ_ALPHA`, `XRD_TRANSPARENT`,
-`XRD_READ_POINTER` and the layer masks are the whole list.
 
 ### Where the remaining time goes
 
@@ -1300,6 +1398,17 @@ libvpx that staging was built from, so deleting it means re-applying
   the libvpx patch ran stock then patched, and reported a 3x improvement at one
   scale and none at another. That is not a result, it is the load average moving.
   Three interleaved rounds gave a clean and consistent answer.
+- **A frame rate measured against fixed content is the rate of change, not the
+  ceiling.** A screen that changes once a second reports one frame a second
+  however fast the agent is. Two workloads in a row measured the *test*: an
+  xterm typing a word a second gave 1.5 fps, and a peer driving the pointer gave
+  exactly one move per frame (302 moves, 301 frames) because its own read
+  timeout silently does not work on IRIX. Drive the input from a `poll(2)` clock
+  and read the ceiling off the per-frame line, not off the total.
+- **Two emulators on one CHD, twice now.** `kill -TERM` on iris does not always
+  take; check with `ps` before starting another. The new one says so in its log
+  -- `TCP port forward 127.0.0.1:2324 failed to bind: Address already in use` --
+  and that line is the only warning you get.
 - **Do not trust a self-test that fails on working code.** Two "failures" in the
   first portable self-test run were wrong assertions in the test — `json::field`
   returns values still quoted, and `escape_into` writes the quotes.

@@ -606,6 +606,7 @@ fn encode_sweep(img: &mut rustdesk_ppc_agent::convert::I420) -> u128 {
         error_resilient: true,
         profile: 0,
         min_q: 8,
+        screen_content: 0,
     };
     let sweep: &[(&str, Tune)] = &[
         ("static 1000", plain),
@@ -625,6 +626,8 @@ fn encode_sweep(img: &mut rustdesk_ppc_agent::convert::I420) -> u128 {
         ("profile 2 (no loop filter)", Tune { profile: 2, ..plain }),
         ("profile 3 (no lf, full pel)", Tune { profile: 3, ..plain }),
         ("profile 3 + min_q 24", Tune { profile: 3, min_q: 24, ..plain }),
+        ("screen content 1", Tune { screen_content: 1, ..plain }),
+        ("screen content 2", Tune { screen_content: 2, ..plain }),
     ];
 
     println!("vp8 tuning: ms per frame, median of 3 (bytes for the small change)");
