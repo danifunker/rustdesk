@@ -254,10 +254,10 @@ Rebuilt iris without the `r5k` cargo feature, so the guest comes up as
 `MIPS R4400 Processor Chip Revision: 4.0` (66 MHz IP22) instead of R5000. Same
 image, same disk, same wedge, same signature — the only difference was the first
 frame arriving at 49 s instead of 23 s, which is what the slower CPU predicts.
-The build is at `ports/iris-run/iris-target-r4k/release/iris`.
-
-Note the `build features:` banner does **not** print `r5k` either way, so it is
-no help in telling the two builds apart. `hinv` on the guest is.
+That needed a separate build at the time. It does not any more: `--cpu r4400` /
+`--cpu r5000` is a runtime option on upstream iris, and the private per-CPU
+builds are gone. `hinv` on the guest is still how you check which one you got —
+the `build features:` banner never said.
 
 ### The agent can crash when the server dies underneath it
 
@@ -1230,9 +1230,12 @@ The verification boot's own diff (SYSLOG, wtmp, nothing else — the test binari
 were deleted before halting) was **discarded** rather than folded, so the base is
 exactly the verified image and no sidecar is pending.
 
-Disk cost of this session's working set, for when space gets tight:
-`ports/rust` 2.1 GB (private toolchain + registry), `ports/iris-run/iris-target`
-1.2 GB (the private CHD-capable iris build).
+Disk cost of the working set, for when space gets tight: `ports/rust` 2.1 GB
+(private toolchain + registry), `ports/work` 137 MB (third-party source trees,
+gitignored — but note `ports/work/libvpx-1.13.1` now holds the **patched**
+libvpx that staging was built from, so deleting it means re-applying
+`patches/libvpx-vp8-active-map-early-out.patch` and rebuilding),
+`~/iris-upstream/target` 1.2 GB (the emulator, not ours to delete lightly).
 
 ---
 
