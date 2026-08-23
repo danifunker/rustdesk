@@ -611,8 +611,9 @@ No `ng1 pixel dma` warning on the console this time, and `iris-ci screenshot`
 came back all black. Upstream iris `02c4e155` ("fix hostr readback issues")
 cured the wedge our *capture load* used to provoke; this is a second one, which
 xdm's visual-login rendering still provokes. **Worth reporting to the iris side
-as a distinct case** — `ports/iris-run/guest/xdm-check.sh` reproduces it in one
-run, and `xdm-stop.sh` puts the bare server back.
+as a distinct case** — `docs/ISSUE-xdm-wedge.md` is written and ready to send,
+`ports/iris-run/guest/xdm-check.sh` reproduces it in one run, and `xdm-stop.sh`
+puts the bare server back.
 
 So three things stay unproven and all three need real hardware or a fixed
 emulator:
