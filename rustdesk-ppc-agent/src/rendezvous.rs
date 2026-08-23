@@ -162,7 +162,17 @@ fn run(reg: &Registration, ident: &Identity) -> io::Result<()> {
     // Connecting a UDP socket filters out anything not from the server, which
     // is the cheapest possible defence against a stray datagram being parsed.
     socket.connect(server)?;
+    // Not fatal where the platform has not got it. IRIX has no SO_RCVTIMEO --
+    // setsockopt returns ENOPROTOOPT -- and `?` here stopped the registration
+    // loop before it sent a single datagram. The loop is *built* on the read
+    // timing out, since that is what tells it to resend, so on IRIX the wait
+    // moves to poll(2) below rather than being dropped.
+    #[cfg(not(target_os = "irix"))]
     socket.set_read_timeout(Some(RECV_TIMEOUT))?;
+    #[cfg(target_os = "irix")]
+    if let Err(e) = socket.set_read_timeout(Some(RECV_TIMEOUT)) {
+        log::debug!("no read timeout on this platform ({}); pacing with poll instead", e);
+    }
     log::info!("rendezvous: registering with {} as id {}", server, reg.id);
 
     // `sent` is set while a RegisterPeer is outstanding, `answered` records the
@@ -187,6 +197,16 @@ fn run(reg: &Registration, ident: &Identity) -> io::Result<()> {
             sent = Some(Instant::now());
         }
 
+        // Where the read timeout above did not take, this is it: wait for a
+        // datagram or give up after the same interval, so `due` is reached and
+        // the registration is resent.
+        #[cfg(target_os = "irix")]
+        {
+            use std::os::unix::io::AsRawFd;
+            if !crate::sys::wait_readable_fd(socket.as_raw_fd(), RECV_TIMEOUT.as_millis() as u64) {
+                continue;
+            }
+        }
         let n = match socket.recv(&mut buf) {
             Ok(n) => n,
             // Both spellings appear across platforms for a read timeout.

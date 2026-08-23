@@ -303,8 +303,26 @@ fn connect(url: &Url, ca: Option<&CaBundle>) -> io::Result<Conn> {
     for addr in addrs {
         match TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT) {
             Ok(s) => {
-                s.set_read_timeout(Some(IO_TIMEOUT))?;
-                s.set_write_timeout(Some(IO_TIMEOUT))?;
+                // **Not fatal if the platform has not got them.** IRIX has no
+                // SO_RCVTIMEO or SO_SNDTIMEO: setsockopt returns ENOPROTOOPT
+                // (99), and taking that as an error here failed every HTTPS
+                // request before the handshake even started -- which is the
+                // whole of `--api-server`, so the console could never have
+                // worked there. The same trap took the video session down until
+                // `session.rs` stopped treating it as fatal.
+                //
+                // What the timeouts are for is not being wedged for ever by a
+                // console that accepts a connection and then says nothing.
+                // `CONNECT_TIMEOUT` still bounds getting there; past that, a
+                // platform without the option is a platform where this call can
+                // block, and a heartbeat that hangs is better than one that
+                // cannot be sent at all.
+                if let Err(e) = s.set_read_timeout(Some(IO_TIMEOUT)) {
+                    log::debug!("no read timeout on this platform ({}); continuing without", e);
+                }
+                if let Err(e) = s.set_write_timeout(Some(IO_TIMEOUT)) {
+                    log::debug!("no write timeout on this platform ({}); continuing without", e);
+                }
                 // Small bodies, one write: Nagle would only add latency.
                 let _ = s.set_nodelay(true);
                 sock = Some(s);

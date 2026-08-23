@@ -34,8 +34,20 @@ pub fn cpu_count() -> usize {
 #[cfg(target_os = "irix")]
 pub fn wait_readable(s: &std::net::TcpStream, ms: u64) -> bool {
     use std::os::unix::io::AsRawFd;
+    wait_readable_fd(s.as_raw_fd(), ms)
+}
+
+/// The same, for anything else with a descriptor.
+///
+/// The rendezvous loop needs it for a `UdpSocket`, and needs it more than the
+/// video loop does: there the missing timeout costs pacing, but the
+/// registration loop is *built* on the read timing out -- that is what tells it
+/// to resend. Without one, `recv` blocks for ever on the first datagram that
+/// never comes and the agent silently stops registering.
+#[cfg(target_os = "irix")]
+pub fn wait_readable_fd(fd: std::os::unix::io::RawFd, ms: u64) -> bool {
     let mut fds = libc::pollfd {
-        fd: s.as_raw_fd(),
+        fd,
         events: libc::POLLIN,
         revents: 0,
     };

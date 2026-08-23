@@ -192,6 +192,49 @@ fn main() {
         }
     }
 
+    // TLS, which nothing has ever exercised on this target.
+    //
+    // It matters because it is the whole of `--api-server`: the console
+    // heartbeat is an HTTPS POST, and this platform's trust store is a decade
+    // out of date, so `http` requires the CA to be explicit. mbedTLS passes its
+    // own selftest here and a plain TCP GET works, and neither of those is a
+    // real handshake against a real server.
+    //
+    // Points at an HTTPS endpoint on the build host with a certificate we made,
+    // which is the same shape as a self-hosted console behind a private CA.
+    // Start it with `ports/iris-run/tls-endpoint.sh` and fetch `testca.pem`
+    // alongside the binaries; skipped cleanly when neither is there.
+    head("tls (real handshake to the build host)");
+    {
+        let ca_path = "/tmp/testca.pem";
+        if !std::path::Path::new(ca_path).exists() {
+            ok("skipped", true, "no /tmp/testca.pem -- see ports/iris-run/tls-endpoint.sh");
+        } else {
+            match http::CaBundle::load(ca_path) {
+                Err(e) => ok("CaBundle::load", false, &format!("{}", e)),
+                Ok(ca) => {
+                    ok("CaBundle::load", true, &format!("{:?}", ca));
+                    match http::Url::parse("https://192.168.0.1:8443/") {
+                        Err(e) => ok("Url::parse", false, &e),
+                        Ok(u) => {
+                            ok("Url::parse", true, &format!("host={} port={} secure={}", u.host, u.port, u.secure));
+                            let body = "{\"id\":\"irix-selftest\",\"uuid\":\"00000000\"}";
+                            match http::post_json(&u, "/api/heartbeat", body, Some(&ca)) {
+                                Ok(r) => ok(
+                                    "https POST /api/heartbeat",
+                                    r.ok(),
+                                    &format!("status {}, {} bytes: {}", r.status, r.body.len(),
+                                             r.body.chars().take(40).collect::<String>()),
+                                ),
+                                Err(e) => ok("https POST /api/heartbeat", false, &format!("{}", e)),
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     head("protobuf");
     {
         use protobuf::Message as _;

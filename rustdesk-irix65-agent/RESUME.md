@@ -710,6 +710,85 @@ must be read in the client's source first.
 
 ---
 
+## SELF-HOSTED INFRASTRUCTURE — the CLI was complete, two paths were not
+
+Everything a self-hosted RustDesk deployment needs is already in the agent's
+command line, and every one of them is persisted to the config file:
+
+```
+--server HOST[:PORT]   rendezvous (hbbs), default port 21116  -> rendezvous_server
+--relay-server HOST    relay (hbbr) override; empty means whichever the server names
+--key KEY              the server key, the same string a client puts in its Key field
+--api-server URL       the console, so the machine appears in its device list
+--ca-bundle PATH       certificates for a console behind a private CA
+--no-server / --no-api-server    stop doing either
+```
+
+`--server` makes the machine *reachable* by ID; `--api-server` makes it
+*visible* in a console. They are independent and neither implies the other.
+
+**Neither had ever been run from the IRIX build, and both were broken — by the
+same fault, in two more places.** IRIX has no `SO_RCVTIMEO` or `SO_SNDTIMEO`;
+`set_read_timeout` returns ENOPROTOOPT (99). `session.rs` already knew that. Two
+other places did not:
+
+- **`http.rs` took it as fatal**, so every HTTPS request failed before the
+  handshake started. That is the whole of `--api-server`: the console heartbeat
+  is an HTTPS POST, so the console could never have worked. Now logged and
+  continued past; `CONNECT_TIMEOUT` still bounds getting there.
+- **`rendezvous.rs` took it as fatal too**, and worse: that loop is *built* on
+  the UDP read timing out, because that is what tells it to resend. Dropping the
+  timeout would have replaced a dead loop with a wedged one, so the wait moved
+  to `poll(2)` — `sys::wait_readable_fd`, the `AsRawFd` sibling of the
+  `TcpStream` helper the video loop already uses.
+
+Both verified on the target against stand-ins on the build host, so the check
+does not need anybody's real infrastructure:
+
+```
+--- tls (real handshake to the build host) ---
+  [PASS] CaBundle::load          CaBundle(/tmp/testca.pem, 1144 bytes)
+  [PASS] Url::parse              host=192.168.0.1 port=8443 secure=true
+  [PASS] https POST /api/heartbeat   status 200, 18 bytes: {"modified_at": 0}
+
+[  0.919] INFO  rendezvous: registering with 192.168.0.1:21116 as id ff6izj02b
+[  1.006] INFO  rendezvous: registered, reachable as id ff6izj02b
+```
+
+and confirmed from the far end — the HTTPS server logged the exact JSON body,
+and the UDP stand-in logged the `RegisterPeer` datagrams arriving fourteen
+seconds apart, which is the refresh interval.
+
+**This is the first TLS handshake this port has ever done.** mbedTLS passing its
+own selftest and a plain TCP GET working are neither of them the same claim, and
+the gap between them hid a one-line bug for the whole port.
+
+`ports/iris-run/tls-endpoint.sh` runs the HTTPS stand-in on the host (and writes
+the `testca.pem` the guest fetches); `guest/rendezvous-check.sh` drives the
+registration loop. The UDP stand-in is small enough to be worth keeping in the
+session notes rather than the repo.
+
+### There is no GUI on IRIX, and the shape of the Mac's is the reason it is easy
+
+The Mac has one: `deploy/app-ui.m`, a Cocoa settings window with exactly these
+fields — password, ID server, relay, key, console, CA bundle — plus install,
+start, stop and restart. It is deliberately split: **everything that decides
+anything lives in `deploy/agent-helper.sh`**, and the window only calls into it.
+Its own header says why — the interface is the part that can only be exercised
+by a person at the machine, so it should hold as little behaviour as possible.
+
+That split is what makes an IRIX version small: the helper is portable Bourne
+shell, and only the window would have to be written. The guest has **Motif
+shared** (`/usr/lib32/libXm.so`, and SGI's `libSgm.so` for the Indigo Magic look
+and feel), which our toolchain can link — unlike `libXtst`, which SGI ships only
+as a static archive LLD refuses. So a native settings panel that matches the
+desktop is a contained piece of work rather than a port of anything.
+
+Not started. Nothing needs it: `--server`, `--key` and the rest are one command
+each and are persisted.
+
+---
+
 ## A REAL LOGIN SESSION — the authority answer is good, the emulator is not
 
 Every measurement in this file was taken against a bare `Xsgi :0 -bs -c` started
