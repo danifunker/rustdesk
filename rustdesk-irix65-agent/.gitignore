@@ -37,3 +37,6 @@ probes/xshmcap
 # Probe binary, rebuilt with one irix-cc command
 probes/rex3-wedge-repro
 ports/iris-run/iris-target-r4k/
+
+# The cross-built panel is an artifact of gui/build-gui.sh, like the agent.
+gui/rustdesk-agent-gui

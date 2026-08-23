@@ -768,7 +768,62 @@ the `testca.pem` the guest fetches); `guest/rendezvous-check.sh` drives the
 registration loop. The UDP stand-in is small enough to be worth keeping in the
 session notes rather than the repo.
 
-### There is no GUI on IRIX, and the shape of the Mac's is the reason it is easy
+### THERE IS A GUI ON IRIX NOW
+
+`gui/gui_motif.c`, built as `rustdesk-agent-gui` by `gui/build-gui.sh`. A Motif
+settings panel with the two things a person needs — what this machine is, and
+what deployment it should join — plus Start/Stop/Restart/Refresh and a status
+line. Seen running on the emulated Indy under 4Dwm; `RESUME-PROMPT-GUI.md` has
+the screen and the detail.
+
+**No behaviour in the window.** Every button runs one verb of
+`gui/agent-helper.sh`, which is ordinary Bourne shell and testable from a
+terminal, and each `set` verb is exactly one `rustdesk-agent --flag` invocation
+— so the panel cannot drift into having its own idea of what a setting means,
+and anything it does can be done without it. The split, and most of the idiom,
+is taken from `../irixscsitb`'s `gui_motif.c`: Motif 1.2 only, the
+`useSchemes`/`SgiSpec` fallback resources for the SGI look, every label a
+resource rather than a string literal, the `XtArgcType` typedef for the R4/R6
+argc difference, an XBM window icon because 5.3 ships `libXpm.so` with no
+header, a busy cursor pushed out with `XmUpdateDisplay`, and reusable error and
+info dialogs with Cancel and Help unmanaged.
+
+**Motif cross-compiles, which was not a given.** Two things the stock
+environment does not provide, both handled in `build-gui.sh` and both worth
+knowing before reaching for any other IRIX toolkit:
+
+- **The Motif headers are not in `/opt/irix-sysroot`; the libraries are.** They
+  are `libXm.so`, `libXt.so`, `libSgm.so` — all *shared*, which is the only
+  reason this works at all, since LLD cannot read the static archives SGI ships
+  (§LLD cannot link SGI's static archives). On the machine `/usr/include/Xm` is
+  a **symlink** to `/usr/Motif-1.2/include/Xm`, so `tar cf` of `/usr/include/Xm`
+  stores a link and nothing else — a 10 KB tarball that looks like it worked.
+  Tar the real directory. Now installed in the sysroot: Motif **1.2.4**.
+- **`-D_XmConst=`.** `Xm/XmStrDefs.h` declares `externalref _XmConst char ...`
+  for SGI's keypad virtual keys inside a branch that never defines `_XmConst`.
+  MIPSpro tolerates it, clang stops with "unknown type name". Defining it empty
+  on the command line is the entire fix and changes no generated code.
+
+**The layout is XmRowColumn and that is the third attempt.** `XmForm` with edge
+attachments collapsed the panel to a 180-pixel stub — children attached to both
+edges of a Form is a circular size negotiation and Motif resolves it by
+collapsing. Forcing a shell geometry afterwards made it worse: correctly sized,
+completely empty. And `XmFrame` around each group, with or without its own title
+child, gave its work area one row less height than it asked for, so **the last
+row of every group was silently clipped** — four rows where there should be
+five, a panel that looked entirely right, and nothing in any log. A spacer at
+the end absorbed it in a four-row group and not in a five-row one, so it is not
+a fixed number of pixels. Groups are now a heading and a rule, no frame.
+
+**Not yet pressed.** The read path is proven — the window shows the real agent
+ID, state and password, all of which came through `popen()` from the helper —
+and the helper's write path is verified directly (`set server`, `set key`,
+`set api` persist and read back, and clearing works). What has not happened is
+a human or an injected click on an Apply button. That is the first item in
+`RESUME-PROMPT-GUI.md`, and it doubles as the first real test of keyboard
+injection, which has had nothing focusable to type into until now.
+
+### The Mac's GUI, and why the IRIX one was cheap
 
 The Mac has one: `deploy/app-ui.m`, a Cocoa settings window with exactly these
 fields — password, ID server, relay, key, console, CA bundle — plus install,
@@ -784,8 +839,9 @@ and feel), which our toolchain can link — unlike `libXtst`, which SGI ships on
 as a static archive LLD refuses. So a native settings panel that matches the
 desktop is a contained piece of work rather than a port of anything.
 
-Not started. Nothing needs it: `--server`, `--key` and the rest are one command
-each and are persisted.
+Which is what made the IRIX panel a day rather than a week: the helper was
+written from scratch but the *shape* was already decided, and every hard
+question about Motif on this platform had been answered next door.
 
 ---
 
