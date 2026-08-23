@@ -7,7 +7,7 @@
 W=/usr/nekoware/bin/wget
 H=http://192.168.0.1:8099
 cd /tmp
-for f in rustdesk-agent testpeer perfprobe perfprobe-stock pipeline capture-selftest portable-selftest; do
+for f in rustdesk-agent testpeer perfprobe perfprobe-stock perfprobe-nocopy pipeline capture-selftest portable-selftest; do
     $W -q $H/$f -O /tmp/$f.new && mv /tmp/$f.new /tmp/$f && chmod 755 /tmp/$f
 done
 for f in run-agent.sh setup-screen.sh colour-check.sh mouse-check.sh decode-check.sh ab-floor.sh fidelity-check.sh xdm-check.sh xdm-stop.sh quality-sweep.sh screen-typing.sh workload-compare.sh fps-matrix.sh cleanpty.sh fetch.sh; do

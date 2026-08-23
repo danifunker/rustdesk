@@ -573,7 +573,39 @@ unreadable either way, and what the full box buys there is a smoother version of
 something nobody is reading. At 1/2, where text is marginal and a box is only
 four pixels anyway, the full average is kept.
 
-**11. iris `jitv2` is not usable here yet.** Built upstream at `02c4e155` with
+**11. The skipped macroblocks' pixel copy, out of the per-macroblock loop.**
+Every macroblock the active map excludes still had to have 384 bytes of
+reference pixels moved into the reconstruction buffer so the frame is complete
+— 5120 small scattered copies on a 1280x1024 frame. Seeding the whole
+reconstruction buffer from the reference once, in
+`init_encode_frame_mb_context()`, is the same bytes with the locality and none
+of the per-call overhead.
+
+Priced first with a deliberately-wrong build that simply omitted the
+per-macroblock copy and produced garbage in the untouched regions. That is the
+cheap way to find out whether something is worth engineering around before
+engineering it:
+
+```
+                            floor at 1280x1024   at 640x512
+  stock libvpx                     753 ms          166 ms
+  + early exit                     395 ms          113 ms
+  + wrong build, no copy at all    250 ms           77 ms   <- the price tag
+  + the copy done once, correctly  259 ms           83 ms
+```
+
+**Copy the planes, not the frame.** The first attempt used
+`vp8_yv12_copy_frame`, which extends the borders afterwards — slower than the
+copy it follows, and redundant, because `vp8_setup_intra_recon` sets them up and
+the end of the frame extends them again. It made the small sizes *worse*
+(160x128 went 21 → 40 ms, on a plane copy of 30 KB). A plain row-wise `memcpy`
+of the visible planes is what was wanted.
+
+Full resolution is where this lands: an interactive frame at 1280x1024 went from
+443-623 ms to **287-342 ms**, so the ceiling moved from 2.5 to 3.9 fps on the
+emulator and, by the ÷3 estimate, into double figures on a real Indy.
+
+**12. iris `jitv2` is not usable here yet.** Built upstream at `02c4e155` with
 `--features lightning,rex-jit,jitv2,r5k,chd` on the theory that a CPU JIT would
 make the whole measurement loop faster. It boots IRIX in about the same time as
 the interpreter (290 s), gives roughly 15-20% on the encoder floor — and then
@@ -610,11 +642,12 @@ range differ by an order of magnitude, and a remote desktop spends its life at
 the cheap one. Measured with `ports/iris-run/guest/fps-matrix.sh`, 45 s each,
 emulated R5000 — divide by roughly 3 for a real Indy, and an O2 is faster again:
 
-| | 640x512 (Balanced) | 320x256 (Low) |
-|---|---|---|
-| pointer moving, 6.7 moves/s | 4.5 fps | 5.0 fps |
-| a word typed per second | 1.6 fps | — |
-| xterm repainting its whole window twice a second | 1.3 fps | 1.9 fps |
+| | 1280x1024 (Best) | 640x512 (Balanced) | 320x256 (Low) |
+|---|---|---|---|
+| pointer moving, 6.7 moves/s | 1.5 fps | 4.5-4.7 fps | 5.0 fps |
+| a word typed per second | — | 1.6 fps | — |
+| xterm repainting its whole window twice a second | 0.12 fps | 1.3 fps | 1.9 fps |
+| **encoder floor (nothing active at all)** | **259 ms** | **83 ms** | **41 ms** |
 
 **The first two rows are the rate of change, not the ceiling.** A screen that
 changes six times a second reports six frames a second however fast the agent
@@ -622,11 +655,17 @@ is. The agent kept up with every single pointer move at Low, and nearly every
 one at Balanced. What the ceiling actually is comes from the per-frame line:
 
 ```
-small change   640x512:  probe 3, conv 0, enc 96   = 106 ms   ~9 fps
-small change   320x256:  probe 3, conv 0, enc 40   =  49 ms  ~20 fps
-whole window   640x512:  probe 115, conv 154, enc 389 = 705 ms
-whole window   320x256:  probe 152, conv 102, enc 113 = 378 ms
+small change  1280x1024:  probe 4,  conv 1,  enc 296 = 312 ms   ~3 fps
+small change   640x512:   probe 3,  conv 0,  enc  96 = 106 ms   ~9 fps
+small change   320x256:   probe 3,  conv 0,  enc  40 =  49 ms  ~20 fps
+whole window   640x512:   probe 115, conv 154, enc 389 = 705 ms
+whole window   320x256:   probe 152, conv 102, enc 113 = 378 ms
 ```
+
+At 1280x1024 `probe` and `conv` have vanished entirely — 4 ms and 1 ms — and the
+frame **is** the encoder walking 5100 macroblocks it has been told to ignore.
+That is why items 3 and 11 above are both about libvpx and neither is about
+capture.
 
 So: **ordinary interaction is comfortably in the 5-20 fps range on the emulator
 already**, and full-window repaints are not, at either size. Driving the pointer

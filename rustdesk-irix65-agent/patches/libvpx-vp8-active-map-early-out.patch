@@ -1,47 +1,99 @@
-Skip the whole realtime mode picker for a macroblock the active map excludes.
+Make VP8's active map actually cheap: exit before the mode picker, and move the
+skipped macroblocks' pixel copy out of the per-macroblock loop.
 
 libvpx honours VP8E_SET_ACTIVEMAP already, but the check lives deep inside
 evaluate_inter_mode(), which vp8_pick_inter_mode() only reaches after running
 get_predictor_pointers(), the dot-artifact check (SAD over Y and both chroma
 planes), the skin-map lookup, get_reference_search_order(),
 vp8_find_near_mvs_bias() and part of the mode loop -- all for a macroblock the
-caller has already said is not to be coded.
+caller has already said is not to be coded. And once past that, each excluded
+macroblock still moved 384 bytes of reference pixels into the reconstruction
+buffer one block at a time.
 
-On hardware where VP8 is the bottleneck that prologue *is* the frame rate.
-Measured on IRIX 6.5.22m / R5000 under IRIS, three interleaved rounds of a frame
-whose active map selects nothing at all (`perfprobe floor`):
+On hardware where VP8 is the bottleneck that is the frame rate. A remote desktop
+excludes almost every macroblock almost every frame: at 1280x1024 a moving
+pointer marks 6 to 20 of 5120 active, and stock libvpx still spends 450-600 ms
+on the other 5100.
 
-               stock          patched
-   160x128      23/30/24 ms   21/18/20 ms
-   320x256      51/50/51 ms   39/34/37 ms
-   640x512     166/172/191 ms 95/91/94 ms     1.9x
-  1280x1024    753/708/712 ms 309/348/340 ms  2.2x
+Two changes:
 
-That is the floor under every frame no matter how little changed, and on a
-remote desktop almost nothing changes: at 640x512 it took the ceiling from 5.8
-to 10.5 frames per second.
+1. Exit at the top of vp8cx_encode_inter_macroblock(). The answer for an
+   excluded macroblock is a definition rather than a search result -- nothing
+   moved, so code it as ZEROMV against LAST and skip it. That is where the
+   existing late exit lands anyway (it sets x->skip, the mode loop takes its
+   `|| x->skip` branch and breaks), so this changes when the decision is made,
+   not what it is. Placed here rather than inside the picker so it covers the RD
+   path too.
 
-The answer for an excluded macroblock is a definition rather than a search
-result -- nothing here moved, so code it as ZEROMV against LAST and skip it.
-That is where the existing late exit lands anyway: it sets x->skip, and the mode
-loop then takes its `|| x->skip` branch and breaks. So this changes when the
-decision is made, not what it is.
+2. Seed the whole reconstruction buffer from the reference once per frame, in
+   init_encode_frame_mb_context(), when an active map is in force -- and drop
+   the per-macroblock copy that becomes redundant. One contiguous copy of the
+   same bytes has the locality and none of the per-call overhead of 5120 small
+   scattered ones. Skipped on key frames, which code everything anyway.
 
-Placed in vp8cx_encode_inter_macroblock() rather than inside the picker so that
-it covers the RD path as well, and so the work that follows a skip -- building
-the inter predictors, setting mb_skip_coeff, vp8_fix_contexts -- is done here
-exactly as that function does it for any other skipped macroblock.
+Measured on IRIX 6.5.22m / R5000 under IRIS, the cost of a frame whose active
+map selects *nothing at all* -- the floor under every frame however little
+changed. Three interleaved rounds for (1), because a first attempt that ran
+stock-then-patched measured the host's load average instead:
+
+                stock          (1) only       (1) + (2)
+   320x256       51/50/51 ms   39/34/37 ms    35 ms
+   640x512      166/172/191 ms 95/91/94 ms    77 ms      (2.2x)
+  1280x1024     753/708/712 ms 309/348/340 ms 250 ms     (2.9x)
+
+The saving in (2) was priced first with a deliberately-wrong build that simply
+omitted the per-macroblock copy and produced garbage in the untouched regions;
+that measured the same 395 -> 250 ms at 1280x1024, which is what said the copy
+was worth engineering around rather than guessing at.
 
 Verified on the target, not just built: a 100-second session against a moving
-desktop, every frame decoded by the peer, and the decoded picture compared
-against a fresh capture of the same screen -- mean absolute difference 2.40 of
-255, and every large difference inside the one region (an xclock) that was still
-moving. A wrongly-skipped macroblock would show up there as a block of large
-differences and nowhere else.
+desktop, every frame decoded by the peer, and the decoded picture compared with
+a fresh capture of the same screen -- mean absolute difference 2.40 of 255, with
+every large difference inside the one region (an xclock) that was still moving.
+A wrongly-skipped or wrongly-copied macroblock would show up there as a block of
+large differences and nowhere else.
 
 --- a/vp8/encoder/encodeframe.c
 +++ b/vp8/encoder/encodeframe.c
-@@ -1122,6 +1122,59 @@
+@@ -32,6 +32,8 @@
+ #include <stdio.h>
+ #include <limits.h>
+ #include "vp8/common/invtrans.h"
++#include "vpx_scale/yv12config.h"
++#include "./vpx_scale_rtcd.h"
+ #include "vpx_ports/vpx_timer.h"
+ #if CONFIG_REALTIME_ONLY & CONFIG_ONTHEFLY_BITPACKING
+ #include "bitstream.h"
+@@ -595,6 +597,28 @@
+   xd->pre = cm->yv12_fb[cm->lst_fb_idx];
+   xd->dst = cm->yv12_fb[cm->new_fb_idx];
+ 
++  /* When an active map is in force, seed the whole reconstruction buffer from
++   * the reference in one go.
++   *
++   * Every macroblock the map excludes is coded as ZEROMV against LAST and
++   * skipped, and the only thing that still had to happen for it was moving 384
++   * bytes of reference pixels into the reconstruction buffer so the frame is
++   * complete. Doing that per macroblock means thousands of small scattered
++   * copies -- 5120 of them on a 1280x1024 frame -- where one contiguous copy of
++   * the same bytes has the locality and none of the per-call overhead.
++   *
++   * Priced on IRIX 6.5 / R5000 by building a deliberately-wrong encoder that
++   * simply omitted the per-macroblock copy: the cost of a frame whose map
++   * selects nothing fell from 395 ms to 250 ms at 1280x1024 and from 113 ms to
++   * 77 ms at 640x512. This recovers that saving without the wrong picture.
++   *
++   * Not on key frames: they code every macroblock by definition, so the copy
++   * would be overwritten in full and there is no reference to take it from.
++   */
++  if (cpi->active_map_enabled && cm->frame_type != KEY_FRAME) {
++    vp8_yv12_copy_frame(&cm->yv12_fb[cm->lst_fb_idx], &cm->yv12_fb[cm->new_fb_idx]);
++  }
++
+   /* set up frame for intra coded blocks */
+   vp8_setup_intra_recon(&cm->yv12_fb[cm->new_fb_idx]);
+ 
+@@ -1122,6 +1146,61 @@
  
    x->skip = 0;
  
@@ -79,15 +131,17 @@ differences and nowhere else.
 +    x->mbs_tested_so_far++;
 +    x->count_mb_ref_frame_usage[LAST_FRAME]++;
 +
++    /* The reconstruction buffer already holds this block's reference pixels:
++     * init_encode_frame_mb_context() copied the whole reference in when the
++     * active map was enabled, precisely so this loop does not have to do it
++     * 5120 times. `pre` is still pointed at the reference because the entropy
++     * and mode bookkeeping below reads it. */
 +    xd->pre.y_buffer =
 +        cpi->common.yv12_fb[cpi->common.lst_fb_idx].y_buffer + recon_yoffset;
 +    xd->pre.u_buffer =
 +        cpi->common.yv12_fb[cpi->common.lst_fb_idx].u_buffer + recon_uvoffset;
 +    xd->pre.v_buffer =
 +        cpi->common.yv12_fb[cpi->common.lst_fb_idx].v_buffer + recon_uvoffset;
-+    vp8_build_inter16x16_predictors_mb(xd, xd->dst.y_buffer, xd->dst.u_buffer,
-+                                       xd->dst.v_buffer, xd->dst.y_stride,
-+                                       xd->dst.uv_stride);
 +    mbmi->mb_skip_coeff = 1;
 +    if (cpi->common.mb_no_coeff_skip) {
 +      x->skip_true_count++;

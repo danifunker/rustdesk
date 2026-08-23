@@ -46,3 +46,17 @@ proto      = "tcp"
 host_port  = 2222
 guest_port = 22
 bind       = "localhost"
+
+# The agent's own port, so a real RustDesk client on the host can connect to the
+# emulated Indy the same way it would to a real one: "Connect" -> 127.0.0.1:21118,
+# password from ~/.rustdesk-ppc-agent.conf on the guest.
+#
+# The agent has to be listening on 0.0.0.0 for this to reach it -- iris NATs from
+# the host, so the connection arrives at the guest from 192.168.0.1 and not from
+# loopback. `guest/run-agent.sh` does that; the older `--listen 127.0.0.1` only
+# ever worked for a peer running on the guest itself.
+[[port_forward]]
+proto      = "tcp"
+host_port  = 21118
+guest_port = 21118
+bind       = "localhost"
