@@ -17,17 +17,28 @@
 # The only things in this file are the things only Actions can do -- runner
 # selection, mapping inputs into the environment, and artifact transport.
 #
-# SELF-HOSTED ONLY, and this is not a limitation that can be engineered away:
+# WHAT THE RUNNER HAS TO PROVIDE, and what it does not:
 #
-#   - the cross toolchain (/opt/cross, /opt/irix-sysroot, /opt/sgug-staging)
-#     is built by mogrix and includes headers and libraries extracted from a
-#     licensed IRIX 6.5 install. It cannot be downloaded on a hosted runner.
-#   - `gendist` only exists on IRIX, so the .tardist step needs a booted guest
-#     with a licensed IRIX disk image.
+#   THE CROSS TOOLCHAIN, and only this. /opt/cross, /opt/irix-sysroot and
+#   /opt/sgug-staging are built by mogrix and include headers and libraries
+#   extracted from a licensed IRIX 6.5 install, so they cannot be downloaded on
+#   a hosted runner. That is what makes this self-hosted.
 #
-# So the runner is a machine that already has both. `build_inst: false` skips
-# the guest and produces the binaries and the .tar.gz, which is a complete
-# release for anyone not using the Software Manager.
+#   THE EMULATOR is fetched -- scripts/fetch-iris.sh takes a local build if the
+#   runner has one and otherwise pulls the prebuilt CLI from an iris release.
+#
+#   THE BOOT IMAGE is fetched too -- scripts/fetch-image.sh takes the
+#   irix65_image input if the runner holds the image locally, or downloads it
+#   from the IRIX65_DISK_URL secret. These are licensed IRIX installs: host
+#   that URL privately (a private release asset, S3 with a signed URL). The
+#   image is never written to -- the guest runs on a copy-on-write overlay that
+#   is thrown away -- so a downloaded one can be cached between runs.
+#
+#   THE GUEST is started and stopped by the pipeline. Nothing here needs an
+#   emulator someone left running, and a failed job does not leave one behind.
+#
+# `build_inst: false` skips the guest entirely and produces the binaries and
+# the .tar.gz, which is a complete release for anyone not using swmgr.
 
 name: IRIX agent
 
@@ -43,10 +54,19 @@ on:
         type: boolean
         required: false
         default: true
-      iris_socket:
-        description: "iris control socket on the runner"
+      irix65_image:
+        description: "Absolute path to an IRIX 6.5 boot .chd on the runner (blank = download from the IRIX65_DISK_URL secret)"
         required: false
-        default: "/tmp/iris-rdagent.sock"
+        default: ""
+      iris_tag:
+        description: "iris release tag for the prebuilt emulator (blank = latest)"
+        required: false
+        default: ""
+      install_test:
+        description: "Install the package in the guest and run it (adds ~10 min, almost all of it inside inst)"
+        type: boolean
+        required: false
+        default: true
 
 permissions:
   contents: read
@@ -54,8 +74,11 @@ permissions:
 env:
   # The scripts read exactly these names from the environment or from
   # ci/local.conf, so a run here and a run on a developer machine differ in
-  # nothing but where the variables came from.
-  IRIS_SOCKET: ${{ github.event.inputs.iris_socket }}
+  # nothing but where the variables came from. They are also the names
+  # ../irixscsitb uses, so one image and one secret serve both repositories.
+  IRIX65_IMAGE: ${{ github.event.inputs.irix65_image }}
+  IRIX65_DISK_URL: ${{ secrets.IRIX65_DISK_URL }}
+  IRIS_TAG: ${{ github.event.inputs.iris_tag }}
 
 jobs:
   build:
@@ -71,22 +94,47 @@ jobs:
       # #[path], so a checkout of one without the other does not build. Both
       # live in this repository, which is the only reason a plain checkout is
       # enough.
+      # Fails here, in seconds, rather than twenty minutes in, if the image
+      # source is missing or the URL is a typo.
+      - name: Check the boot image source
+        if: ${{ github.event.inputs.build_inst != 'false' }}
+        run: scripts/fetch-image.sh --check-only
+
+      # Keyed on the IMAGE, not on the commit. A key that moves with every
+      # push never hits, and a boot image is a gigabyte of something that does
+      # not change from one commit to the next. fetch-image.sh --cache-key is a
+      # hash of the download URL, or the literal "local" when the runner holds
+      # the image itself -- in which case there is nothing to cache.
+      - name: Work out the image cache key
+        id: imgkey
+        if: ${{ github.event.inputs.build_inst != 'false' }}
+        run: echo "key=$(scripts/fetch-image.sh --cache-key)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the downloaded boot image
+        if: ${{ github.event.inputs.build_inst != 'false' && steps.imgkey.outputs.key != 'local' }}
+        uses: actions/cache@v4
+        with:
+          path: rustdesk-irix65-agent/build/guest-disk.chd
+          key: irix65-image-${{ steps.imgkey.outputs.key }}
+
       - name: Cross-build and stage
         run: scripts/build.sh
 
-      - name: Software Manager product
+      # One `release.sh` rather than a step per script: --boot starts ONE guest
+      # for the emulator steps and stops it however the run ends, which is the
+      # difference between a job that cleans up after itself and a runner
+      # somebody has to go and look at.
+      # --no-build because the step above already did it. release.sh builds by
+      # default, and a second cross-build here would be a minute of nothing.
+      - name: Package (boots its own guest)
         if: ${{ github.event.inputs.build_inst != 'false' }}
-        run: scripts/iris-gendist.sh
+        run: |
+          scripts/release.sh --no-build --boot \
+            ${{ github.event.inputs.install_test != 'false' && '--install-test' || '' }}
 
-      - name: Package
-        run: scripts/package.sh
-
-      # Proves the thing that matters and cannot be checked on the build host:
-      # that it installs, and that the installed agent starts without anyone
-      # setting LD_LIBRARYN32_PATH for it.
-      - name: Install it in the guest and run it
-        if: ${{ github.event.inputs.build_inst != 'false' }}
-        run: scripts/iris-install-test.sh
+      - name: Package without a guest
+        if: ${{ github.event.inputs.build_inst == 'false' }}
+        run: scripts/release.sh --no-build --no-inst
 
       - name: Upload
         uses: actions/upload-artifact@v4
@@ -94,3 +142,23 @@ jobs:
           name: rustdesk-agent-irix
           path: rustdesk-irix65-agent/dist/*
           if-no-files-found: error
+
+      # The console and emulator logs are the only way to tell a wedged guest
+      # from a broken build after the fact, and they are what every question
+      # about a failed run turns out to need.
+      - name: Upload the guest logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: guest-logs
+          path: |
+            rustdesk-irix65-agent/build/guest/console.log
+            rustdesk-irix65-agent/build/guest/iris.log
+          if-no-files-found: ignore
+
+      # Belt and braces: --boot stops the guest on its own way out, but a job
+      # cancelled between the two would otherwise leave an emulator running on
+      # a self-hosted runner for ever.
+      - name: Make sure no guest is left running
+        if: always()
+        run: scripts/iris-guest.sh stop || true

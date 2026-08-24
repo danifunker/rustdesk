@@ -9,10 +9,13 @@
 # ../irixscsitb: each OS packages its own build, so a 6.5 guest packages the n32
 # binaries and (if an o32 flavor is ever built) a 5.3 guest would package those.
 #
-# It needs a RUNNING guest. Booting one is not this script's business -- the
-# recipe is in RESUME.md §Operating the emulator, and one boot serves many
-# packaging runs -- but the script checks, and says which of the two ways in is
-# broken rather than hanging.
+# It needs a guest. With `--boot` it starts its own, from an image resolved by
+# scripts/fetch-image.sh -- a local path or a private download URL -- and takes
+# it away again afterwards without having written to the image. That is the
+# mode CI uses, and the mode anyone who is not the person who set this machine
+# up should use. Without `--boot` it attaches to a guest that is already
+# running, which is faster when you are iterating and is what a developer
+# wants.
 #
 # THREE CHANNELS, each chosen because the others do not work for that job:
 #   commands        the SERIAL console (iris-ci run). Telnet stalls after a few
@@ -27,7 +30,7 @@
 #                   back.
 #
 # Usage:
-#   scripts/iris-gendist.sh [--stage DIR] [--out DIR] [--version V]
+#   scripts/iris-gendist.sh [--boot] [--stage DIR] [--out DIR] [--version V]
 #                           [--socket PATH] [--http-port N] [--abi n32|o32]
 set -eu
 
@@ -41,6 +44,7 @@ DISTVER=""
 ABI="n32"
 HTTP_PORT="8100"
 SOCK="${IRIS_SOCKET:-/tmp/iris-rdagent.sock}"
+BOOT=0
 
 die() { echo "iris-gendist: $*" >&2; exit 1; }
 
@@ -53,6 +57,7 @@ while [ $# -gt 0 ]; do
 		--abi)          ABI="$2"; shift 2 ;;
 		--socket)       SOCK="$2"; shift 2 ;;
 		--http-port)    HTTP_PORT="$2"; shift 2 ;;
+		--boot)         BOOT=1; shift ;;
 		-h|--help)      sed -n '2,27p' "$0"; exit 0 ;;
 		*)              die "unknown option: $1" ;;
 	esac
@@ -67,17 +72,40 @@ load_local_conf
 
 [ -d "$STAGE/bin" ] || die "no staged tree at $STAGE -- run scripts/build.sh first"
 
-IRIS_DIR="${IRIS_DIR:-$HOME/iris-upstream}"
+IRIS_DIR=$(sh "$REPO/scripts/fetch-iris.sh")
 CI_BIN="$IRIS_DIR/target/release/iris-ci"
-[ -x "$CI_BIN" ] || die "no iris-ci at $CI_BIN (set IRIS_DIR in ci/local.conf)"
+[ -x "$CI_BIN" ] || die "no iris-ci at $CI_BIN"
+
+# One cleanup handler, set BEFORE anything is started. A second `trap ... EXIT`
+# further down would silently replace this one, and this one is what stops a
+# guest we booted -- so both jobs live here.
+cleanup() {
+	[ -n "${HTTP_PID:-}" ] && kill "$HTTP_PID" 2>/dev/null
+	[ "${BOOT:-0}" = 1 ] && sh "$REPO/scripts/iris-guest.sh" stop > /dev/null 2>&1
+	return 0
+}
+trap cleanup EXIT INT TERM
+
+# ---- 0. a guest ----------------------------------------------------------------
+if [ "$BOOT" = 1 ]; then
+	# Started here and stopped by cleanup() above, whatever happens below.
+	# That is the whole point of --boot: a failed packaging run that leaves an
+	# emulator behind is a machine somebody has to go and tidy up, and on a CI
+	# runner it is one that never comes back.
+	_guest_env=$(sh "$REPO/scripts/iris-guest.sh" start) ||
+		die "could not start a guest"
+	eval "$_guest_env"
+	[ -n "${IRIS_SOCKET:-}" ] || die "the guest started but told us no socket"
+	SOCK="$IRIS_SOCKET"
+fi
 export IRIS_SOCKET="$SOCK"
 
-# ---- 0. is there a guest, and does it answer on both channels? ----------------
 echo ">>> checking the guest"
 "$CI_BIN" ping > /dev/null 2>&1 || die "no iris on $SOCK.
-Start one first -- RESUME.md \$Operating the emulator has the command -- and
-remember 'iris-ci start', without which the CPU thread stays paused and a booted
-guest is indistinguishable from a hung one."
+Pass --boot to have one started for you, or start one by hand -- RESUME.md
+\$Operating the emulator has the command, and remember 'iris-ci start', without
+which the CPU thread stays paused and a booted guest is indistinguishable from
+a hung one."
 
 IRIS_CI_BIN="$CI_BIN"
 export IRIS_CI_BIN
@@ -130,7 +158,6 @@ URL="http://192.168.0.1:$HTTP_PORT/$(basename "$TARBALL")"
 SERVEDIR=$(dirname "$TARBALL")
 ( cd "$SERVEDIR" && exec python3 -m http.server "$HTTP_PORT" > /dev/null 2>&1 ) &
 HTTP_PID=$!
-trap 'kill $HTTP_PID 2>/dev/null || true' EXIT INT TERM
 sleep 1
 
 echo ">>> moving the tree into the guest"
@@ -160,10 +187,13 @@ echo "$GEN_OUT" | grep -q GENDIST-OK || die "gendist failed in the guest (output
 # ---- 4. bring the product back ------------------------------------------------
 echo ">>> pulling the product back over the serial console"
 mkdir -p "$OUT"
+IRIS_CI_BIN="$CI_BIN"
+export IRIS_CI_BIN
 for f in rustdesk_agent rustdesk_agent.idb rustdesk_agent.sw; do
-	"$CI_BIN" get "/tmp/gd/dist/$f" --to "$OUT/$f" --timeout 900 ||
-		die "could not fetch /tmp/gd/dist/$f. iris-ci get needs a shell on the
-serial console: 'iris-ci login root' first, or it hangs for its whole timeout."
+	guest_get "/tmp/gd/dist/$f" "$OUT/$f" ||
+		die "could not fetch /tmp/gd/dist/$f after three tries. iris-ci get needs
+a shell on the serial console -- 'iris-ci login root' first -- and see guest_get
+in ci-lib.sh for the shell-detection fault it retries around."
 	[ -s "$OUT/$f" ] || die "$OUT/$f came back empty"
 done
 

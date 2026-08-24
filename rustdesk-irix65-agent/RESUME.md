@@ -1016,6 +1016,97 @@ the guest.
 §Operating the emulator; the telnet forward stalls and this pipeline must not
 need a person.
 
+#### And it brings its own guest
+
+`--boot` is what makes the emulator steps runnable by something other than the
+person who set this machine up:
+
+```sh
+scripts/release.sh --boot --install-test    # cold: nothing running, no one watching
+scripts/release.sh                          # warm: attaches to a running guest
+```
+
+Three scripts, and each one closes a specific hole:
+
+- `scripts/fetch-image.sh` resolves the boot image: `$IRIX65_IMAGE`, then
+  `ci/local.conf`, then `$IRIX65_DISK_URL` — a private download URL, which is a
+  repository secret in Actions. **Those are ../irixscsitb's variable names on
+  purpose**: the same licensed image and the same secret serve both repos.
+- `scripts/fetch-iris.sh` resolves the emulator: a local build wins, otherwise
+  the prebuilt CLI from an iris release. Building iris from source is a Rust
+  toolchain plus clang and libclang for the chd feature.
+- `scripts/iris-guest.sh` boots one and disposes of it. **It never writes to
+  the image** — `overlay = true`, sidecar deleted on stop — and it takes **no
+  port forwards**, because the pipeline needs none: commands over the console,
+  files in over HTTP (the guest dialling out, not a forward), files out through
+  `iris-ci get`. No host ports means two runs cannot collide and neither can
+  steal the telnet port from a developer's own emulator. The control socket is
+  per-run for the same reason: iris *deletes and rebinds* whatever socket path
+  it is given, which is how a session once stole another session's.
+
+`release.sh --boot` starts **one** guest and both emulator steps share it. A
+boot costs a couple of minutes here, so one per step would have doubled a run
+for nothing.
+
+**Readiness is "a command runs", not "a banner appeared."** `iris-ci boot` is
+the obvious call and does not work on this image: the PROM autoboots straight
+past the menu it watches for, so it sat through its whole 600 s timeout while
+`IRIS console login:` had been in `console.log` for three minutes. This file has
+warned since the first session that the serial banner is a bad readiness test
+here — telnetd answers well before it prints — and this is that same fact from
+the other side. `iris-guest.sh` polls `iris-ci run 'echo GUEST-READY'`.
+
+**And it is five minutes a run faster.** The guest answered a command 110 s
+after `iris-ci start`; the banner did not appear for another five minutes. The
+note about telnetd was right about the console shell too, and every run that
+waited for the banner was throwing that away.
+
+Two more things that run only bought:
+
+- **`eval "$(cmd)"` hides a failure from `set -e`.** `eval` returns the status
+  of the string it evaluated, and a dead command evaluates to the empty string,
+  which is success. So a guest that never came up produced a release run that
+  carried cheerfully on to "no iris on /tmp/iris-rdagent.sock" — a confusing
+  error about the wrong socket, three steps after the real one. Capture, check,
+  then eval.
+- **Set the cleanup trap BEFORE starting anything**, not after. The version
+  that set it afterwards would have leaked an emulator for exactly the failure
+  it was written to handle.
+
+- **A full host disk panics the guest, ten minutes in, with no clue why.** The
+  guest writes everything to a copy-on-write overlay on the build host. When
+  that host filled to 100% underneath a packaging run, the write failed and
+  IRIX treated it as fatal:
+
+  ```
+  ALERT: I/O error in filesystem ("/") meta-data dev 0x38 ... ("xlog_iodone")
+  PANIC: |$(3726)Fatal error on root filesystem
+  ```
+
+  followed by a dump that also fails, and `[Press reset to restart the
+  machine.]`. Nothing in that names the actual cause. `iris-guest.sh` now
+  checks `df` before it boots anything — 2 GB floor, `IRIS_GUEST_MIN_MB` to
+  override — and watches `console.log` for `PANIC:` while it waits, because a
+  panic is indistinguishable from a slow boot to a poll that only asks whether
+  a command ran.
+
+- **`iris-ci get` can pick the wrong shell.** It probes `echo ZZSHELLZZ=$0` and
+  chooses sh or csh syntax from the answer; on a console that has just been
+  worked hard the probe can miss, and it then sends `>& /dev/null` and
+  `$status` to bash. The transfer fails reporting "iris-ci get needs a shell on
+  the serial console" — and the shell is right there. Seen once in about fifteen
+  transfers, on the second `get` of a run whose first had just succeeded, and it
+  cost a twenty-minute packaging run. `guest_get` in `scripts/ci-lib.sh` settles
+  the console and retries three times. Worth reporting upstream: `get` has no
+  `--shell` flag the way `run` does, which would remove the guesswork entirely.
+
+And one worth remembering separately, because it is easy to do by reflex:
+**editing a shell script that is currently executing corrupts the run.** `sh`
+reads a script incrementally, so a patch applied while one is mid-flight moves
+the ground under the byte offset it is reading from. It happened here to
+`iris-guest.sh` during its own cleanup path. Wait for the run, or copy the
+script and edit the copy.
+
 ---
 
 ### The Mac's GUI, and why the IRIX one was cheap
@@ -1519,41 +1610,48 @@ Items 1 to 4 of the previous list are **done** — see §PERFORMANCE. What is le
    reconnect leaks a `Display` — a handful over a session's life is the design,
    a reconnect storm is not. Measure RSS across retries before assuming.
 
-3. **Tiles as displays**, if it needs to go faster again. The only remaining
+3. **A packaging run is twenty minutes and ten of them are `inst`.** The boot
+   was seven of them until the readiness test was fixed; now it is about two.
+   If a release ever needs to be quicker, `inst` is where the time is —
+   `iris-ci save`/`restore` (~145 ms) would let a run start from a snapshot
+   taken after the install rather than repeating it. It needs an invalidation
+   rule first: a snapshot is tied to an image *and* an emulator build.
+
+4. **Tiles as displays**, if it needs to go faster again. The only remaining
    option that changes the cost model rather than tuning it, and the only route
    to full-resolution text at the frame rate 640x512 gets now. See the end of
    §PERFORMANCE and `docs/performance-plan.md` option 9. Large, needs N
    encoders, and depends on client behaviour that must be read in the client's
    source first.
 
-4. **~~Keyboard injection is written but unproven.~~ Done.** `rd_key_char` has
+5. **~~Keyboard injection is written but unproven.~~ Done.** `rd_key_char` has
    now typed sixteen characters into the panel's Relay field and every one
    arrived; see §THE BUTTONS WORK. `rd_key` with a Mac keycode — the
    ControlKey path rather than the `chr` path — is still unexercised, and so
    are modifier combinations: `--probe-keys X Y` sends a ctrl-C and nothing has
    yet confirmed one arrives.
 
-5. **The clipboard and cursor paths are compiled but untested on IRIX.**
+6. **The clipboard and cursor paths are compiled but untested on IRIX.**
    `cursor.rs` matters less than it did — `cursor_embedded` is honoured, so the
    agent should never need to send a shape — but the code that decides that has
    not been exercised against a peer.
 
-6. **`custom_image_quality` is still ignored.** `image_quality` is now wired to
+7. **`custom_image_quality` is still ignored.** `image_quality` is now wired to
    the picture size (§PERFORMANCE); upstream's `custom_image_quality` is a
    bitrate percentage and would belong on `bitrate_for`.
 
-7. **The package installs but has never been through an upgrade.** A second
+8. **The package installs but has never been through an upgrade.** A second
    `.tardist` over the top of a first one should be `replaces self` doing its
    job, and `versions remove rustdesk_agent` should leave nothing behind.
    `scripts/iris-install-test.sh --remove` runs the removal half; the upgrade
    half wants two builds with different versions and has not been done.
 
-8. **No o32 flavor.** The scripts take `--abi` and `stage_inst_inputs` knows
+9. **No o32 flavor.** The scripts take `--abi` and `stage_inst_inputs` knows
    about o32 because irixscsitb's arrangement — each OS packages its own build,
    in its own guest — is worth keeping. Nothing has been built for it, and
    nothing should be until §5.3 stops being deferred.
 
-9. **The libvpx patch has not been through the mogrix pipeline.** It is listed in
+10. **The libvpx patch has not been through the mogrix pipeline.** It is listed in
    `rules/packages/libvpx.yaml` and lives in both `patches/` here and
    `patches/packages/libvpx/` there, but this host cannot run `mogrix build`
    (§The mogrix pipeline cannot run on this host), so it is rendered-and-checked

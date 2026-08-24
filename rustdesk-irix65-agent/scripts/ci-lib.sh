@@ -22,8 +22,9 @@ conf_get() {
 # a real environment variable always beats the file. Call once, after argument
 # parsing.
 load_local_conf() {
-	for _k in IRIX_SYSROOT SGUG_STAGING IRIS_DIR IRIS_IMAGE IRIS_CONFIG \
-	          IRIS_SOCKET RUST_ENV PPC_AGENT_DIR; do
+	for _k in IRIX_SYSROOT SGUG_STAGING PPC_AGENT_DIR \
+	          IRIX65_IMAGE IRIX65_DISK_URL \
+	          IRIS_DIR IRIS_SOCKET IRIS_RELEASE_REPO IRIS_TAG; do
 		_cur=$(eval "printf %s \"\${$_k:-}\"")
 		[ -n "$_cur" ] && continue
 		_v=$(conf_get "$_k")
@@ -31,6 +32,25 @@ load_local_conf() {
 		eval "$_k=\$_v"
 		export "$_k"
 	done
+}
+
+# The image and emulator keys are spelled exactly as ../irixscsitb spells them,
+# on purpose: the same private disk image and the same GitHub secret serve both
+# repositories, and a person who has configured one has configured the other.
+#   IRIX65_IMAGE       a local .chd path (the dispatch input arrives this way)
+#   IRIX65_DISK_URL    a private download URL (a repo secret in Actions)
+#   IRIS_DIR           a checkout/build of iris, if you have one
+#   IRIS_RELEASE_REPO  where fetch-iris.sh looks for prebuilt binaries
+#   IRIS_TAG           pin a release; blank means latest
+
+# resolve_disk_url -- the private download URL for the boot image, if set.
+resolve_disk_url() {
+	printf %s "${IRIX65_DISK_URL:-}"
+}
+
+# resolve_local_image -- a local boot image path, if one is configured.
+resolve_local_image() {
+	printf %s "${IRIX65_IMAGE:-}"
 }
 
 # version_string -- what goes in artifact filenames.
@@ -119,6 +139,34 @@ guest_run() {
 	_to="$1"; shift
 	"${IRIS_CI_BIN:?guest_run: caller must set IRIS_CI_BIN}" \
 		run --shell sh --timeout "$_to" "$*"
+}
+
+# guest_get GUESTPATH HOSTPATH -- pull a file off the guest, with a retry.
+#
+# `iris-ci get` works out which shell the console is running by probing
+# `echo ZZSHELLZZ=$0` and choosing sh or csh syntax from the answer. That probe
+# can miss on a console that has just been worked hard, and it then sends CSH
+# syntax -- `>& /dev/null`, `echo IRIS-CI-RC=$status` -- to bash, which produces
+# an empty exit code and a transfer that fails reporting "iris-ci get needs a
+# shell on the serial console". The shell was there; the detection was not.
+#
+# Seen once in something like fifteen transfers, on the SECOND get of a run
+# whose first one had just succeeded. One bad detection should not cost a
+# twenty-minute packaging run, so: settle the console with a trivial command
+# and try again.
+guest_get() {
+	_try=0
+	while [ $_try -lt 3 ]; do
+		guest_run 20 'echo GET-SETTLE' > /dev/null 2>&1 || true
+		if "${IRIS_CI_BIN:?guest_get: caller must set IRIS_CI_BIN}" \
+		     get "$1" --to "$2" --timeout "${3:-900}"; then
+			return 0
+		fi
+		_try=$(expr $_try + 1)
+		echo "    (transfer failed, retrying -- $_try of 3)" >&2
+		sleep 3
+	done
+	return 1
 }
 
 # guest_login -- put a shell on the serial console.

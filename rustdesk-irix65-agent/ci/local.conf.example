@@ -5,18 +5,38 @@
 # already in the environment wins over what is written here, so a one-off run
 # needs a variable rather than an edit.
 #
-# Everything has a working default on the machine this was developed on; the
-# file exists so that a second machine does not need the scripts edited.
+# The image and emulator keys are spelled the way ../irixscsitb spells them, on
+# purpose: the same private disk image and the same GitHub secret serve both
+# repositories.
 
-# The cross toolchain, as mogrix's `setup-cross` deploys it.
+# ---- the IRIX boot image ------------------------------------------------------
+# One of these. A local path wins; the URL is for CI, where the image is hosted
+# privately and pulled down per run. These are licensed IRIX installs -- host
+# them somewhere private (a private release asset, S3 with a signed URL, ...),
+# never in a public bucket.
+#IRIX65_IMAGE=/home/you/Indy-IRIX65_dev.chd
+#IRIX65_DISK_URL=https://example.invalid/private/indy-irix65.chd
+
+# ---- the emulator -------------------------------------------------------------
+# A local build wins. Otherwise scripts/fetch-iris.sh downloads the prebuilt
+# CLI from a release. Anything older than upstream 02c4e155 wedges the X server
+# under capture load -- it does not matter for packaging, which runs headless,
+# and it matters a great deal for anything driving the panel.
+#IRIS_DIR=/home/you/iris-upstream
+#IRIS_RELEASE_REPO=danifunker/iris
+#IRIS_TAG=
+
+# Only needed to attach to a guest somebody else started. The pipeline's own
+# guest (scripts/iris-guest.sh) picks its own per-run socket so it cannot steal
+# one from a developer's emulator.
+#IRIS_SOCKET=/tmp/iris-rdagent.sock
+
+# ---- the cross toolchain ------------------------------------------------------
+# As mogrix's `setup-cross` deploys it.
 #SGUG_STAGING=/opt/sgug-staging/usr/sgug
 #IRIX_SYSROOT=/opt/irix-sysroot
 
-# The emulator. Upstream iris at 02c4e155 or later -- anything older wedges the
-# X server under capture load. Only iris-gendist.sh needs this.
-#IRIS_DIR=/home/you/iris-upstream
-#IRIS_SOCKET=/tmp/iris-rdagent.sock
-
-# The PowerPC agent tree. The portable modules are included from it by #[path],
-# so the two trees must stay siblings unless this says otherwise.
+# ---- the PowerPC agent tree ---------------------------------------------------
+# The portable modules are included from it by #[path], so the two trees must
+# stay siblings unless this says otherwise.
 #PPC_AGENT_DIR=/home/you/repos/rustdesk/rustdesk-ppc-agent

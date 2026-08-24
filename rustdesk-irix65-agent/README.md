@@ -141,8 +141,16 @@ heard of SGUG-RSE or a cross toolchain runs it.
 /usr/lib/X11/app-chests/RustDesk.chest      a Toolchest entry
 ```
 
-Building the package is `scripts/release.sh`; `docs/PACKAGING.md` is the whole
-pipeline, including the one step that can only happen inside IRIX.
+Building the package:
+
+```sh
+scripts/release.sh --boot --install-test   # boots its own IRIX guest, disposes of it
+scripts/release.sh --no-inst               # no guest at all: binaries + tarball
+```
+
+`docs/PACKAGING.md` is the whole pipeline: where the licensed boot image comes
+from and how it stays private, the guest the run boots and throws away without
+ever writing to that image, and the one step that can only happen inside IRIX.
 
 ## This directory is not standalone
 

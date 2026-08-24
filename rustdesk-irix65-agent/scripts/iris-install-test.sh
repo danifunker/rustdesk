@@ -16,9 +16,12 @@
 # never show up.
 #
 # Usage:
-#   scripts/iris-install-test.sh [--tardist FILE] [--http-port N]
+#   scripts/iris-install-test.sh [--boot] [--tardist FILE] [--http-port N]
 #                                [--tarball] [--remove]
 #
+#   --boot     start a guest for this run and take it away again afterwards,
+#              from an image resolved by scripts/fetch-image.sh. Without it,
+#              attaches to a guest that is already running.
 #   --tarball  also install the .tar.gz with install.sh under a NON-DEFAULT
 #              prefix, which is the one path in install.sh that writes a
 #              wrapper -- and therefore the one most likely to have rotted
@@ -32,6 +35,7 @@ TARDIST=""
 HTTP_PORT="8101"
 DO_REMOVE=0
 DO_TARBALL=0
+BOOT=0
 
 die() { echo "install-test: $*" >&2; exit 1; }
 
@@ -39,6 +43,7 @@ while [ $# -gt 0 ]; do
 	case "$1" in
 		--tardist)   TARDIST="$2"; shift 2 ;;
 		--http-port) HTTP_PORT="$2"; shift 2 ;;
+		--boot)      BOOT=1; shift ;;
 		--tarball)   DO_TARBALL=1; shift ;;
 		--remove)    DO_REMOVE=1; shift ;;
 		-h|--help)   sed -n '2,22p' "$0"; exit 0 ;;
@@ -53,13 +58,31 @@ if [ -z "$TARDIST" ]; then
 fi
 [ -f "$TARDIST" ] || die "no such file: $TARDIST"
 
-IRIS_DIR="${IRIS_DIR:-$HOME/iris-upstream}"
+IRIS_DIR=$(sh "$REPO/scripts/fetch-iris.sh")
 IRIS_CI_BIN="$IRIS_DIR/target/release/iris-ci"
 export IRIS_CI_BIN
 [ -x "$IRIS_CI_BIN" ] || die "no iris-ci at $IRIS_CI_BIN"
-export IRIS_SOCKET="${IRIS_SOCKET:-/tmp/iris-rdagent.sock}"
 
-"$IRIS_CI_BIN" ping > /dev/null 2>&1 || die "no iris on $IRIS_SOCKET"
+# One cleanup handler, set before anything is started -- a second `trap ... EXIT`
+# further down would replace it, and this is what stops a guest we booted.
+cleanup() {
+	[ -n "${HTTP_PID:-}" ] && kill "$HTTP_PID" 2>/dev/null
+	[ "${BOOT:-0}" = 1 ] && sh "$REPO/scripts/iris-guest.sh" stop > /dev/null 2>&1
+	return 0
+}
+trap cleanup EXIT INT TERM
+
+if [ "$BOOT" = 1 ]; then
+	_guest_env=$(sh "$REPO/scripts/iris-guest.sh" start) ||
+		die "could not start a guest"
+	eval "$_guest_env"
+	[ -n "${IRIS_SOCKET:-}" ] || die "the guest started but told us no socket"
+else
+	export IRIS_SOCKET="${IRIS_SOCKET:-/tmp/iris-rdagent.sock}"
+fi
+
+"$IRIS_CI_BIN" ping > /dev/null 2>&1 ||
+	die "no iris on $IRIS_SOCKET -- pass --boot to have one started for you"
 guest_login || die "could not get a shell on the serial console"
 
 # The guest half. Shipped rather than typed: an inst session driven from a
@@ -124,7 +147,6 @@ chmod 755 "$WORK"/*.sh
 
 ( cd "$WORK" && exec python3 -m http.server "$HTTP_PORT" > /dev/null 2>&1 ) &
 HTTP_PID=$!
-trap 'kill $HTTP_PID 2>/dev/null || true' EXIT INT TERM
 sleep 1
 
 WGET=/usr/nekoware/bin/wget

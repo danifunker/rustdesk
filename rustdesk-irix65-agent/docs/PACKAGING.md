@@ -27,12 +27,20 @@ because the one that fails is nearly always the middle one — it is the only on
 that needs a live IRIX.
 
 ```sh
-scripts/release.sh                  # everything
-scripts/release.sh --no-inst        # no guest? still get binaries + tarball
-scripts/iris-gendist.sh             # just re-run the packaging step
-scripts/iris-install-test.sh        # prove the package installs
+scripts/release.sh --boot --install-test    # cold: boots its own guest
+scripts/release.sh                          # warm: attaches to a running one
+scripts/release.sh --no-inst                # no guest at all: binaries + tarball
+scripts/iris-gendist.sh --boot              # just re-run the packaging step
 scripts/iris-install-test.sh --tarball --remove   # and the other two paths
 ```
+
+**`--boot` is the difference between a script and a pipeline.** Without it, both
+emulator steps attach to a guest that somebody started by hand — which is what
+you want while iterating, and is not something CI can do. With it they call
+`scripts/iris-guest.sh`, which resolves an image, starts a guest, waits for the
+login prompt, and takes it away again on the way out however the run ends.
+`release.sh --boot` starts **one** guest and both steps share it, because a boot
+is five minutes on an emulated R5000.
 
 `--tarball` installs the `.tar.gz` with `install.sh` under `/opt/rdtest` — a
 non-default prefix, which is the path in `install.sh` that writes wrappers and
@@ -43,6 +51,84 @@ that is already dominated by how long `inst` takes on an emulated R5000.
 Per-machine paths live in `ci/local.conf` (copy `ci/local.conf.example`). It is
 parsed as `KEY=VALUE` and never sourced, and anything already in the environment
 wins over it.
+
+## Where the image comes from
+
+The IRIX boot image is a licensed install, so it is never in the repository and
+never in a public bucket. `scripts/fetch-image.sh` resolves it, first match
+wins:
+
+| | |
+|---|---|
+| `$IRIX65_IMAGE` | a local path. In Actions this is the `irix65_image` dispatch input, which is how a self-hosted runner uses an image that never leaves the machine. |
+| `ci/local.conf` | the same key, per-machine, `.gitignore`'d. |
+| `$IRIX65_DISK_URL` | a private download URL — **a repository secret**. A bare `.chd` or a `.zip` containing one. |
+
+Those are `../irixscsitb`'s names, deliberately: the same image and the same
+secret serve both repositories, and someone who has configured one has
+configured the other. `--cache-key` prints a stable hash of the URL for
+`actions/cache`, or the literal `local` so a caller can skip caching; a fetch
+into an existing `--dest` is a no-op, which is what makes the cache a
+transparent win.
+
+`scripts/fetch-iris.sh` does the same for the emulator: a local build wins,
+otherwise the prebuilt CLI from an iris release. Building iris from source is a
+Rust toolchain plus clang and libclang for the chd feature, which turns a job
+that should be seconds into minutes.
+
+## The guest a run gets
+
+`scripts/iris-guest.sh start` boots one and prints the shell assignments to
+attach to it. Three properties, each of which was a decision:
+
+- **It never writes to the image.** The generated config sets `overlay = true`,
+  so every write goes to a `.diff.chd` sidecar; `stop` deletes it. A licensed
+  install that a build has mutated is not something you can hand to a second
+  machine — and in CI the image is downloaded fresh anyway, so anything written
+  to it is lost silently rather than usefully. The image is **symlinked** into
+  the work directory and iris is pointed at the link, so the sidecar lands
+  beside the link rather than beside the original.
+- **No port forwards.** The packaging steps need none: commands go over the
+  serial console, files go in over HTTP — the guest dialling out through NAT,
+  not a forward — and come out through `iris-ci get`. With no host ports there
+  is nothing to collide over, so two runs on one machine do not fight and
+  neither can steal the telnet port from a developer's own emulator. The
+  control socket is per-run for the same reason: iris **deletes and rebinds**
+  whatever socket path it is given.
+- **Headless by default.** `gendist` and `inst` never touch the framebuffer,
+  and REX3 is where the emulator's remaining X wedges live. `--graphics` maps
+  it for anything that drives the panel.
+
+**A full build host panics the guest.** Everything the guest writes goes to a
+copy-on-write overlay on the host; a write that cannot be satisfied is a fatal
+error to IRIX — `PANIC: Fatal error on root filesystem`, a dump that also fails,
+and nothing naming the real cause. `iris-guest.sh` checks `df` before booting
+(2 GB floor, `IRIS_GUEST_MIN_MB` overrides) and watches for `PANIC:` while it
+waits, because to a poll that only asks whether a command ran, a panic looks
+exactly like a slow boot.
+
+**`iris-ci get` can pick the wrong shell.** It probes `echo ZZSHELLZZ=$0` and
+chooses sh or csh syntax from the answer; on a console that has just been worked
+hard the probe misses and it sends `>& /dev/null` and `$status` to bash. The
+transfer then fails reporting *"iris-ci get needs a shell on the serial
+console"* — and the shell is right there. Once in about fifteen transfers, and
+it costs the whole twenty-minute run. `guest_get` settles the console and
+retries. `get` has no `--shell` flag the way `run` does; if it grows one, this
+retry can go.
+
+**Readiness is "a command runs", not "a banner appeared."** `iris-ci boot`
+waits for the console login prompt and is the obvious call to make here — and
+on this image it sits through its entire timeout while `IRIS console login:` is
+already in `console.log`, because the PROM autoboots straight past the menu it
+watches for. `iris-guest.sh` polls `iris-ci run 'echo GUEST-READY'` instead,
+which asks the only question that matters.
+
+It is also **much** faster, for a reason that was already written down.
+`RESUME.md` has said since the first session that "telnetd answers well before
+the serial console prints its login banner" — and so does the console shell.
+The guest answered a command **110 seconds** in; the banner did not appear for
+another five minutes. Waiting for it was throwing those five minutes away on
+every run.
 
 ## What the package contains, and why so little
 
@@ -159,6 +245,27 @@ that sets a variable, because nothing should quietly rewrite a linked path
 behind anyone's back. The helper needs no wrapper: it looks beside *itself*
 first, for both the agent and the library, which costs one line and works under
 any prefix.
+
+## Where this could go next
+
+Three things are shaped for it and not done:
+
+- **Make `inst` cheaper, not the boot.** The obvious optimisation is snapshots
+  — `iris-ci save` / `restore` exists and restore is quoted at ~145 ms — and
+  fixing the readiness test took most of the prize away first: the boot is now
+  about two minutes of a twenty-minute run. What dominates is `inst` itself, at
+  roughly ten. A snapshot would still pay, and it would want an invalidation
+  rule (a snapshot is tied to an image *and* an emulator build; `--cache-key`
+  computes half of one) — but the honest measurement says look at the install
+  test before the boot. Reusing one guest across a matrix, which `release.sh
+  --boot` already does for two steps, is the same idea for less work.
+- **An o32 flavor**, packaged by a 5.3 guest. `--abi` and `stage_inst_inputs`
+  take it already; what is missing is an o32 build of the agent, which is the
+  other effort in `~/repos/rust-irixlibstd`, and a 5.3 image. `../irixscsitb`
+  runs exactly this as a two-flavor matrix and is the thing to copy.
+- **Publishing.** There is no `publish-release.sh` here. irixscsitb's takes the
+  artifact set and makes a GitHub release out of it; nothing about this
+  pipeline's output would make that hard.
 
 ## What is deliberately not in the package
 

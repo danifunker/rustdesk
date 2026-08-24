@@ -14,7 +14,13 @@
 # and installable release for anyone who does not want to use swmgr.
 #
 # Usage:
-#   scripts/release.sh [--version V] [--no-inst] [--no-build] [--outdir DIR]
+#   scripts/release.sh [--boot] [--version V] [--no-inst] [--no-build]
+#                      [--outdir DIR] [--install-test]
+#
+# --boot starts a disposable guest for the emulator steps and takes it away
+# again, from an image resolved by scripts/fetch-image.sh -- a local path, or a
+# private URL in CI. Without it they attach to a guest that is already running,
+# which is what you want while iterating.
 set -eu
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
@@ -24,6 +30,8 @@ VERSION=""
 OUTDIR=""
 DO_BUILD=1
 DO_INST=1
+DO_TEST=0
+BOOT=""
 
 die() { echo "release: $*" >&2; exit 1; }
 
@@ -33,6 +41,8 @@ while [ $# -gt 0 ]; do
 		--outdir)   OUTDIR="$2"; shift 2 ;;
 		--no-build) DO_BUILD=0; shift ;;
 		--no-inst)  DO_INST=0; shift ;;
+		--boot)     BOOT="--boot"; shift ;;
+		--install-test) DO_TEST=1; shift ;;
 		-h|--help)  sed -n '2,19p' "$0"; exit 0 ;;
 		*)          die "unknown option: $1" ;;
 	esac
@@ -50,9 +60,33 @@ if [ "$DO_BUILD" = 1 ]; then
 	echo
 fi
 
+# ONE guest for the whole release, not one per step.
+#
+# Both emulator steps take --boot and each would start and stop its own, which
+# is correct when either is run alone and wasteful here: a boot is five minutes
+# on an emulated R5000 and the two steps want the same machine. So the guest is
+# started here, both steps attach to it through IRIS_SOCKET, and the trap stops
+# it however this exits.
+if [ -n "$BOOT" ]; then
+	trap 'sh "$REPO/scripts/iris-guest.sh" stop > /dev/null 2>&1 || true' EXIT INT TERM
+	_guest_env=$(sh "$REPO/scripts/iris-guest.sh" start) ||
+		die "could not start a guest"
+	eval "$_guest_env"
+	[ -n "${IRIS_SOCKET:-}" ] || die "the guest started but told us no socket"
+	echo
+fi
+
 if [ "$DO_INST" = 1 ]; then
 	sh "$REPO/scripts/iris-gendist.sh" --version "$VERSION"
 	echo
 fi
 
 sh "$REPO/scripts/package.sh" --version "$VERSION" --outdir "$OUTDIR"
+
+# Off by default because it costs ten minutes on an emulated R5000, almost all
+# of it inside inst. On by default would be right if this were faster; as it is,
+# CI turns it on and a person iterating does not.
+if [ "$DO_TEST" = 1 ]; then
+	echo
+	sh "$REPO/scripts/iris-install-test.sh"
+fi
