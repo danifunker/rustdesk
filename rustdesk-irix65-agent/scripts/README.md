@@ -13,13 +13,21 @@ image and one repository secret serve both projects.
 | `build.sh` | cross-build the agent, the panel; stage the install tree | no |
 | `iris-gendist.sh` | run `gendist` in IRIX — the only step Linux cannot do | yes |
 | `package.sh` | the trio → `.tardist`, plus `.tar.gz` and checksums | no |
-| `iris-install-test.sh` | install it in a guest and run what came out | yes |
 | `release.sh` | all of the above, in order | with `--boot` |
 
 ```sh
-scripts/release.sh --boot --install-test   # cold: boots a guest, disposes of it
-scripts/release.sh                         # warm: attaches to a running one
-scripts/release.sh --no-inst               # no guest at all: binaries + tarball
+scripts/release.sh --boot        # cold: boots a guest, disposes of it
+scripts/release.sh               # warm: attaches to a running one
+scripts/release.sh --no-inst     # no guest at all: binaries + tarball
+```
+
+`iris-install-test.sh` installs the package in a guest and runs what came out.
+It is **not part of a release** — it doubles a run, nearly all of it inside
+`inst` — and is opt-in everywhere. Run it when the PACKAGING changes; that is
+the only kind of change it has ever caught anything on.
+
+```sh
+scripts/iris-install-test.sh --boot [--tarball] [--remove]
 ```
 
 ## Getting a machine to run on
@@ -59,5 +67,5 @@ waits for a console login prompt this image never presents the way it expects,
 and the prompt prints five minutes after the guest is actually usable anyway.
 `iris-guest.sh` polls until a command comes back.
 
-`../docs/PACKAGING.md` is the full account, including why the install test earns
-its ten minutes.
+`../docs/PACKAGING.md` is the full account, including what the install test is
+worth on the occasions it is worth running.

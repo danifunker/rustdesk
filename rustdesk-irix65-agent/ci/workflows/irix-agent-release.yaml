@@ -63,10 +63,10 @@ on:
         required: false
         default: ""
       install_test:
-        description: "Install the package in the guest and run it (adds ~10 min, almost all of it inside inst)"
+        description: "Also install the package in the guest and run it (adds ~10 min, almost all of it inside inst). Off: a release does not wait on this."
         type: boolean
         required: false
-        default: true
+        default: false
 
 permissions:
   contents: read
@@ -126,11 +126,18 @@ jobs:
       # somebody has to go and look at.
       # --no-build because the step above already did it. release.sh builds by
       # default, and a second cross-build here would be a minute of nothing.
+      #
+      # The install test is OFF by default and a release does not wait on it.
+      # It roughly doubles a run -- ten minutes of a twenty-minute job, nearly
+      # all of it inside inst on an emulated R5000 -- and a release should not
+      # cost that every time. Turn it on with the install_test input when the
+      # packaging itself has changed; that is the only time it has ever found
+      # anything. See docs/PACKAGING.md for what it is worth when it does run.
       - name: Package (boots its own guest)
         if: ${{ github.event.inputs.build_inst != 'false' }}
         run: |
           scripts/release.sh --no-build --boot \
-            ${{ github.event.inputs.install_test != 'false' && '--install-test' || '' }}
+            ${{ github.event.inputs.install_test == 'true' && '--install-test' || '' }}
 
       - name: Package without a guest
         if: ${{ github.event.inputs.build_inst == 'false' }}

@@ -27,11 +27,28 @@ because the one that fails is nearly always the middle one — it is the only on
 that needs a live IRIX.
 
 ```sh
-scripts/release.sh --boot --install-test    # cold: boots its own guest
-scripts/release.sh                          # warm: attaches to a running one
-scripts/release.sh --no-inst                # no guest at all: binaries + tarball
-scripts/iris-gendist.sh --boot              # just re-run the packaging step
-scripts/iris-install-test.sh --tarball --remove   # and the other two paths
+scripts/release.sh --boot          # cold: boots its own guest, disposes of it
+scripts/release.sh                 # warm: attaches to a running one
+scripts/release.sh --no-inst       # no guest at all: binaries + tarball
+scripts/iris-gendist.sh --boot     # just re-run the packaging step
+```
+
+**The install test is not part of a release.** `scripts/iris-install-test.sh`
+roughly doubles a run — ten minutes of twenty, nearly all of it inside `inst` on
+an emulated R5000 — and shipping a package should not cost that every time. It
+is opt-in everywhere: `release.sh --install-test`, or the `install_test` input
+in the workflow, both off by default.
+
+Run it when the **packaging** changes: the file list in the idb, an install
+path, what the helper or the panel looks for. That is the only kind of change it
+has ever caught anything on — see below, where it caught something invisible
+anywhere else. For an ordinary code change it tells you nothing new, and the
+trade is deliberate: a release that is quick, and a class of install-only bug
+that will get through until someone runs it.
+
+```sh
+scripts/iris-install-test.sh --boot                      # does it install and run
+scripts/iris-install-test.sh --boot --tarball --remove   # and the other two paths
 ```
 
 **`--boot` is the difference between a script and a pipeline.** Without it, both
@@ -161,7 +178,7 @@ and only one of them is any good:
 `LD_LIBRARYN32_PATH` explicitly **unset**, because every other script here sets
 it and an rpath that quietly did nothing would never show up.
 
-### Why the install test earns its ten minutes
+### What the install test is for, when you do run it
 
 It found a bug that cannot exist anywhere else. `agent-helper.sh` decides
 whether the agent is running with

@@ -1000,8 +1000,17 @@ The other half of the release installs by hand:
 runs `install.sh -p /opt/rdtest`, runs the wrapper it wrote **with no
 environment set** (`ff6izj02b`), and takes it all away again with `-u`. That
 path exists for a machine without swmgr and for a site that wants the files
-somewhere else, and it is the part most likely to rot, which is why it is
-tested rather than merely written.
+somewhere else.
+
+**The install test is not part of a release** — decided 2026-08-24. It roughly
+doubles a run, ten minutes of twenty and nearly all of it inside `inst` on an
+emulated R5000, and shipping a package should not cost that every time. Opt-in
+everywhere: `release.sh --install-test`, or the workflow's `install_test`
+input, both off. Run it when the **packaging** changes — the idb, an install
+path, what the helper or the panel looks for — which is the only kind of change
+it has ever caught anything on. The trade is deliberate and worth naming: a
+quick release, and a class of install-only bug (§THE BUTTONS WORK has the one
+it caught) that will get through until somebody runs it.
 
 `docs/PACKAGING.md` is the whole pipeline. The shape is `../irixscsitb`'s: an
 `inst/` product description whose version and ABI are stamped in at build time,

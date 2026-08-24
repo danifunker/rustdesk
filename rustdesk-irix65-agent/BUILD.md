@@ -154,9 +154,12 @@ scripts/release.sh --no-inst  # no guest available: binaries and the tarball onl
 
 `docs/PACKAGING.md` is the whole pipeline: what goes in the package, why
 `libgcc_s.so.1` is the only library in it, and the three different channels the
-guest steps use. `scripts/iris-install-test.sh` installs the result in the
-emulator and runs it with `LD_LIBRARYN32_PATH` deliberately unset, which is the
-only way to find out that the rpath actually took.
+guest steps use.
+
+`scripts/iris-install-test.sh --boot` installs the result in the emulator and
+runs it with `LD_LIBRARYN32_PATH` deliberately unset, which is the only way to
+find out that the rpath actually took. It is **not** part of a release — it
+doubles a run — so run it when the packaging changes rather than every time.
 
 ## LLD cannot link SGI's static archives
 

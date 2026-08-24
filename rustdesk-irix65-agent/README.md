@@ -144,7 +144,7 @@ heard of SGUG-RSE or a cross toolchain runs it.
 Building the package:
 
 ```sh
-scripts/release.sh --boot --install-test   # boots its own IRIX guest, disposes of it
+scripts/release.sh --boot                  # boots its own IRIX guest, disposes of it
 scripts/release.sh --no-inst               # no guest at all: binaries + tarball
 ```
 

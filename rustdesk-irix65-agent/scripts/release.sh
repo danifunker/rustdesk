@@ -17,6 +17,9 @@
 #   scripts/release.sh [--boot] [--version V] [--no-inst] [--no-build]
 #                      [--outdir DIR] [--install-test]
 #
+# --install-test is OPT-IN and is not part of a release. See the note beside it
+# below.
+#
 # --boot starts a disposable guest for the emulator steps and takes it away
 # again, from an image resolved by scripts/fetch-image.sh -- a local path, or a
 # private URL in CI. Without it they attach to a guest that is already running,
@@ -83,9 +86,15 @@ fi
 
 sh "$REPO/scripts/package.sh" --version "$VERSION" --outdir "$OUTDIR"
 
-# Off by default because it costs ten minutes on an emulated R5000, almost all
-# of it inside inst. On by default would be right if this were faster; as it is,
-# CI turns it on and a person iterating does not.
+# NOT part of a release, and off everywhere by default.
+#
+# It roughly doubles a run -- ten minutes of twenty, nearly all of it inside
+# inst on an emulated R5000 -- and shipping a package should not cost that every
+# time. Run it when the PACKAGING has changed: the file list, the install paths,
+# what the helper looks for. That is the only kind of change it has ever caught
+# anything on, and when it does catch something the something is invisible
+# everywhere else (see docs/PACKAGING.md). For an ordinary code change it tells
+# you nothing you did not already know.
 if [ "$DO_TEST" = 1 ]; then
 	echo
 	sh "$REPO/scripts/iris-install-test.sh"
