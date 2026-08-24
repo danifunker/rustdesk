@@ -169,10 +169,24 @@ guest_get() {
 	return 1
 }
 
-# guest_login -- put a shell on the serial console.
+# guest_login -- make sure there is a shell on the serial console.
 #
 # Needed before guest_run and before `iris-ci get`, both of which otherwise wait
 # out their whole timeout against a login prompt having done nothing at all.
+#
+# `iris-ci login` FAILS when the console is already logged in: it types `root`
+# at a shell, which answers "root: command not found", and login reports that it
+# never saw the sequence it wanted. Treating that as an error made the install
+# test refuse to start on a guest that had just finished running gendist
+# perfectly well. So the test is the same one used everywhere else here -- does
+# a command run? -- and the login is only attempted when it does not.
 guest_login() {
-	"${IRIS_CI_BIN:?guest_login: caller must set IRIS_CI_BIN}" login root > /dev/null 2>&1
+	_ic="${IRIS_CI_BIN:?guest_login: caller must set IRIS_CI_BIN}"
+	if "$_ic" run --shell sh --timeout 20 'echo SHELL-THERE' 2>/dev/null |
+	   grep -q SHELL-THERE; then
+		return 0
+	fi
+	"$_ic" login root > /dev/null 2>&1 || true
+	"$_ic" run --shell sh --timeout 30 'echo SHELL-THERE' 2>/dev/null |
+		grep -q SHELL-THERE
 }

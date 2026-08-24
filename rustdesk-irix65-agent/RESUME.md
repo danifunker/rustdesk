@@ -1094,11 +1094,23 @@ Two more things that run only bought:
   chooses sh or csh syntax from the answer; on a console that has just been
   worked hard the probe can miss, and it then sends `>& /dev/null` and
   `$status` to bash. The transfer fails reporting "iris-ci get needs a shell on
-  the serial console" — and the shell is right there. Seen once in about fifteen
-  transfers, on the second `get` of a run whose first had just succeeded, and it
-  cost a twenty-minute packaging run. `guest_get` in `scripts/ci-lib.sh` settles
-  the console and retries three times. Worth reporting upstream: `get` has no
-  `--shell` flag the way `run` does, which would remove the guesswork entirely.
+  the serial console" — and the shell is right there. `guest_get` in
+  `scripts/ci-lib.sh` settles the console and retries three times; one retry has
+  always been enough. Worth reporting upstream, with the detail that should
+  narrow it: **it has failed on the SECOND `get` of a run both times it has
+  happened**, never the first or the third. `get` has no `--shell` flag the way
+  `run` does, which would remove the guesswork entirely.
+
+- **`iris-ci login` fails when the console is ALREADY logged in.** It types
+  `root` at a shell, gets "root: command not found", and reports that it never
+  saw the sequence it was looking for. Treating that as an error made the
+  install test refuse to start on a guest that had just run gendist perfectly
+  well — "could not get a shell on the serial console", about a console with a
+  shell on it. `guest_login` now asks whether a command runs and only logs in
+  when one does not. That is the third time in one session that the same lesson
+  arrived wearing a different hat: **ask whether the thing works, not whether a
+  proxy for it looks right.** The X wedge, the boot banner and this are all the
+  same mistake.
 
 And one worth remembering separately, because it is easy to do by reflex:
 **editing a shell script that is currently executing corrupts the run.** `sh`

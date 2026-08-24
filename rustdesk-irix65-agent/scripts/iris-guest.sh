@@ -96,6 +96,21 @@ start)
 		exit 0
 	fi
 
+	# The pidfile is not the only way to find out. Delete the work directory
+	# while a guest is running -- which is an easy thing to do between two
+	# failed runs -- and the pidfile goes with it, so this would start a SECOND
+	# emulator on the same socket. iris deletes and rebinds whatever socket
+	# path it is given, so the two would then fight over one control channel
+	# and over one overlay file. Ask the socket.
+	if [ -S "$SOCK" ] &&
+	   "$(sh "$REPO/scripts/fetch-iris.sh" 2>/dev/null)/target/release/iris-ci" \
+	     --socket "$SOCK" ping > /dev/null 2>&1; then
+		die "something is already answering on $SOCK, but there is no pidfile
+in $WORKDIR. That is a guest this script has lost track of -- most likely the
+work directory was deleted underneath a running one. Find it with
+\`pgrep -x iris\` and stop it before starting another."
+	fi
+
 	[ -n "$IMAGE" ] || IMAGE=$(sh "$REPO/scripts/fetch-image.sh")
 	[ -f "$IMAGE" ] || die "no such image: $IMAGE"
 	IMAGE=$(cd "$(dirname "$IMAGE")" && pwd)/$(basename "$IMAGE")
