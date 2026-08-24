@@ -16,14 +16,36 @@
 # Bourne shell, not bash: /bin/sh on IRIX 6.5 is the SVR4 shell.
 set -u
 
-AGENT="${RD_AGENT:-/usr/sgug/bin/rustdesk-agent}"
-[ -x "$AGENT" ] || AGENT=/tmp/rustdesk-agent
+# Where the agent is, in the order it is likely to be there: what the caller
+# said, then where the package puts it, then a SGUG-RSE tree, then the
+# development /tmp. The packaged location has to come before /tmp or an
+# installed machine that once had a copy in /tmp keeps using the stale one --
+# which is exactly what the first install test found, with `status` reporting
+# `agent=/tmp/rustdesk-agent` on a machine that had just installed the package.
+#
+# `$HERE/rustdesk-agent` comes first because it is the only entry that works for
+# an install under a prefix nobody chose in advance: install.sh -p puts the real
+# binary beside this script, and looking next to itself needs no configuration
+# and no wrapper.
+HERE=`dirname "$0"`
+AGENT="${RD_AGENT:-}"
+if [ -z "$AGENT" ]; then
+    for _a in "$HERE/rustdesk-agent" /usr/sbin/rustdesk-agent \
+              /usr/sgug/bin/rustdesk-agent /tmp/rustdesk-agent; do
+        if [ -x "$_a" ]; then AGENT="$_a"; break; fi
+    done
+    [ -n "$AGENT" ] || AGENT=/usr/sbin/rustdesk-agent
+fi
 CONF="${RD_CONF:-$HOME/.rustdesk-ppc-agent.conf}"
 LOG="${RD_LOG:-/tmp/agent.log}"
 PORT="${RD_PORT:-21118}"
 
-# The agent needs libgcc_s from the sgug tree at run time; see RESUME.
-LD_LIBRARYN32_PATH="${LD_LIBRARYN32_PATH:-/usr/sgug/lib32}"
+# libgcc_s.so.1 is the one library the agent needs that IRIX does not ship.
+# An INSTALLED agent finds it through its own rpath and needs nothing here; this
+# is for the two cases that do not: a build run out of /tmp on a machine with
+# SGUG-RSE, and an install under a prefix the rpath does not name, where the
+# copy sits beside this script.
+LD_LIBRARYN32_PATH="${LD_LIBRARYN32_PATH:-$HERE:/usr/sgug/lib32}"
 export LD_LIBRARYN32_PATH
 
 conf_get() {
@@ -31,8 +53,32 @@ conf_get() {
     sed -n "s/^$1 *= *//p" "$CONF" | head -1
 }
 
+# Which processes are the agent. Two IRIX traps and one of our own making, all
+# of which produced a panel whose buttons looked broken:
+#
+#   `ps -e` truncates COMD to EIGHT characters, so `rustdesk-agent` appears as
+#   `rustdesk-` and `ps -e | grep rustdesk-agent` matches NOTHING. Written that
+#   way, is_running answered "no" for a running agent: Stop killed nothing and
+#   still said "Stopped.", and Start said "Could not start it" about an agent it
+#   had just started.
+#
+#   `ps -e -o pid,args | grep rustdesk-agent` fixes that and matches too much.
+#   It matches `rustdesk-agent-gui` -- so Stop takes down the window that
+#   pressed it -- and, once INSTALLED, it matches this script's own shell,
+#   because the path is /usr/lib/RUSTDESK-AGENT/agent-helper.sh. That one is
+#   invisible until the software is installed: is_running then always says yes,
+#   so Start is greyed out for ever and Stop kills the helper mid-run.
+#
+# So: match the BASENAME OF argv[0] exactly. A process is the agent if it is the
+# agent, not if its command line mentions it.
 agent_pids() {
-    ps -e | grep rustdesk-agent | grep -v grep | awk '{print $1}'
+    ps -e -o pid,args | awk '
+        {
+            cmd = $2
+            sub(/.*\//, "", cmd)
+            if (cmd == "rustdesk-agent")
+                print $1
+        }'
 }
 
 is_running() {

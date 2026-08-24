@@ -1,5 +1,13 @@
 # Resume prompt: finish the IRIX settings panel
 
+> **Done, 2026-08-24.** The buttons have been pressed, three bugs came out of it,
+> and there is now an installable package. `RESUME.md` §THE BUTTONS WORK and
+> §THE PACKAGE are the current state; what follows is the prompt as it was
+> written and is kept because its account of the layout attempts, the eight-
+> character `ps` trap and the telnet behaviour is still the best one there is.
+> One correction: the telnet stall is **not** inetd disabling a service. See
+> `docs/ISSUE-nat-inbound-stall.md`.
+
 Continue the IRIX RustDesk agent. Read `rustdesk-irix65-agent/RESUME.md` first —
 it is the source of truth for state, environment, what is verified, what is
 ruled out, and the mistakes not to repeat. Do not re-derive anything it records.

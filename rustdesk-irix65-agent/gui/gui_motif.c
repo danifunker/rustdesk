@@ -193,10 +193,36 @@ static char helper_path[1024];
  * talking to the helper
  * ------------------------------------------------------------------ */
 
+/*
+ * The status line, flattened to one line and bounded.
+ *
+ * XmStringCreateLtoR turns every newline into a SEPARATE LINE of the label, and
+ * a Label recomputes its size from its string -- so one multi-line reply from
+ * the helper (a shell error, a usage message, anything unexpected) makes the
+ * label taller than the space the MainWindow gave it, and with no window
+ * manager to renegotiate the shell it simply draws past the bottom of the
+ * window onto the root. That is what the second button-press run photographed,
+ * and it looks like the panel has corrupted the screen.
+ *
+ * So: newlines become spaces and the whole thing is bounded. The label also has
+ * XmNrecomputeSize False (see main), which is the belt to this braces -- either
+ * alone would do, and the failure is ugly enough to be worth both.
+ */
 static void set_status(const char *text)
 {
-	XmString xs = XmStringCreateLtoR((char *)text, XmSTRING_DEFAULT_CHARSET);
+	char one[400];
+	size_t i = 0;
+	XmString xs;
 
+	for (; text != NULL && *text != '\0' && i < sizeof(one) - 4; text++) {
+		one[i++] = (*text == '\n' || *text == '\r' || *text == '\t') ? ' ' : *text;
+	}
+	if (text != NULL && *text != '\0') {
+		one[i++] = '.'; one[i++] = '.'; one[i++] = '.';
+	}
+	one[i] = '\0';
+
+	xs = XmStringCreateLtoR(one, XmSTRING_DEFAULT_CHARSET);
 	XtVaSetValues(status_w, XmNlabelString, xs, NULL);
 	XmStringFree(xs);
 }
@@ -450,29 +476,46 @@ static void apply_cb(Widget w, XtPointer client, XtPointer call)
 	struct applyto *a = (struct applyto *)client;
 	char *value = XmTextFieldGetString(*a->text);
 	const char *out;
+	char said[512];
 
 	(void)w; (void)call;
 	set_busy("Applying...", 1);
 	out = helper("set", a->field, value != NULL ? value : "");
 	XtFree(value);
-	set_busy(out, 0);
+	/*
+	 * COPY IT. helper() returns a static buffer and refresh_state() calls
+	 * helper() again, so `out` afterwards points at the STATUS BLOB rather
+	 * than at what this Apply did -- which is precisely what the status line
+	 * showed on the machine: `agent=/usr/sbin/rustdesk-agent present=yes
+	 * running=yes id=...`, one long line of key=value where a sentence
+	 * belonged. Before set_status was taught to flatten newlines it was
+	 * worse: the label grew to fit and drew off the bottom of the window.
+	 */
+	strncpy(said, out, sizeof(said) - 1);
+	said[sizeof(said) - 1] = '\0';
+	set_busy(said, 0);
 	refresh_state();
 	/* The helper's own words, and it is the only feedback there is that the
 	 * setting reached the config rather than the text field. */
-	set_status(out);
+	set_status(said);
 }
 
 static void lifecycle_cb(Widget w, XtPointer client, XtPointer call)
 {
 	const char *verb = (const char *)client;
 	const char *out;
+	char said[512];
 
 	(void)w; (void)call;
 	set_busy(strcmp(verb, "stop") == 0 ? "Stopping..." : "Starting...", 1);
 	out = helper(verb, NULL, NULL);
-	set_busy(out, 0);
+	/* Copied for the same reason as in apply_cb: refresh_state() reuses the
+	 * buffer `out` points into. */
+	strncpy(said, out, sizeof(said) - 1);
+	said[sizeof(said) - 1] = '\0';
+	set_busy(said, 0);
 	refresh_state();
-	set_status(out);
+	set_status(said);
 }
 
 static void refresh_cb(Widget w, XtPointer client, XtPointer call)
@@ -731,10 +774,75 @@ static void find_helper(const char *argv0)
 		if (access(helper_path, X_OK) == 0)
 			return;
 	}
+	/* Where the package puts it. This has to be here: installed, the panel
+	 * is /usr/sbin/rustdesk-agent-gui, so "beside argv[0]" looks in /usr/sbin
+	 * and finds nothing -- and the first install test duly fell through to
+	 * the /tmp copy, which existed only because that machine had been used
+	 * for development. On anyone else's machine the panel would have found
+	 * no helper at all and said so on its first refresh. */
+	strcpy(helper_path, "/usr/lib/rustdesk-agent/agent-helper.sh");
+	if (access(helper_path, X_OK) == 0)
+		return;
 	strcpy(helper_path, "/usr/sgug/lib/rustdesk-agent/agent-helper.sh");
 	if (access(helper_path, X_OK) == 0)
 		return;
 	strcpy(helper_path, "/tmp/agent-helper.sh");
+}
+
+/* ------------------------------------------------------------------ *
+ * where the buttons are
+ * ------------------------------------------------------------------ */
+
+/*
+ * With RD_GUI_GEOM set in the environment, print every managed widget's
+ * position in ROOT coordinates once the window manager has placed the window.
+ *
+ * This exists because the panel is the first thing on this machine that a
+ * pointer can usefully be aimed at, and there is no xdotool here, no wmctrl,
+ * and no way to ask 4Dwm where it put anything. The alternative is reading
+ * coordinates off a screen capture, which is at 1/2 scale -- so every button
+ * is +-2 native pixels before any arithmetic, and a click that lands one pixel
+ * outside a PushButton does nothing at all and looks exactly like injection
+ * being broken. Asking the toolkit is exact and costs a few lines.
+ *
+ * A timeout rather than an expose handler, because the window manager places
+ * the shell AFTER it is realized: XtTranslateCoords before that reports where
+ * the shell asked to be, not where 4Dwm put it.
+ */
+static void dump_tree(Widget w)
+{
+	WidgetList kids = NULL;
+	Cardinal   nkids = 0, i;
+
+	if (w == NULL || !XtIsWidget(w))
+		return;
+
+	if (XtIsRealized(w) && XtIsManaged(w)) {
+		Position  rx = 0, ry = 0;
+		Dimension ww = 0, hh = 0;
+
+		XtVaGetValues(w, XmNwidth, &ww, XmNheight, &hh, NULL);
+		XtTranslateCoords(w, 0, 0, &rx, &ry);
+		/* name, then the centre -- the centre is what gets clicked. */
+		printf("geom %-16s %4d %4d  %4dx%-4d  centre %4d %4d\n",
+		       XtName(w), (int)rx, (int)ry, (int)ww, (int)hh,
+		       (int)rx + (int)ww / 2, (int)ry + (int)hh / 2);
+	}
+
+	if (XtIsComposite(w)) {
+		XtVaGetValues(w, XtNchildren, &kids, XtNnumChildren, &nkids, NULL);
+		for (i = 0; i < nkids; i++)
+			dump_tree(kids[i]);
+	}
+}
+
+static void geom_cb(XtPointer client, XtIntervalId *id)
+{
+	(void)client; (void)id;
+	printf("--- geometry, root coordinates ---\n");
+	dump_tree(toplevel);
+	printf("--- end geometry ---\n");
+	fflush(stdout);
 }
 
 int main(int argc, char *argv[])
@@ -795,13 +903,20 @@ int main(int argc, char *argv[])
 	XtAddCallback(XtVaCreateManagedWidget("refreshBtn", xmPushButtonWidgetClass, buttons, NULL),
 		      XmNactivateCallback, refresh_cb, NULL);
 
+	/* recomputeSize False: whatever the helper says, this label keeps the
+	 * height and width the layout gave it. See set_status. */
 	status_w = XtVaCreateManagedWidget("status", xmLabelWidgetClass, mainw,
-					   XmNalignment, XmALIGNMENT_BEGINNING, NULL);
+					   XmNalignment,     XmALIGNMENT_BEGINNING,
+					   XmNrecomputeSize, False,
+					   NULL);
 
 	XmMainWindowSetAreas(mainw, menubar, NULL, NULL, NULL, form);
 	XtVaSetValues(mainw, XmNmessageWindow, status_w, NULL);
 
 	XtRealizeWidget(toplevel);
+	/* Only when asked: an ordinary run should say nothing on stdout. */
+	if (getenv("RD_GUI_GEOM") != NULL)
+		XtAppAddTimeOut(app, 2500, geom_cb, NULL);
 	/*
 	 * After realizing, not before -- unlike irixscsitb, which scans first so
 	 * it can size the window to the rows it got. Here every row is a fixed

@@ -8,7 +8,13 @@ brackets every command with a unique marker instead, so slicing is exact.
 
 Usage:  gsh.py 'cmd1' 'cmd2' ...
         gsh.py -f commands.txt      (one command per line, # comments ok)
-Env:    GSH_TIMEOUT   per-command timeout in seconds (default 300)
+Env:    GSH_TIMEOUT         per-command timeout in seconds (default 300)
+        GSH_LOGIN_TIMEOUT   seconds to wait for the login prompt (default 240).
+                            Worth turning down for a liveness probe: telnetd
+                            stops answering every couple of dozen sessions
+                            (inetd, not the guest -- see RESUME), and a caller
+                            that only wants to know WHETHER it answers should
+                            not spend four minutes finding out.
 """
 import os, re, socket, sys, time
 
@@ -66,7 +72,9 @@ class Telnet:
         self.s.sendall(line.encode() + b"\r\n")
 
 
-def login(user="root", password=None, timeout=240):
+def login(user="root", password=None, timeout=None):
+    if timeout is None:
+        timeout = int(os.environ.get("GSH_LOGIN_TIMEOUT", "240"))
     t = Telnet()
     if not t.read_until(r"login:", timeout):
         raise SystemExit("no login prompt")

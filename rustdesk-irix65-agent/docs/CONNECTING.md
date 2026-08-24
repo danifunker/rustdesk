@@ -89,6 +89,15 @@ challenge are ASCII and legible in the dump:
 Nothing back means the forward is missing or the agent is bound to loopback.
 A refused connection means the agent is not running.
 
+**Or the forward itself has stopped delivering.** iris's inbound NAT stalls
+after enough connections: the host-side listener still accepts and nothing is
+ever passed to the guest, which from here looks exactly like an agent that has
+gone deaf. It was found on the telnet forward, and there is no reason to think
+21118 is special. `docs/ISSUE-nat-inbound-stall.md` has what was ruled out and
+what brings it back. If a session that was working stops, check the guest over
+the serial console (`iris-ci run --shell sh 'ps -e -o pid,args'`) before
+suspecting the agent.
+
 ## What to expect
 
 Pick the picture size with the client's **image quality** control, which the

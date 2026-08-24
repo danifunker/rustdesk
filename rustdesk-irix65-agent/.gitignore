@@ -40,3 +40,16 @@ ports/iris-run/iris-target-r4k/
 
 # The cross-built panel is an artifact of gui/build-gui.sh, like the agent.
 gui/rustdesk-agent-gui
+
+# Probe binary, rebuilt with one irix-cc command:
+#   irix-cc -O2 -o probes/xpoke probes/xpoke.c src/input_shim.c -lXext -lX11
+probes/xpoke
+
+# Packaging output. build/ is the staged tree and whatever came back from the
+# guest; dist/ is the artifacts. Both are reproduced by scripts/release.sh.
+build/
+dist/
+
+# Per-machine paths for the build scripts. ci/local.conf.example is the
+# template and IS tracked.
+ci/local.conf
