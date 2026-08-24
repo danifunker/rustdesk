@@ -61,37 +61,88 @@ Verified on IRIX 6.5.22m under emulation:
 | Mouse injection — absolute, relative, clamping | works |
 | Capture: all three paths, rectangles checked against canvas pixels | works |
 | Portable modules — crypto, config, png, json, http, protobuf, zstd | 20/20 checks pass on hardware |
+| Keyboard injection into a focused Motif field | works |
+| The settings panel's Start / Stop / Apply, pressed by injected input | works |
+| The package installs with `inst` and runs with no environment set | works |
 
 Not established:
 
 - **Never run on real hardware.** Every number here is from an emulator, which
   is roughly 3x slower than a real R5000 and is not a graphics-accurate model.
-- **Colours are unverified.** IRIX hands back **A,B,G,R** in memory; the
-  converters came from a Mac port whose framebuffer was A,R,G,B. The C and Rust
-  paths agree with *each other*, which proves only that they are consistently
-  whatever they are. Red and blue swapped is the failure mode to look for.
 - **Everything was tested at depth 8.** An O2 or Octane is likely 24-bit.
   ReadDisplay should normalise that, but the fallback and the converters have
   only ever seen 8-bit.
-- **Keyboard injection is written but unproven** — the bare test server has no
-  window manager and nothing focused to type into.
 - **The agent crashes when its X server dies**, two different ways. On this
   platform that is not an edge case; see `RESUME.md`.
-- **Throughput is unmeasured**, because of the blocker below.
+- **No login session.** Every measurement was taken against a bare
+  `Xsgi :0 -bs -c`; xdm's server wedges under the emulator, so a 4Dwm desktop
+  has never been captured. See `RESUME.md` §A REAL LOGIN SESSION — the
+  access-control question that worried us turned out fine.
 
-## The blocker, which is not in this code
+Since fixed and no longer on this list: the colours (they *were* swapped, and
+the check that proves they are not now is three coloured xterms decoded by a
+peer), throughput (5-20 fps for ordinary interaction, 1.3-1.9 for a full
+repaint), and keyboard injection, which the settings panel finally gave
+something to type into.
 
-Under emulation the X server wedges after roughly one full frame: `Xsgi` stays
-in `ps` with its CPU time frozen, makes no syscalls, and never reads from its
-sockets again. Every client hangs, IRIX's own included. It reproduces on both
-R5000 and R4400.
+## The emulator's X server wedges, twice over
 
-That is a fault below Xlib, in the emulator's Newport/REX3 model.
-[`docs/ISSUE-rex3-wedge.md`](docs/ISSUE-rex3-wedge.md) is a report ready to file;
-[`docs/REX3-WEDGE-PROMPT.md`](docs/REX3-WEDGE-PROMPT.md) is the fuller handover,
-including the four things that turned out **not** to cause it. Real hardware may
-well not have the problem at all — which is the main reason to want a test on a
-real machine.
+Under capture load, `Xsgi` used to stop making syscalls entirely: frozen CPU
+time in `ps`, every client hanging, IRIX's own included. **That one is fixed
+upstream** — iris `02c4e155`, "fix hostr readback issues" — and
+[`docs/ISSUE-rex3-wedge.md`](docs/ISSUE-rex3-wedge.md) plus
+[`docs/REX3-WEDGE-PROMPT.md`](docs/REX3-WEDGE-PROMPT.md) are kept for the
+evidence and for the four things that turned out **not** to cause it.
+
+A second one is still there: the server **xdm** starts wedges the same way, so a
+logged-in desktop has never been captured. [`docs/ISSUE-xdm-wedge.md`](docs/ISSUE-xdm-wedge.md)
+reports it. And a bare server can still wedge on its own — it did once during
+this session's GUI work, which cost fifteen minutes because a wedged server
+looks exactly like a script that never started. `/root/restart-x.sh` on the
+guest is the way back, and anything that touches the display should check
+`xdpyinfo` answers before blaming itself.
+
+Real hardware may well not have any of it — which is the main reason to want a
+test on a real machine.
+
+## Talking to the emulated guest
+
+The telnet forward stalls after a few dozen sessions: still accepted, nothing
+ever comes back, and it is indistinguishable from a wedged guest.
+[`docs/ISSUE-nat-inbound-stall.md`](docs/ISSUE-nat-inbound-stall.md) has what
+was ruled out. **Anything automated should use the serial console**
+(`iris-ci run --shell sh`), which has never failed; `scripts/ci-lib.sh` wraps
+it as `guest_run`.
+
+## Installing it on a real machine
+
+There is a package now, and it installs the ordinary IRIX way:
+
+```sh
+# Software Manager / inst
+inst -f /path/to/unpacked-tardist        #   install standard
+                                         #   go
+
+# or, without inst
+gunzip -c rustdesk-agent-VERSION-n32.tar.gz | tar xf -
+cd rustdesk-agent-VERSION-n32 && sh install.sh
+```
+
+It needs **nothing else on the machine**: libsodium, libvpx, mbedTLS and zstd
+are linked in, everything else it uses ships with IRIX 6.5, and the one library
+that does not -- `libgcc_s.so.1` -- is in the package and is found through an
+rpath, with no environment variable and no wrapper. A machine that has never
+heard of SGUG-RSE or a cross toolchain runs it.
+
+```
+/usr/sbin/rustdesk-agent                    the agent
+/usr/sbin/rustdesk-agent-gui                the Motif settings panel
+/usr/lib/rustdesk-agent/agent-helper.sh     start, stop, and every setting
+/usr/lib/X11/app-chests/RustDesk.chest      a Toolchest entry
+```
+
+Building the package is `scripts/release.sh`; `docs/PACKAGING.md` is the whole
+pipeline, including the one step that can only happen inside IRIX.
 
 ## This directory is not standalone
 
@@ -122,9 +173,17 @@ ports/rust/             the build: target spec, compat archive, crate harness
   env.sh                  private RUSTUP_HOME/CARGO_HOME and build vars
   build-compat.sh         the compat archive; run once per clone
 ports/iris-run/         emulator harness: iris.toml, nvram, gsh.py
+  guest/                  what runs on the guest; gui-press.sh presses buttons
+gui/                    the Motif settings panel and its helper
+  gui_motif.c             the window, and nothing that decides anything
+  agent-helper.sh         everything that decides anything
+scripts/                the build and packaging pipeline -- see docs/PACKAGING.md
+inst/                   the inst(1M) product description, stamped at build time
+desktop/                the Toolchest fragment
 probes/                 the C probes behind every claim in RESUME.md
+  xpoke.c                 aim the agent's own injection shim at a coordinate
 tools/                  fix-sgi-archive.py, for SGI's static archives
-docs/                   the REX3 wedge report and handover
+docs/                   the wedge reports, the handover, and PACKAGING.md
 BUILD.md                how to build it
 RESUME.md               measurements, operating notes, and mistakes worth keeping
 ```

@@ -1,0 +1,96 @@
+# Build and package the IRIX RustDesk agent.
+#
+# NOT ACTIVE WHERE IT SITS. This tree is a subdirectory of a fork of upstream
+# RustDesk, and GitHub only reads workflows from `.github/workflows/` at the
+# REPOSITORY root -- where upstream's own CI lives and where a file called
+# `build.yaml` would be a merge conflict waiting to happen. Copy it up to
+# activate it:
+#
+#     cp rustdesk-irix65-agent/ci/workflows/irix-agent-release.yaml \
+#        .github/workflows/
+#
+# It is kept here rather than there so that turning it on is a decision someone
+# makes, not something that happens to a fork by being merged.
+#
+# THIN BY DESIGN, the same way ../irixscsitb's workflows are: every step body is
+# one call into scripts/, and those are the same scripts a person runs locally.
+# The only things in this file are the things only Actions can do -- runner
+# selection, mapping inputs into the environment, and artifact transport.
+#
+# SELF-HOSTED ONLY, and this is not a limitation that can be engineered away:
+#
+#   - the cross toolchain (/opt/cross, /opt/irix-sysroot, /opt/sgug-staging)
+#     is built by mogrix and includes headers and libraries extracted from a
+#     licensed IRIX 6.5 install. It cannot be downloaded on a hosted runner.
+#   - `gendist` only exists on IRIX, so the .tardist step needs a booted guest
+#     with a licensed IRIX disk image.
+#
+# So the runner is a machine that already has both. `build_inst: false` skips
+# the guest and produces the binaries and the .tar.gz, which is a complete
+# release for anyone not using the Software Manager.
+
+name: IRIX agent
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner_label:
+        description: "Runner to build on (needs the cross toolchain)"
+        required: false
+        default: "self-hosted"
+      build_inst:
+        description: "Also build the Software Manager package (needs a running IRIX guest)"
+        type: boolean
+        required: false
+        default: true
+      iris_socket:
+        description: "iris control socket on the runner"
+        required: false
+        default: "/tmp/iris-rdagent.sock"
+
+permissions:
+  contents: read
+
+env:
+  # The scripts read exactly these names from the environment or from
+  # ci/local.conf, so a run here and a run on a developer machine differ in
+  # nothing but where the variables came from.
+  IRIS_SOCKET: ${{ github.event.inputs.iris_socket }}
+
+jobs:
+  build:
+    runs-on: ${{ github.event.inputs.runner_label || 'self-hosted' }}
+    defaults:
+      run:
+        working-directory: rustdesk-irix65-agent
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The agent's portable modules are included from the PowerPC tree by
+      # #[path], so a checkout of one without the other does not build. Both
+      # live in this repository, which is the only reason a plain checkout is
+      # enough.
+      - name: Cross-build and stage
+        run: scripts/build.sh
+
+      - name: Software Manager product
+        if: ${{ github.event.inputs.build_inst != 'false' }}
+        run: scripts/iris-gendist.sh
+
+      - name: Package
+        run: scripts/package.sh
+
+      # Proves the thing that matters and cannot be checked on the build host:
+      # that it installs, and that the installed agent starts without anyone
+      # setting LD_LIBRARYN32_PATH for it.
+      - name: Install it in the guest and run it
+        if: ${{ github.event.inputs.build_inst != 'false' }}
+        run: scripts/iris-install-test.sh
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustdesk-agent-irix
+          path: rustdesk-irix65-agent/dist/*
+          if-no-files-found: error

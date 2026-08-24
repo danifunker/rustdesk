@@ -134,15 +134,29 @@ libgcc_s.so.1                                                          ← NOT o
 
 `libgcc_s.so.1` supplies the `_Unwind_*` symbols `std` references even under
 `panic=abort`. It is in the staging tree at
-`/opt/sgug-staging/usr/sgug/lib32/libgcc_s.so.1`; copy it to the target machine.
-**The binary carries no rpath**, so today it needs:
+`/opt/sgug-staging/usr/sgug/lib32/libgcc_s.so.1`.
+
+**The binary carries an rpath of `/usr/lib/rustdesk-agent`**, which is where the
+package puts a copy — so an installed agent needs no environment variable and no
+wrapper. Running one straight out of `target/` on a development machine, where
+nothing is installed, still wants the old incantation:
 
 ```sh
 LD_LIBRARYN32_PATH=/usr/sgug/lib32 rustdesk-agent --password <PASSWORD>
 ```
 
-Baking an rpath, or shipping a wrapper, is worth doing before handing the agent
-to anyone else — see the README's status section.
+## Making something installable
+
+```sh
+scripts/release.sh            # build -> gendist in the guest -> .tardist + .tar.gz
+scripts/release.sh --no-inst  # no guest available: binaries and the tarball only
+```
+
+`docs/PACKAGING.md` is the whole pipeline: what goes in the package, why
+`libgcc_s.so.1` is the only library in it, and the three different channels the
+guest steps use. `scripts/iris-install-test.sh` installs the result in the
+emulator and runs it with `LD_LIBRARYN32_PATH` deliberately unset, which is the
+only way to find out that the rpath actually took.
 
 ## LLD cannot link SGI's static archives
 

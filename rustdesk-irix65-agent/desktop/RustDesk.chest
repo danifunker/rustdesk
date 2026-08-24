@@ -1,0 +1,20 @@
+################################################################################
+# RustDesk.chest -- installed by the RustDesk agent Software Manager package
+# (rustdesk_agent.sw.*). scripts/install.sh writes an equivalent fragment when
+# installing by hand; keep the menu text in both places in sync.
+#
+# Pulled in by the "sinclude /usr/lib/X11/app-chests" at the end of
+# /usr/lib/X11/system.chestrc. Safe to delete -- the menu entry goes with it.
+# f.checkexec.sh means the entry only shows while the program exists, so
+# removing the software hides it automatically and no removal hook is needed.
+#
+# The same shape as ../irixscsitb's scsitoolbox.chest, for the same reason: a
+# drop-in fragment edits no system file, so an install and an uninstall are both
+# just a file appearing and disappearing.
+################################################################################
+
+Menu ToolChest
+{
+     no-label			f.separator
+    "RustDesk Agent"		f.checkexec.sh "/usr/sbin/rustdesk-agent-gui"
+}

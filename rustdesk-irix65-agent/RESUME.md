@@ -1,6 +1,14 @@
 # RESUME — RustDesk agent for IRIX (SGI MIPS)
 
-Pick-up point. Last updated 2026-08-23, end of the session that **made it fast
+Pick-up point. Last updated 2026-08-24, end of the session that **pressed the
+buttons and made a package**. The Motif panel's Start, Stop and Apply have now
+been clicked by injected input and do what they say; typing into a text field
+works, which is the first time a keystroke has ever gone through `rd_key_char`
+to a real focused window; and there is a `.tardist` that installs with `inst`
+on a machine that has never had a cross toolchain or SGUG-RSE on it. See
+§THE BUTTONS WORK and §THE PACKAGE.
+
+Before that, the session of 2026-08-23 **made it fast
 enough to use**. Ordinary interaction — a pointer moving, text appearing — runs
 at **5-20 fps on the emulator**, which is three times that on a real Indy. A
 full-window repaint is still 1.3-1.9 fps and that is close to the floor of this
@@ -55,7 +63,11 @@ backup          ~/Indy-IRIX65_dev.chd.bak-before-first-write   pristine, keep
 run config      ports/iris-run/iris.toml         ci_socket is now /tmp/iris-rdagent.sock
 nvram           ports/iris-run/nvram-irix65.bin  has console=d; do not lose it
 shells          ports/iris-run/irixsh.py         telnet driver (superseded, see gsh.py)
-                ports/iris-run/gsh.py            marker-based telnet runner — use this
+                ports/iris-run/gsh.py            marker-based telnet runner — interactive
+                scripts/ci-lib.sh  guest_run()   SERIAL console — anything automated
+package         scripts/release.sh               build -> gendist -> .tardist + .tar.gz
+                scripts/iris-install-test.sh     install it in the guest and run it
+                docs/PACKAGING.md                the whole pipeline, and why
 harness         ports/iris-run/serve.sh          serve the build on :8099
                 ports/iris-run/guest/*.sh        what runs on the guest; fetch.sh
                                                  pulls the lot in one command
@@ -116,6 +128,9 @@ Every one of these was run on IRIX 6.5.22m / R5000 under IRIS, not just built.
 | **The stream tracks the screen** | 100 s against a moving desktop, then the decoded frame compared with a fresh capture: mean absolute difference **2.40 of 255**, and every large difference inside the one region still moving. This is what makes the active map safe to rely on. |
 | **Coordinate scaling** | A peer on a 1/2 session asked for a pointer move at (100, 100); the pointer landed at native (200, 200). |
 | **`image_quality`** | The peer's dial reaches the picture size: Best -> 1280x1024, Balanced -> 640x512, Low -> 320x256, each announced with a `SwitchDisplay` before the first frame in it. |
+| **The panel's buttons** | Start, Stop and Relay's Apply clicked by injected input: the agent appears, the agent goes, and `relay_server` reaches the config. `guest/gui-press.sh`. |
+| **Keyboard injection** | `rd_key_char` typed `relay.press.test` into a focused Motif TextField, sixteen characters, all correct. First keystrokes ever delivered to a real window here. |
+| **The package installs** | `inst -f` in the guest reports success, `versions` lists the product, and `/usr/sbin/rustdesk-agent --show-id` prints the ID **with `LD_LIBRARYN32_PATH` unset** -- so the rpath works and the machine needs nothing else. |
 | **VP8 decode on IRIX** | `encode::Decoder` / `vpxdec_*`. 129 of 129 frames decoded in a live session; libvpx's VP8 decoder works on this big-endian 32-bit target too, not just its encoder. |
 
 ---
@@ -815,13 +830,193 @@ five, a panel that looked entirely right, and nothing in any log. A spacer at
 the end absorbed it in a four-row group and not in a five-row one, so it is not
 a fixed number of pixels. Groups are now a heading and a rule, no frame.
 
-**Not yet pressed.** The read path is proven — the window shows the real agent
-ID, state and password, all of which came through `popen()` from the helper —
-and the helper's write path is verified directly (`set server`, `set key`,
-`set api` persist and read back, and clearing works). What has not happened is
-a human or an injected click on an Apply button. That is the first item in
-`RESUME-PROMPT-GUI.md`, and it doubles as the first real test of keyboard
-injection, which has had nothing focusable to type into until now.
+**Pressed, as of 2026-08-24** — see §THE BUTTONS WORK, which is where the
+detail is. Start, Stop and one Apply have been clicked by injected input and do
+what they say, and typing into a text field works. Three bugs came out of it,
+all of which had been sitting in code that nothing had ever exercised.
+
+### THE BUTTONS WORK
+
+Pressed, on 2026-08-24, by injected input — not by a person at the machine and
+not inferred from the code:
+
+```
+=== 1. click the relay field, type, click Apply ===
+relay_server before: []
+click 319,313
+type "relay.press.test"
+click 482,313
+relay_server after : [relay.press.test]
+
+=== 2. click Start ===   agents running: 1
+=== 3. click Stop ===    agents running: 0
+```
+
+That single run closes three open items at once:
+
+- **A click reaches a Motif widget** and lands where it is aimed: into a
+  TextField to place the caret, onto a PushButton to fire its callback.
+- **`rd_key_char` types into a focused window.** Sixteen characters, dots
+  included, arriving exactly. This had never happened — the bare X server had
+  nothing focusable on it until the panel existed, which is why §Next steps
+  carried "keyboard injection is written but unproven" for two sessions.
+- **`apply_cb` runs the helper and the setting reaches the config**, so the
+  whole path from pointer to `rustdesk-agent --relay-server` to
+  `~/.rustdesk-ppc-agent.conf` is proven end to end.
+
+`ports/iris-run/guest/gui-press.sh` is the run, and it leaves the machine as it
+found it.
+
+**The coordinates are not read off a screenshot.** `gui_motif.c` prints every
+managed widget's position in root coordinates when `RD_GUI_GEOM` is set — a
+timeout after realize, because the window manager places the shell afterwards
+and `XtTranslateCoords` before that reports where the shell *asked* to be. The
+capture is at 1/2 scale, so a button read off one is ±2 native pixels before any
+arithmetic, and a click one pixel outside a PushButton does nothing at all and
+looks exactly like injection being broken.
+
+`probes/xpoke.c` is the clicker: the agent's own `input_shim.c` with a command
+line in front of it, so `xpoke click X Y type TEXT click X Y` is one process and
+one X connection. Nothing about it is agent-specific and deleting it changes the
+agent not at all.
+
+#### Five bugs it found, all of which looked like something else
+
+**`agent-helper.sh` could not see a running agent.** `ps -e` truncates COMD to
+eight characters on IRIX, so `ps -e | grep rustdesk-agent` matches **nothing**.
+`is_running` therefore always answered "no": Stop killed nothing and still said
+"Stopped.", Start said "Could not start it" about an agent it had just started,
+and the panel's Status line said "stopped" for ever. Every one of those looks
+like a broken button. The first fix was `ps -e -o pid,args` plus a `grep -v
+rustdesk-agent-gui` — without the second half Stop takes down the window that
+pressed it. That fix was itself wrong in a way only an installed machine shows;
+see the last bug in this list.
+
+This is the eight-character trap that `gui-shot.sh` already had a comment about.
+It was in the helper the whole time and nothing had exercised the path.
+
+**The panel would not have found its helper once installed.** `find_helper`
+looked beside `argv[0]`, then in a SGUG path, then `/tmp`. Installed, the panel
+is `/usr/sbin/rustdesk-agent-gui`, so "beside argv[0]" is `/usr/sbin` and finds
+nothing — and on the development guest it fell through to the `/tmp` copy and
+looked fine. On anyone else's machine it would have found no helper at all. The
+installed path is now first. The same fault, and the same fix, for the helper's
+own idea of where the agent is: it defaulted to a SGUG path and fell back to
+`/tmp`, so after a successful install it reported `agent=/tmp/rustdesk-agent`.
+
+**A multi-line status message draws outside the window.**
+`XmStringCreateLtoR` turns every newline into a line of the label, a Label
+recomputes its size from its string, and with no window manager to renegotiate
+the shell the label simply paints past the bottom of the window onto the root.
+It looks like the panel has corrupted the screen. `set_status` now flattens and
+bounds the text, and the label carries `XmNrecomputeSize False`.
+
+**The status line was reporting the wrong thing entirely, and that is what put
+a blob of `key=value` in it.** `helper()` returns a static buffer, and both
+`apply_cb` and `lifecycle_cb` did
+
+```c
+out = helper(verb, NULL, NULL);
+refresh_state();          /* calls helper("status") -- overwrites the buffer */
+set_status(out);          /* so this prints the STATUS BLOB, never the reply */
+```
+
+so the line after every button press was `agent=/usr/sbin/rustdesk-agent
+present=yes running=yes id=...` rather than "Started." or "Relay set to ...".
+It had been that way since the panel was written and nobody had pressed a
+button to see it. Both callbacks now copy the reply before refreshing.
+
+**`is_running` matched its own shell, but only once installed.** The fix for
+the eight-character truncation was `ps -e -o pid,args | grep rustdesk-agent`,
+which matches too much: the panel (`rustdesk-agent-gui`) — handled with a
+`grep -v` — and, after installation, **the helper's own shell**, because the
+helper lives in `/usr/lib/`**`rustdesk-agent`**`/agent-helper.sh`. So on an
+installed machine `is_running` always answered yes: **Start was greyed out for
+ever**, and Stop's kill loop would have killed the helper mid-run.
+
+This is the one that justifies `scripts/iris-install-test.sh` existing. It
+cannot happen in `/tmp` and it cannot be seen on the build host; it appears the
+moment the software is in the place it is meant to live, and it makes the
+principal button permanently dead. The matcher is now the basename of `argv[0]`
+compared exactly — a process is the agent if it *is* the agent, not if its
+command line mentions it — and the same three-line awk is in `install.sh` and
+`gui-press.sh`, both of which had the same exposure.
+
+#### And again, against the INSTALLED panel
+
+Everything above was the `/tmp` build. The same script run as
+
+```sh
+RD_GUI=/usr/sbin/rustdesk-agent-gui RD_HELPER= sh /tmp/gui-press.sh
+```
+
+drives the panel the package installed, with `RD_HELPER` empty so the panel has
+to *find* its helper the way a person double-clicking the Toolchest entry would:
+
+```
+panel: /usr/sbin/rustdesk-agent-gui, helper: /usr/lib/rustdesk-agent/agent-helper.sh
+relay_server before: []      ->  after: [relay.press.test]
+click Start   agents running: 1  (after 0s)
+click Stop    agents running: 0  (after 4s)
+```
+
+`docs/panel.png` is what it looks like at the end of that: status line reading
+"Stopped.", Start live, Stop greyed. Both of the installed-only bugs above were
+found by exactly this run and neither was visible any other way.
+
+#### What still has not been pressed
+
+Restart, Refresh, the menu items, and the five Apply buttons other than Relay.
+The mechanism is identical for all of them — `apply_cb` with different client
+data — so the risk is low, but the distinction between "proven" and "the same
+code with a different argument" is the whole reason this section exists.
+
+---
+
+### THE PACKAGE
+
+`scripts/release.sh` produces a `.tardist` that installs with `inst`(1M) and a
+`.tar.gz` with an `install.sh` in it. Verified by installing it in the guest and
+running what came out:
+
+```
+I  rustdesk_agent       2026082454  RustDesk agent for IRIX
+I  rustdesk_agent.sw.n32            RustDesk agent, settings panel and helper
+
+/usr/sbin/rustdesk-agent --show-id   ->  ff6izj02b
+```
+
+**with `LD_LIBRARYN32_PATH` unset**, which is the point. `libgcc_s.so.1` is the
+one library the agent needs that stock IRIX 6.5 does not ship — everything else
+it links is on the machine, and libsodium, libvpx, mbedTLS and zstd are static.
+The binary is linked `-Wl,-rpath,/usr/lib/rustdesk-agent` and the package puts a
+copy there, so there is no environment variable and no wrapper. Every other
+script in this tree sets `LD_LIBRARYN32_PATH`, so an rpath that quietly did
+nothing would never have shown up; `scripts/iris-install-test.sh` unsets it on
+purpose.
+
+The other half of the release installs by hand:
+`scripts/iris-install-test.sh --tarball` unpacks the `.tar.gz` in the guest,
+runs `install.sh -p /opt/rdtest`, runs the wrapper it wrote **with no
+environment set** (`ff6izj02b`), and takes it all away again with `-u`. That
+path exists for a machine without swmgr and for a site that wants the files
+somewhere else, and it is the part most likely to rot, which is why it is
+tested rather than merely written.
+
+`docs/PACKAGING.md` is the whole pipeline. The shape is `../irixscsitb`'s: an
+`inst/` product description whose version and ABI are stamped in at build time,
+a `desktop/` Toolchest fragment, and scripts thin enough that the CI workflow
+would be one line per step — `ci/workflows/irix-agent-release.yaml` is that
+workflow, kept out of `.github/` because this tree lives inside a fork of
+upstream RustDesk and would otherwise fight upstream's own CI. The one step
+that cannot happen on Linux is `gendist`, which only exists on IRIX and runs in
+the guest.
+
+**Everything that talks to the guest now goes over the serial console.** See
+§Operating the emulator; the telnet forward stalls and this pipeline must not
+need a person.
+
+---
 
 ### The Mac's GUI, and why the IRIX one was cheap
 
@@ -893,9 +1088,10 @@ emulator:
 - **The agent surviving the server restart xdm does between logins.** This is
   already the open item in §The agent can crash when the server dies underneath
   it, and under xdm it stops being an edge case: it happens at every logout.
-- **Keyboard injection with something focused.** `rd_key`/`rd_key_char` have
-  never had a real keystroke put through them because the bare server has no
-  window manager and nothing to type into.
+- ~~**Keyboard injection with something focused.**~~ Done, and it did not need
+  xdm after all: the settings panel is itself something focusable, and typing
+  into its Relay field works (§THE BUTTONS WORK). What a login session would
+  still add is typing into somebody else's application rather than ours.
 - **Damage volume on a real 4Dwm desktop.** Everything measured here is one
   xterm and a clock. Watch the `N/1280 MB` figure in the frame line: if it sits
   near the total, the rectangles are being merged and `MAX_RECTS` wants raising
@@ -1026,6 +1222,27 @@ probes/xshmcap.c       shm + XShmReadDisplayRects: geometry, cost by shape, colo
 probes/sgicap.c        SGI-SCREEN-CAPTURE end to end
 probes/capture_test.c  exercises capture_shim.c; modes: all | 0 | 1 | 2 | reopen
 probes/reopen.c        the XCloseDisplay experiment, one variant per process
+probes/xpoke.c         aim input_shim.c at a coordinate from a command line:
+                       `xpoke click X Y type TEXT click X Y` in ONE process, so
+                       driving the panel costs one X connection rather than one
+                       per action. Deleting it changes the agent not at all.
+gui/gui_motif.c        the settings panel: the window, and nothing that decides
+                       anything. RD_GUI_GEOM makes it print every widget's root
+                       coordinates, which is how it gets driven.
+gui/agent-helper.sh    everything that decides anything, in Bourne shell, one
+                       `rustdesk-agent --flag` per setting
+gui/build-gui.sh       cross-build the panel. Motif 1.2.4, -D_XmConst=
+inst/                  the inst(1M) product description; version and ABI stamped
+                       in at build time by stage_inst_inputs
+desktop/RustDesk.chest the Toolchest entry, a drop-in fragment that edits no
+                       system file and hides itself when the program is gone
+scripts/               the pipeline. build.sh -> iris-gendist.sh -> package.sh,
+                       with release.sh running all three and
+                       iris-install-test.sh proving the result installs.
+                       ci-lib.sh is the shared half, including guest_run(),
+                       which is how anything automated talks to the guest.
+ci/workflows/          a GitHub Actions workflow, kept OUT of .github because
+                       this tree lives inside a fork of upstream RustDesk
 ports/rust/env.sh      sets the private RUSTUP_HOME/CARGO_HOME and build vars
 ports/rust/hello/      minimal std smoke test for the target
 src/input_shim.c       keyboard and pointer injection over XTEST, presenting the
@@ -1280,6 +1497,13 @@ carry one `R_MIPS_REL32` relocation, which runs fine despite `irix-ld`'s
 
 Items 1 to 4 of the previous list are **done** — see §PERFORMANCE. What is left:
 
+0. **Point it at Dani's own deployment.** Everything on this side is done and
+   verified on IRIX — `--server` registers over UDP, `--api-server` does a real
+   TLS handshake, the panel writes both, and the package installs. What is
+   missing is three values that only Dani has: the **hbbs hostname**, the
+   **server key**, and the **console URL** with its CA if it is private. With
+   those it is three Applies in the panel, or three `agent-helper.sh set` calls.
+
 1. **Get a real login session working.** §A REAL LOGIN SESSION has the detail.
    The authority question is answered and the answer is good; what blocks it is
    that xdm's server wedges under IRIS, so this needs real hardware or a fixed
@@ -1302,10 +1526,12 @@ Items 1 to 4 of the previous list are **done** — see §PERFORMANCE. What is le
    encoders, and depends on client behaviour that must be read in the client's
    source first.
 
-4. **Keyboard injection is written but unproven.** `rd_key`/`rd_key_char` have
-   never had a real keystroke put through them, because the bare X server has no
-   window manager and nothing focused to type into. Blocked on (1), or drive an
-   `xterm` with `--probe-keys X Y`.
+4. **~~Keyboard injection is written but unproven.~~ Done.** `rd_key_char` has
+   now typed sixteen characters into the panel's Relay field and every one
+   arrived; see §THE BUTTONS WORK. `rd_key` with a Mac keycode — the
+   ControlKey path rather than the `chr` path — is still unexercised, and so
+   are modifier combinations: `--probe-keys X Y` sends a ctrl-C and nothing has
+   yet confirmed one arrives.
 
 5. **The clipboard and cursor paths are compiled but untested on IRIX.**
    `cursor.rs` matters less than it did — `cursor_embedded` is honoured, so the
@@ -1316,7 +1542,18 @@ Items 1 to 4 of the previous list are **done** — see §PERFORMANCE. What is le
    the picture size (§PERFORMANCE); upstream's `custom_image_quality` is a
    bitrate percentage and would belong on `bitrate_for`.
 
-7. **The libvpx patch has not been through the mogrix pipeline.** It is listed in
+7. **The package installs but has never been through an upgrade.** A second
+   `.tardist` over the top of a first one should be `replaces self` doing its
+   job, and `versions remove rustdesk_agent` should leave nothing behind.
+   `scripts/iris-install-test.sh --remove` runs the removal half; the upgrade
+   half wants two builds with different versions and has not been done.
+
+8. **No o32 flavor.** The scripts take `--abi` and `stage_inst_inputs` knows
+   about o32 because irixscsitb's arrangement — each OS packages its own build,
+   in its own guest — is worth keeping. Nothing has been built for it, and
+   nothing should be until §5.3 stops being deferred.
+
+9. **The libvpx patch has not been through the mogrix pipeline.** It is listed in
    `rules/packages/libvpx.yaml` and lives in both `patches/` here and
    `patches/packages/libvpx/` there, but this host cannot run `mogrix build`
    (§The mogrix pipeline cannot run on this host), so it is rendered-and-checked
@@ -1372,7 +1609,23 @@ telnet will not answer — see the pty note in §Mistakes.
 
 ### Talking to the guest
 
-Use **`ports/iris-run/gsh.py`**, not `irixsh.py`. It brackets every command with
+**For anything automated, use the serial console.** `iris-ci run --shell sh
+--timeout N`, wrapped as `guest_run` in `scripts/ci-lib.sh`. It is slower than
+telnet and it has never once failed; telnet stalls every few dozen sessions in a
+way that is indistinguishable from a wedged guest and cannot be fixed from
+inside (see §Mistakes and `docs/ISSUE-nat-inbound-stall.md`). The whole
+packaging pipeline runs on it.
+
+Two rules that are not optional there. **`--shell sh`**, because the guest's
+root shell is bash and iris-ci defaults to asking csh for `$status` — so every
+command comes back "guest exit -1" and the exit code is a lie. And **one short
+command per line**: a long one comes back as several hundred bytes of garbage
+and a syntax error on something nobody typed. Anything long goes in a script,
+fetched over HTTP — which works, because guest-to-host is the direction that has
+never broken.
+
+For interactive work, telnet is still much nicer while it is answering. Use
+**`ports/iris-run/gsh.py`**, not `irixsh.py`. It brackets every command with
 a unique marker, so output can never be attributed to the wrong command —
 `irixsh.py` strips the echoed line heuristically and slides output by one
 command, which silently produced wrong answers for several commands tonight.
@@ -1436,6 +1689,40 @@ An IRIX XFS root **always** reports "valuable metadata changes in a log", even
 straight after a clean `/etc/halt`. That is not evidence of an unclean
 shutdown. `xfs_repair -L` is fine on a throwaway copy and must never be run on
 the real image.
+
+### What changed on the disk, 2026-08-24 (the packaging session)
+
+**Nothing.** `~/Indy-IRIX65_dev.chd` is byte-for-byte the image the previous two
+sessions left, and no sidecar is pending.
+
+This session's diff was test churn again, and this time it included **an
+installed copy of the package** — `/usr/sbin/rustdesk-agent`,
+`/usr/sbin/rustdesk-agent-gui`, `/usr/lib/rustdesk-agent/`, the Toolchest
+fragment and inst's own `/var/inst` bookkeeping — put there three times over by
+`scripts/iris-install-test.sh`. It was **discarded**, deliberately, for two
+reasons beyond the usual one:
+
+- It is reproducible in one command, from a version stamped `-dirty` that will
+  be superseded by the next build.
+- **An installed agent in the base image is a trap for the next session.** The
+  helper prefers `/usr/sbin/rustdesk-agent` over `/tmp/rustdesk-agent`, by
+  design — so a stale installed copy would silently become the thing every test
+  runs, which is a version of exactly the confusion that §THE BUTTONS WORK
+  describes finding.
+
+If you *do* want it permanent, install the tardist and fold the diff; the
+procedure is above and nothing about the package makes it special.
+
+The guest was halted cleanly (`echo yes | /etc/halt` over the serial console,
+waited for "Okay to power off the system now."), the emulator killed by pid, and
+the 184 MB diff moved aside rather than deleted, in case it is wanted:
+`/tmp/claude-.../scratchpad/discarded-diff-20260824.chd`. It will not survive a
+reboot of the host, which is the intention. The base image is
+`md5 0604bd26d8f8c0801e5a8778c3834b78`, dated 2026-08-19, unchanged.
+
+Bringing the guest back is the usual two commands — see §Boot — and
+`serve.sh` plus one `sh /tmp/fetch.sh` on the guest puts the whole harness back
+in a minute.
 
 ### What changed on the disk, 2026-08-23 (the performance session)
 
@@ -1546,12 +1833,21 @@ libvpx that staging was built from, so deleting it means re-applying
   with `stty columns 1000` — backticks and semicolons come back mangled and bash
   reports a syntax error on something you did not write. Put anything long in a
   script, fetch it with wget, and run that. `/root/agent-restart.sh` is one.
-- **A telnet session that negotiates and then never prints a login prompt is
-  out of ptys, not wedged.** IRIX has eleven `/dev/ttyq*`, `gsh.py` used to drop
-  its socket without logging out, and after a few dozen runs telnetd could not
-  allocate one. It is indistinguishable from a hung guest and cost half an hour.
-  `who` on the serial console is what shows it; `guest/cleanpty.sh` reaps them;
-  `gsh.py` now sends `exit` in a `finally`.
+- **A telnet session that negotiates and then never prints a login prompt has
+  two causes, and the second one is not fixable from the guest.** The first is
+  ptys: IRIX has eleven `/dev/ttyq*`, `gsh.py` used to drop its socket without
+  logging out, and after a few dozen runs telnetd could not allocate one. `who`
+  on the serial console shows it, `guest/cleanpty.sh` reaps them, and `gsh.py`
+  now sends `exit` in a `finally`.
+
+  The second looks identical and is not that. During the packaging session the
+  guest was listening on `*.23`, `/etc/inetd.conf` had telnet enabled, `who`
+  showed one session, SYSLOG said nothing, and the guest could still `wget` from
+  the host — outbound NAT fine, inbound dead. Restarting inetd cleared it once
+  and did nothing the next time. It is written up in
+  `docs/ISSUE-nat-inbound-stall.md`. **The lesson for anything automated: use
+  the serial console.** It has never failed, `iris-ci run --shell sh` makes it
+  usable, and the packaging pipeline uses nothing else.
 - **`iris-ci get` needs a shell on the serial console**, and hangs for its whole
   timeout if the console is sitting at a login prompt. `iris-ci login root`
   first. For small answers it is usually cheaper not to move the file at all:
@@ -1583,6 +1879,29 @@ libvpx that staging was built from, so deleting it means re-applying
   take; check with `ps` before starting another. The new one says so in its log
   -- `TCP port forward 127.0.0.1:2324 failed to bind: Address already in use` --
   and that line is the only warning you get.
+- **`ps -e` truncates the command to EIGHT characters.** This is in the list
+  twice now because it bit twice, in two different files, and the second time it
+  was inside `agent-helper.sh` where it made every lifecycle button appear
+  broken (§THE BUTTONS WORK). `ps -e -o pid,args` carries the full command line.
+  And `grep rustdesk-agent` against that matches the settings panel too, so a
+  kill loop written without `grep -v rustdesk-agent-gui` takes the window down
+  with the agent.
+- **A wedged X server looks like a script that never ran.** `gui-press.sh`
+  produced not one line of output for fifteen minutes and looked like a shell
+  that had failed to start. It had started: `xsetroot` was the first thing it
+  ran and a wedged Xsgi never answers, so it blocked before the first `echo`.
+  Any script that touches the display should prove the server answers *first* —
+  `/root/tmo 25 xdpyinfo` — and say so, because the alternative is debugging the
+  wrong program. `/root/restart-x.sh` is the way back.
+- **A sourced file cannot find itself under `/bin/sh`.** `env.sh` resolved its
+  own directory from `${BASH_SOURCE}`, which is correct when a person sources it
+  and empty when a `#!/bin/sh` script does — where `$0` names the *calling*
+  script, so the fallback silently resolved to the wrong tree and cargo failed
+  somewhere unrelated. The caller passes `RD_RUST_DIR` instead.
+- **The console shell keeps its working directory between commands.** Convenient
+  for `cd` on its own line; fatal for `rm -rf /tmp/gd` when the last run left the
+  shell inside `/tmp/gd`. "Cannot remove the current working directory" under
+  `set -e` stops a pipeline on its second run and never on its first.
 - **Do not trust a self-test that fails on working code.** Two "failures" in the
   first portable self-test run were wrong assertions in the test — `json::field`
   returns values still quoted, and `escape_into` writes the quotes.

@@ -1,0 +1,22 @@
+# ci/local.conf -- per-machine paths for the build and packaging scripts.
+#
+# Copy to ci/local.conf and edit. It is .gitignore'd, it is parsed as KEY=VALUE
+# and NEVER sourced -- no shell code runs from a config file -- and anything
+# already in the environment wins over what is written here, so a one-off run
+# needs a variable rather than an edit.
+#
+# Everything has a working default on the machine this was developed on; the
+# file exists so that a second machine does not need the scripts edited.
+
+# The cross toolchain, as mogrix's `setup-cross` deploys it.
+#SGUG_STAGING=/opt/sgug-staging/usr/sgug
+#IRIX_SYSROOT=/opt/irix-sysroot
+
+# The emulator. Upstream iris at 02c4e155 or later -- anything older wedges the
+# X server under capture load. Only iris-gendist.sh needs this.
+#IRIS_DIR=/home/you/iris-upstream
+#IRIS_SOCKET=/tmp/iris-rdagent.sock
+
+# The PowerPC agent tree. The portable modules are included from it by #[path],
+# so the two trees must stay siblings unless this says otherwise.
+#PPC_AGENT_DIR=/home/you/repos/rustdesk/rustdesk-ppc-agent
