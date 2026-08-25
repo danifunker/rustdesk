@@ -1407,14 +1407,20 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
     #[cfg(all(any(target_os = "macos", target_os = "irix", target_os = "solaris"), not(no_vpx)))]
     let mut video_scale = video.as_ref().map(|v| v.scale).unwrap_or(DEFAULT_SCALE);
 
-    // IRIX has no SO_RCVTIMEO -- Solaris does, and takes the ordinary path
-    // below. There, setsockopt returns ENOPROTOOPT, and taking that
-    // as fatal ended the session the instant the video pump started -- the peer
-    // logged in, saw the encoder come up, and was then dropped. The loop's
-    // pacing moves to poll(2) there; see `drain_input` and `sys::wait_readable`.
-    #[cfg(not(target_os = "irix"))]
+    // Neither IRIX nor Solaris 10 has SO_RCVTIMEO: setsockopt returns
+    // ENOPROTOOPT, and taking that as fatal ends the session the instant the
+    // video pump starts -- the peer logs in, sees the encoder come up, and is
+    // then dropped. That happened on both, and Solaris was only in this arm
+    // after it happened: the port had assumed Solaris had the option, because
+    // its headers define the constant. They define it because the number is in
+    // the Solaris 11 ABI; the Solaris 10 kernel refuses it. Measured by
+    // `probes/rcvtimeo.c` in the SPARC port, not inferred from the errno.
+    //
+    // The loop's pacing moves to poll(2) on both; see `drain_input` and
+    // `sys::wait_readable`.
+    #[cfg(not(any(target_os = "irix", target_os = "solaris")))]
     peer.stream.set_read_timeout(Some(std::time::Duration::from_millis(POLL_MS)))?;
-    #[cfg(target_os = "irix")]
+    #[cfg(any(target_os = "irix", target_os = "solaris"))]
     if let Err(e) = peer.stream.set_read_timeout(Some(std::time::Duration::from_millis(POLL_MS))) {
         log::debug!("no read timeout on this platform ({}); pacing with poll instead", e);
     }
@@ -1794,14 +1800,14 @@ fn drain_input(
         // Without a read timeout, waiting has to happen here rather than in
         // recv(): poll for `wait` ? POLL_MS : 0 and only read when something is
         // actually there.
-        #[cfg(target_os = "irix")]
+        #[cfg(any(target_os = "irix", target_os = "solaris"))]
         {
             let ms = if wait { POLL_MS } else { 0 };
             if !crate::sys::wait_readable(&peer.stream, ms) {
                 return Ok(true);
             }
         }
-        #[cfg(not(target_os = "irix"))]
+        #[cfg(not(any(target_os = "irix", target_os = "solaris")))]
         if !wait && !input_waiting(&peer.stream) {
             return Ok(true);
         }

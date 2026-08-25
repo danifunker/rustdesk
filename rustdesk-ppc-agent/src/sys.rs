@@ -29,9 +29,17 @@ pub fn cpu_count() -> usize {
 /// supposed to time out. `poll(2)` does the same job without needing the socket
 /// option, and says the same thing -- "nothing arrived" -- without an error.
 ///
+/// **Solaris 10 is the same**, which was measured rather than assumed after it
+/// was assumed wrongly. `sys/socket.h` there defines `SO_RCVTIMEO` (4102) and
+/// `SO_SNDTIMEO`, because those numbers are in the Solaris 11 ABI -- but the
+/// Solaris 10 kernel rejects both with ENOPROTOOPT, on TCP and UDP alike, while
+/// `SO_REUSEADDR` on the same socket succeeds. `probes/rcvtimeo.c` in the SPARC
+/// port is that test. Every session there ended the instant the video pump
+/// started until this arm included it.
+///
 /// `ms` of zero polls and returns immediately, which is what the loop wants
 /// between bands.
-#[cfg(target_os = "irix")]
+#[cfg(any(target_os = "irix", target_os = "solaris"))]
 pub fn wait_readable(s: &std::net::TcpStream, ms: u64) -> bool {
     use std::os::unix::io::AsRawFd;
     wait_readable_fd(s.as_raw_fd(), ms)
@@ -44,7 +52,7 @@ pub fn wait_readable(s: &std::net::TcpStream, ms: u64) -> bool {
 /// registration loop is *built* on the read timing out -- that is what tells it
 /// to resend. Without one, `recv` blocks for ever on the first datagram that
 /// never comes and the agent silently stops registering.
-#[cfg(target_os = "irix")]
+#[cfg(any(target_os = "irix", target_os = "solaris"))]
 pub fn wait_readable_fd(fd: std::os::unix::io::RawFd, ms: u64) -> bool {
     let mut fds = libc::pollfd {
         fd,
