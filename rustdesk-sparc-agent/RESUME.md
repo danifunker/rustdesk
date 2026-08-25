@@ -4,7 +4,7 @@ State of the port, the environment it runs in, what is already proved and what
 is not, and the traps that cost time the first time. This is the source of
 truth; `RESUME-PROMPT.md` is the short prompt that points here.
 
-Last updated at the end of the session that got VP8 encoding on the machine.
+Last updated at the end of the session that got the agent serving a peer.
 
 ---
 
@@ -83,6 +83,32 @@ carries a certificate store from 2011.
 `/home/dani/repos/rustdesk` — the agent in `rustdesk-sparc-agent/`, plus
 Solaris arms added to the shared PowerPC sources (`session.rs`, `main.rs`,
 `input.rs`, `cursor.rs`, `sys.rs`).
+
+### From a fresh clone
+
+Both repos carry everything that is *ours*; three things are fetched rather
+than stored, and this is the order:
+
+```sh
+git clone git@github.com:danifunker/mrustc.git   -b sparc-solaris-10
+git clone git@github.com:danifunker/rustdesk.git -b vintage-agents
+cd mrustc && make -j8 && make -f minicargo.mk    # downloads rustc-1.74.0-src itself
+
+# The crate sources. Gitignored at 59 MB; Cargo.lock is tracked, so this
+# reproduces exactly the versions that built the current binaries.
+cd ../rustdesk/rustdesk-ppc-agent
+cargo vendor vendor && ./patches/protobuf-ub.py
+
+# The C libraries, on the Blade. fetch-deps.sh has the URLs and the SHA-256 of
+# the exact tarballs that built the current ~/sparc-deps.
+cd ../rustdesk-sparc-agent
+./scripts/fetch-deps.sh --push dani@192.168.99.176
+ssh dani@192.168.99.176 'sh /tmp/build-deps.sh all'
+```
+
+What a clone cannot carry is the Blade: Solaris 10 8/11, OpenCSW's gcc 5.5
+(`pkgutil -i gcc5core`), and the X libraries at the two prefixes in §1. Those
+are machine state, and §1 is the record of them.
 
 ### Building the standard library (once)
 
@@ -172,91 +198,173 @@ drawn as text so a decoding error is visible rather than merely suspected.
 **Clipboard** (`probes/cliptest.c`, two processes): 21 bytes transferred over a
 real SelectionRequest, and exactly one change reported when ownership moves.
 
----
+**The fused downscale-and-convert** (`convtest`, no display needed, and the
+`to_i420` line of `captest`, on a real desktop). `rd_argb_to_i420_rect` is the
+one piece here adapted from the IRIX port's C rather than ported from the
+shared Rust, and the way it would be wrong is a red/blue swap. So it is checked
+two ways.
 
-## 4. The next task, in detail
+Against synthetic images, on the machine:
 
-`session.rs` is fully wired with Solaris arms and compiles until it reaches
-four capture methods this port does not have. They are the only thing between
-here and a running agent.
-
-Held out of `src/lib.rs` for that reason: `session`, `clipboard`, `api`,
-`rendezvous`, and the `rustdesk-agent` binary (commented out in `Cargo.toml`).
-
-### 4a. Three easy ones — copy the IRIX versions
-
-`rustdesk-irix65-agent/src/capture.rs` has all three, and they use only what
-this port's shim already provides. Add a `forced: Vec<bool>` field alongside
-them.
-
-* `invalidate_band(&mut self, b: usize)` — set `forced[b]` (IRIX line ~386).
-* `read_band(&mut self, b: usize) -> (usize, usize)` — return `band_range(b)`,
-  and when `forced[b]`, first `rd_capture_read_rect(0, start, width, end-start)`
-  and clear the flag (IRIX line ~397).
-* `refresh(&mut self) -> bool` — re-read the geometry, because the screen
-  resolution can change under a running session (IRIX line ~419).
-
-### 4b. The real one: `to_i420_rect`
-
-```rust
-pub fn to_i420_rect(&self, img: &mut crate::convert::I420, factor: i32,
-                    dx0: i32, dy0: i32, dx1: i32, dy1: i32) -> bool
+```
+factor 1 vs convert::argb_to_i420 (rc 0): Y max 0 (0 of 2048), U max 1, V max 1
+red   rgb(255,0,0)   -> Y= 82 U= 90 V=240   ok        <- a swap reports blue's
+blue  rgb(0,0,255)   -> Y= 41 U=240 V=110   ok           chroma here, and vice
+green rgb(0,255,0)   -> Y=144 U= 54 V= 34   ok           versa. 150 codes apart.
+factor 1/2/4/8 on constant boxes: Y max 0 U max 0 V max 0  ok
+1/2 of a checkerboard: Y=126 (not 235 or 16)  ok       <- the box really averages
+rect 8,8..24,24: 0 inside unwritten, 0 outside overwritten, 0 disagree  ok
+odd bounds 5,5..11,11 snap to 4,4..12,12: 0 holes, 0 spill  ok
+factor 3, 0, -1, 6, 16 and an oversized destination -> all refused
 ```
 
-The IRIX wrapper is `capture.rs:511`; its C inner loop is
-`rd_abgr_to_i420_rect` at `capture_shim.c:769`, with `rd_scale_abgr` at 698.
+And against a real 1280x1024 desktop, through the whole `Capturer` — its
+stride, its buffer length, its pixel-order gate, none of which a synthetic test
+reaches:
 
-**It cannot be reused as-is, and must not be renamed into place.** That loop
-reads **A,B,G,R**; this machine's canvas is **A,R,G,B**. Rename it and every
-frame has red and blue swapped, which is miserable to spot over a remote
-display and looks like a client bug.
+| | |
+|---|---|
+| `to_i420` at 1/1 | **150 ms**, against the shared Rust converter's **1868 ms** |
+| at 1/2 (640x512) | **21 ms** |
+| at 1/4 (320x256) | **9.3 ms** |
+| vs `convert::argb_to_i420` | Y **bit-identical**, U and V differ by at most 1 |
 
-Write `rd_argb_to_i420_rect` in `src/capture_shim.c` with the same contract as
-the IRIX one, whose header comment (`capture_shim.h`, the long block above the
-declaration) explains why each part is the way it is:
+The luma is bit-identical by construction. The chroma cannot be: the shared
+converter averages each channel and then weights it, this one weights the sums
+and shifts once — which keeps the fractional part of the average through the
+weighting, and is a difference of at most one code. Measured, not assumed.
 
-* One walk of the canvas, not a downscale followed by a conversion — on the
-  Indy those two steps cost 386 + 306 ms with a whole scaled framebuffer of
-  memory traffic between them.
-* A **destination rectangle**, so a frame costs what the damage costs rather
-  than what the screen costs.
-* `factor` must be a power of two (1, 2, 4, 8): that is what lets the box
-  average fold into the BT.601 weights as a shift instead of a per-pixel
-  divide.
-* `dx0/dy0/dx1/dy1` are **destination** pixels, half-open, snapped outward to
-  even — a 4:2:0 chroma sample is shared by a 2×2 destination block, and a
-  bound falling inside one would leave half of it unwritten.
-
-Test it before believing it: `convert::argb_to_i420` already works here
-(prototest checks white → Y=235, U=V=128), so encode the same synthetic image
-both ways at `factor = 1` and compare the planes. Then check a red and a blue
-patch specifically, since that is the failure this is guarding against.
-
-### 4c. Then
-
-Wire `clipboard`, `api`, `rendezvous`, `session` into `lib.rs`, uncomment the
-`rustdesk-agent` binary in `Cargo.toml`, and iterate. Expect more gaps: 2,400
-lines of session code have only ever been compiled for two platforms. The
-pattern that has worked is to add `target_os = "solaris"` beside
-`target_os = "irix"`, **except** where the IRIX arm exists for something IRIX
-lacks — the two `SO_RCVTIMEO` sites in `session.rs` are deliberately not
-shared, because Solaris has the socket option and takes the ordinary path.
-
-Watch for the negated form: `cfg(any(macos, irix))` and
-`cfg(not(any(macos, irix)))` are different strings, and updating one without
-the other leaves both arms of `pump_input!` live at once. The error is an arity
-mismatch on a function whose parameters are themselves cfg-gated.
+The 12x gap against the shared converter is not a fair fight and is not meant
+to be: that one is mrustc-generated C with Rust's bounds checks still in the
+inner loop, and this one is hand C at `-O2`. It is the reason the fused path
+exists.
 
 ---
 
-## 5. After that, in order
+## 4. THE AGENT RUNS
 
-1. **Run it against a real client**, direct-IP first (`--port 21118`, identity
-   from `--show-key`). Nothing is proved end to end until this works.
-2. **Tune for this machine.** Completely unmeasured. `DEFAULT_SCALE` is 2 on
-   IRIX and 1 elsewhere; the encoder `Tune` (profile 3, screen_content 2) is
-   inherited from IRIX on a guess. VP8 at 1280×1024 on a 1.6 GHz UltraSPARC
-   IIIi may want the halved size, or may not — measure, do not assume.
+`rustdesk-agent` is built from the PowerPC tree's own `main.rs` and serves a
+peer on this machine. `src/bin/testpeer.rs` — taken from the IRIX port's tree,
+so it is the same client that port was proved with — speaks the real protocol:
+signed identity, sealed key, password hash, login, then it counts and decodes
+the video that comes back.
+
+```
+agent id  : 8vx1okqkt
+display   : 1280x1024
+[  0.056] INFO  agent listening on 0.0.0.0:21118 (id 8vx1okqkt)
+[  0.057] INFO  lan discovery listening on udp/21119
+[  6.035] INFO  peer 'testpeer' logged in -- entering message loop
+[  6.039] INFO  encoder: 640x512, 375 kbps, 1 thread(s) of 1 processor(s)
+[  6.063] INFO  video: 1280x1024 framebuffer served at 640x512 (1/2)
+[  6.064] INFO  capture path: DAMAGE + MIT-SHM
+
+  video frames   32 (1 key), 130186 bytes total
+  first frame    207 ms after login
+  decoded        17 ok, 0 refused
+VERDICT: the agent is serving video to a peer.
+```
+
+So TCP, framing, the direct-IP handshake, the password hash, `PeerInfo`, the
+video pump, VP8 encoding, delivery and **decoding at the peer** all work.
+
+### 4a. And the picture is the right colour
+
+The one thing this port's fused converter could plausibly get wrong is a
+red/blue swap, so it is checked at four levels rather than one, and the last is
+end to end:
+
+1. `convtest`, synthetic, on the machine — red is `Y=82 U=90 V=240`, blue is
+   `Y=41 U=240 V=110`, exactly.
+2. `captest`, a real frame, against `convert::argb_to_i420` — luma identical.
+3. A red `dtterm` and a blue one, read straight out of the framebuffer:
+   `rgb(255, 0, 0)` and `rgb(0, 19, 255)`.
+4. **The same two windows through the whole pipeline** — capture, downscale,
+   I420, VP8, TCP, decode at the peer — arriving as `rgb(241, 4, 12)` and
+   `rgb(9, 19, 242)`.
+
+An aggregate check on an ordinary desktop agrees: over the coloured pixels of a
+real CDE screen, the picture as sent fits the framebuffer with a mean error of
+16.8 per channel, and the same picture with red and blue exchanged fits at
+64.8. A factor of 3.9 in the right direction.
+
+## 5. Measured on this machine
+
+**Frame rate**, against a `dtterm` running `while true; do ls -l /usr/bin; done`
+— a screen that never stops changing, which is the ceiling rather than the
+common case. 25 s per row, `testpeer` not decoding (decoding on the same
+single-processor machine roughly halves it, and would be a number about the
+decoder):
+
+| the peer asks for | served | fps | bytes/frame |
+|---|---|---|---|
+| Low | 320x256 (1/4) | **12.8** | 1146 |
+| Balanced — the default | 640x512 (1/2) | **8.5** | 5150 |
+| Best | 1280x1024 (1/1) | **3.8** | 30564 |
+
+**Where a frame goes**, mean over every frame of those runs, in ms:
+
+| served | probe | read | conv | enc | send | total | bytes |
+|---|---|---|---|---|---|---|---|
+| 320x256 | 13.3 | 0.1 | 2.7 | 8.7 | 0.4 | **27.2** | 1081 |
+| 640x512 | 18.0 | 0.0 | 10.7 | 42.3 | 2.1 | **76.2** | 4886 |
+| 1280x1024 | 25.9 | 0.0 | 14.6 | 171.1 | 7.0 | **220.5** | 30139 |
+
+Three things fall out of that table, and they settle questions this file used
+to list as open:
+
+* **`DEFAULT_SCALE = 2` is right**, and is no longer a guess inherited from an
+  emulated Indy. 8.5 fps at 640x512 is a usable desktop; 1/1 is still usable at
+  3.8 fps for a peer that asks for it, and 1/4 buys 12.8.
+* **The encoder is the cost**, by a wide margin at every size — 171 of 220 ms at
+  1/1, 42 of 76 at 1/2. That is what makes the resolution dial the right dial.
+* **`read` is 0.0 ms** everywhere. The DAMAGE path means a band is never
+  re-read: the pixels are already in the canvas from the poll. And **`conv` is
+  2.7-14.6 ms**, against the 1868 ms the shared Rust converter takes for one
+  full-size frame. The fused path is doing exactly what it was written for.
+
+An idle screen costs nothing: with only `xclock -update 1` on the display, all
+three scales report 2.0 fps, because a 1 Hz clock is two damage events a second
+and the agent sends what changed and nothing else.
+
+### 5a. The encoder `Tune` — one row of it is probably wrong
+
+`rustdesk-agent --probe-display` sweeps the encoder at 1280x1024, median of
+three, in ms for a still frame and a small change:
+
+| config | still | small | bytes |
+|---|---|---|---|
+| baseline (profile 0, screen_content 0) | 308 | 399 | 14790 |
+| **profile 3 (no loop filter, full pel)** | **254** | **291** | 14885 |
+| profile 2 (no loop filter) | 255 | 382 | 14885 |
+| static_threshold 30000 | 251 | 265 | 14790 |
+| screen_content 1 | 367 | 368 | **28404** |
+| **screen_content 2** | 376 | 318 | **28404** |
+
+`video_tune()` sets `profile: 3, screen_content: 2` for this target, inherited
+from IRIX. **Profile 3 is confirmed** — it is the fastest row on both columns.
+**`screen_content: 2` is the suspect**: on its own it is slower than baseline
+*and* it nearly doubles the bytes, 28404 against 14790, for the same picture.
+
+Two cautions before acting on that. The sweep varies one knob at a time from
+the *baseline* Tune, so it never measures `profile 3 + screen_content 2` — the
+combination actually in use. And its "`<- in use`" marker points at the
+baseline row, because the sweep does not know about `video_tune()`; that marker
+is wrong on this platform. So the next move is to measure the combination, not
+to delete the knob.
+
+`static_threshold 30000` is the other row worth a look: 251/265 against the
+current 1000's 308/399.
+
+## 6. After that, in order
+
+1. **The `screen_content` question above**, which is a bandwidth question and
+   the cheapest win on the table.
+2. **A real RustDesk client**, not `testpeer`. Everything above is the protocol
+   proved against an implementation of the same protocol; a stock client is the
+   thing that finds where they differ. Direct-IP to `192.168.99.176:21118`,
+   password `sparctest` as left by the last run. `ipfilter` is disabled on the
+   Blade, so nothing is in the way.
 3. **The Motif settings panel**, following `rustdesk-irix65-agent/gui/`: a
    *second binary* with no behaviour of its own, each button running one verb
    of a helper script that runs one `rustdesk-agent --flag`. Solaris has Motif
@@ -266,9 +374,8 @@ mismatch on a function whose parameters are themselves cfg-gated.
 4. **Packaging.** Nothing exists. The IRIX port's `inst/` and release script
    are the model; Solaris wants a `pkgadd` datastream.
 
----
 
-## 6. Loose ends
+## 7. Loose ends
 
 * **No scroll wheel.** The pointer has three buttons, so X buttons 4 and 5
   cannot be injected — `XTestFakeButtonEvent(5)` is a `BadValue`, not a no-op.
@@ -279,15 +386,53 @@ mismatch on a function whose parameters are themselves cfg-gated.
   does, and the whole capture design rests on that number.
 * **INCR clipboard transfers** (over 256 KB) are reported as empty rather than
   as a truncated fragment. Implementing INCR is the fix if it matters.
-* **`SO_RCVTIMEO` on Solaris is assumed, not measured.** The session takes the
-  non-IRIX path; if a session stalls between bands, that is the first suspect.
+* **`rd_clip_changed` returns 0 rather than -1 when it cannot reach the
+  display**, so `clipboard::changed()` answers `Some(false)` where the shared
+  contract says `None`. The behaviour is right either way -- "no change" is the
+  safe answer for an unreachable clipboard, and `available()` is checked
+  separately -- but the contract in `clipboard.rs` says otherwise. One line in
+  `clipboard_shim.c`; not fixed here because touching a `.c` drops the
+  build-script cache and costs a full rebuild cycle.
+* ~~**`SO_RCVTIMEO` on Solaris is assumed, not measured.**~~ Now measured: it is
+  not there. See §8 — this is the assumption that cost the first end-to-end
+  run, and it was written down as an assumption before it cost anything, which
+  is the only reason it took ten minutes to find rather than an afternoon.
 * **The PowerPC output trees are stale** (see §2) and will fail loudly.
-* **`Xvfb :1`** is still running from an ad-hoc probe and is not managed by
-  `rd-session.sh`; `kill` it when convenient.
+* **`--probe-display` measures a path the agent no longer takes.** Its
+  `argb->i420` line and its `total ... for a full-screen change` (2158 ms) are
+  the unfused `convert::argb_to_i420` over the whole screen; the agent uses
+  `Capturer::to_i420_rect` over the damage, which §5 measures at 2.7-14.6 ms.
+  Its "C shim vs rust reference" labels are also wrong here — on Solaris both
+  sides of that comparison are the Rust one, since `argb_to_i420_rows` only
+  calls the shim on macOS. Harmless, but do not quote those numbers.
+* **`probe shape` in `--probe-display` reports zeros** for every row. That is
+  correct and deliberate: `probe_bytes` returns 0 on the DAMAGE path because an
+  idle poll reads no pixels, and the sweep's knobs describe a sampled-checksum
+  probe this platform does not have. See the doc comment on
+  `Capturer::dirty_bands_tuned`.
+* **The agent's Rust half is compiled at `-O0`,** and this was not a decision.
+  Once `session`/`api`/`rendezvous`/`clipboard` joined the crate, mrustc's
+  output for the library became a **82 MB** translation unit — ten times
+  `SPARC_BIG_TU_BYTES` (8 MiB) — so `sparc-cc-remote.py` swapped mrustc's `-O1`
+  for `-O0 --param ggc-min-expand=10 --param ggc-min-heapsize=32768`. Confirmed
+  with `pargs` on the running `cc1`, not inferred.
+
+  It matters less than it sounds: the hot loops are all in shims compiled
+  separately at `-O2` (capture, the fused conversion, vpx, tls), which is why
+  `to_i420` measures 150 ms rather than something dreadful. What is at `-O0` is
+  the session loop, the protocol and the crypto glue.
+
+  Whether it can be raised is **measurable and unmeasured**: that `cc1` peaked
+  at ~244 MB RSS with 2.8 GB free, and it is a 32-bit SPARC32PLUS binary capped
+  near 4 GB. `-O1` on the same unit could be anywhere inside or outside that.
+  Try `SPARC_BIG_TU_BYTES=100000000` and watch the RSS before believing either
+  answer. The PowerPC wrapper's answer to the same problem was to split the
+  unit; the header of `sparc-cc-remote.py` says to add that here when a real
+  failure asks for it.
 
 ---
 
-## 7. Traps, all of which cost time once
+## 8. Traps, all of which cost time once
 
 **Solaris tooling**
 
@@ -316,6 +461,49 @@ mismatch on a function whose parameters are themselves cfg-gated.
   class: ELFCLASS64" about an object that looks fine.
 * `STD_ENV_ARCH` must be passed for a cross build or `std::env::consts::ARCH`
   reports the host's.
+
+**Sockets**
+
+* **Solaris 10 has no `SO_RCVTIMEO` and no `SO_SNDTIMEO`,** exactly as IRIX has
+  none — and its headers say otherwise. `sys/socket.h` defines `SO_RCVTIMEO` as
+  4102 and `SO_SNDTIMEO` as 4101, because those numbers are in the Solaris
+  **11** ABI; the Solaris 10 kernel rejects both with **ENOPROTOOPT**, on TCP
+  and UDP alike, while `SO_REUSEADDR` on the same socket succeeds.
+  `probes/rcvtimeo.c` is that test, control included:
+
+  ```
+  SO_RCVTIMEO = 4102, SO_SNDTIMEO = 4101
+  on a TCP socket:
+    SO_RCVTIMEO  setsockopt FAILED: errno 99 (Option not supported by protocol)
+    SO_SNDTIMEO  setsockopt FAILED: errno 99 (Option not supported by protocol)
+  on a UDP socket:
+    SO_RCVTIMEO  setsockopt FAILED: errno 99 (Option not supported by protocol)
+  control: SO_REUSEADDR set OK -- so setsockopt itself works here
+  ```
+
+  This was assumed the other way for the whole port, and it cost the first
+  end-to-end run. Rust's `set_read_timeout` is a thin wrapper on that
+  setsockopt, and `session.rs` applied it with `?` on the non-IRIX path, so
+  **every session ended the instant the video pump started** — the peer logged
+  in, the encoder came up, and then:
+
+  ```
+  [  6.211] INFO  peer 'testpeer' (testpeer) logged in -- entering message loop
+  [  6.213] INFO  encoder: 640x512, 375 kbps, 1 thread(s) of 1 processor(s)
+  [  6.220] INFO  video: 1280x1024 framebuffer served at 640x512 (1/2)
+  [  6.221] WARN  session ended: Option not supported by protocol (os error 99)
+  ```
+
+  which is the same failure, with the same symptom, that the IRIX arm of that
+  code exists for and describes in its own comment. Solaris now shares every one
+  of those arms: `session.rs` (the peer socket, and the input drain's pacing),
+  `rendezvous.rs` (the UDP registration socket, and its resend wait), and
+  `sys::wait_readable{,_fd}`. `http.rs` never needed changing — it already logs
+  and continues on every platform, for this exact reason.
+
+  The general shape, and the reason this belongs here: **a constant being
+  defined on this machine says nothing about the option working on it.** Ask
+  the kernel.
 
 **Libraries**
 
@@ -347,12 +535,12 @@ mismatch on a function whose parameters are themselves cfg-gated.
 
 ---
 
-## 8. File map
+## 9. File map
 
 ```
 rustdesk-sparc-agent/
   src/capture_shim.{c,h}   MIT-SHM capture, DAMAGE, the hash fallback
-  src/capture.rs           its Rust side (missing the four methods in §4)
+  src/capture.rs           its Rust side, including the fused to_i420_rect
   src/input_shim.c         XTEST injection, from the IRIX shim via libXtst
   src/cursor_shim.c        XFIXES cursor
   src/clipboard_shim.c     X selections, both directions
@@ -360,9 +548,12 @@ rustdesk-sparc-agent/
   src/lib.rs               what is wired, and what is not, with reasons
   src/bin/captest.rs       capture, alone
   src/bin/prototest.rs     the portable half, checked against bytes
+  src/bin/convtest.rs      the fused conversion, against the shared converter
+                           and against named colours. Needs no display.
   probes/                  sysprobe.sh, xprobe.c, shimtest.c, inputtest.c,
-                           cursortest.c, cliptest.c, smoke.rs
+                           cursortest.c, cliptest.c, rcvtimeo.c, smoke.rs
   scripts/build-sparc.sh   build the agent (needs SPARC_HOST)
+  scripts/fetch-deps.sh    their sources, on a host that can verify a download
   scripts/build-deps.sh    the C libraries, on the Blade
   scripts/rd-session.sh    the desktop the agent serves
   scripts/sparc-cc-remote.py   the ssh "compiler"
