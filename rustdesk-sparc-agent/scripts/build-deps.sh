@@ -31,6 +31,7 @@ export PATH CC CFLAGS
 SODIUM_VER="${SODIUM_VER:-1.0.18}"
 ZSTD_VER="${ZSTD_VER:-1.5.6}"
 MBEDTLS_VER="${MBEDTLS_VER:-3.6.2}"
+VPX_VER="${VPX_VER:-1.13.1}"
 
 log() { echo "build-deps: $*"; }
 
@@ -70,8 +71,10 @@ build_zstd() {
     unpack "$SRCDIR/zstd-$ZSTD_VER.tar.gz" "zstd-$ZSTD_VER"
     cd "$BUILDDIR/zstd-$ZSTD_VER"
     # Only the library: the command-line tool needs a C++ compiler for its
-    # tests and the agent does not use it.
-    gmake -C lib libzstd.a
+    # tests and the agent does not use it. ZSTD_NO_ASM because the build
+    # otherwise hands huf_decompress_amd64.S to a SPARC assembler, which says
+    # "statement syntax" and stops.
+    gmake -C lib libzstd.a ZSTD_NO_ASM=1
     mkdir -p "$PREFIX/lib" "$PREFIX/include"
     cp lib/libzstd.a "$PREFIX/lib/"
     cp lib/zstd.h lib/zdict.h lib/zstd_errors.h "$PREFIX/include/"
@@ -93,12 +96,35 @@ build_mbedtls() {
     cp -r include/mbedtls include/psa "$PREFIX/include/"
 }
 
+build_vpx() {
+    if [ -f "$PREFIX/lib/libvpx.a" ]; then
+        log "libvpx already built"
+        return 0
+    fi
+    log "libvpx $VPX_VER (this one takes a while)"
+    unpack "$SRCDIR/libvpx-$VPX_VER.tar.gz" "libvpx-$VPX_VER"
+    cd "$BUILDDIR/libvpx-$VPX_VER"
+    # generic-gnu is the portable C build: there is no SPARC assembly in libvpx
+    # and asking for a target it does not know ends the configure immediately.
+    # VP8 only, and none of the tooling -- the agent encodes, and the examples
+    # and unit tests drag in a C++ compiler and webm.
+    CC="$CC" CFLAGS="$CFLAGS" ./configure \
+        --prefix="$PREFIX" --target=generic-gnu \
+        --enable-vp8 --disable-vp9 --enable-vp8-encoder --enable-vp8-decoder \
+        --disable-examples --disable-tools --disable-docs --disable-unit-tests \
+        --disable-webm-io --disable-libyuv --enable-static --disable-shared \
+        --enable-pic
+    gmake
+    gmake install
+}
+
 case "${1:-all}" in
 sodium)  build_sodium ;;
+vpx)     build_vpx ;;
 zstd)    build_zstd ;;
 mbedtls) build_mbedtls ;;
-all)     build_sodium; build_zstd; build_mbedtls ;;
-*) echo "usage: $0 sodium|zstd|mbedtls|all" >&2; exit 2 ;;
+all)     build_sodium; build_zstd; build_mbedtls; build_vpx ;;
+*) echo "usage: $0 sodium|zstd|mbedtls|vpx|all" >&2; exit 2 ;;
 esac
 
 log "installed in $PREFIX:"

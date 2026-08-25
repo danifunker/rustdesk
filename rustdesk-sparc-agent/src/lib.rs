@@ -35,8 +35,16 @@ pub mod sys;
 pub mod crypto;
 #[path = "../../rustdesk-ppc-agent/src/config.rs"]
 pub mod config;
+#[path = "../../rustdesk-ppc-agent/src/input.rs"]
+pub mod input;
+#[path = "../../rustdesk-ppc-agent/src/cursor.rs"]
+pub mod cursor;
+#[path = "../../rustdesk-ppc-agent/src/http.rs"]
+pub mod http;
 
-// Still out: http wants mbedTLS, encode wants libvpx, and session wants both.
+// Still out: encode wants libvpx -- its entry points are
+// referenced whether or not the session calls them, so `no_vpx` is not enough
+// to leave the library out -- and session wants both.
 
 /// Screen capture over MIT-SHM, with DAMAGE deciding what to report.
 #[cfg(target_os = "solaris")]

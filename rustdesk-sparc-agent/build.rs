@@ -45,6 +45,33 @@ fn main() {
     // png.rs deflates with zlib, which Solaris ships.
     println!("cargo:rustc-link-lib=z");
 
+    // The C libraries built on the Blade by scripts/build-deps.sh. This is a
+    // path over *there*: it does not exist on this machine, which is exactly
+    // how the ssh compiler wrapper tells a remote path from a local one.
+    let deps = std::env::var("SPARC_DEPS").unwrap_or_else(|_| "/home/dani/sparc-deps".to_owned());
+    println!("cargo:rustc-link-search=native={}/lib", deps);
+
+    // The TLS the console and the API server talk over. mbedTLS rather than
+    // OpenSSL because Solaris 10's own OpenSSL is 0.9.8 and speaks no TLS a
+    // current server will accept.
+    println!("cargo:rerun-if-changed={}/tls_shim.c", ppc);
+    cc::Build::new()
+        .file(format!("{}/tls_shim.c", ppc))
+        .include(format!("{}/include", deps))
+        .opt_level(2)
+        .compile("tls_shim");
+    // In dependency order: mbedtls needs x509 needs crypto.
+    println!("cargo:rustc-link-lib=mbedtls");
+    println!("cargo:rustc-link-lib=mbedx509");
+    println!("cargo:rustc-link-lib=mbedcrypto");
+    // Clipboard payloads from a current client arrive zstd-compressed.
+    println!("cargo:rustc-link-lib=zstd");
+
+    // No VP8 yet: libvpx has not been built for this target. The shared
+    // session code has a path for that, and encode.rs's vpx entry points are
+    // simply never called, so nothing asks the linker for them.
+    println!("cargo:rustc-cfg=no_vpx");
+
     println!("cargo:rustc-link-search=native={}", x11_lib);
     println!("cargo:rustc-link-search=native={}", sfw_lib);
     println!("cargo:rustc-link-lib=Xext");      // MIT-SHM, for capture

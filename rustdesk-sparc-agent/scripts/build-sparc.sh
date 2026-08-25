@@ -46,6 +46,7 @@ export SPARC_LDFLAGS="${SPARC_LDFLAGS:--lsocket -lnsl -lrt -lpthread -R/usr/open
 # do not exist on this machine, and the wrapper passes a directory it cannot
 # find through untouched for exactly that reason.
 export SODIUM_LIB_DIR="${SODIUM_LIB_DIR:-$REMOTE_DEPS/lib}"
+export SPARC_DEPS="$REMOTE_DEPS"
 
 [ -d "$STDLIB" ] || { echo "no stdlib at $STDLIB -- see the header of this script" >&2; exit 1; }
 [ -d "$PPC_DIR/vendor" ] || { echo "no vendor tree at $PPC_DIR/vendor" >&2; exit 1; }
