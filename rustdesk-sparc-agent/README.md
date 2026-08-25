@@ -228,6 +228,61 @@ Two bugs are worth recording because neither announced itself:
 `RD_DEBUG=1` traces what change detection decided, since that is invisible from
 the outside and the machine is usually somewhere else.
 
+## The input path
+
+`src/input_shim.c` is the IRIX port's shim with one difference: the XTEST
+requests go through libXtst. IRIX ships that extension only as a static archive
+its linker cannot consume, so that port writes the protocol out by hand;
+Solaris has a working `/usr/openwin/lib/sparcv9/libXtst.so.1`. Everything else
+-- the Mac-keycode-to-keysym table, the remap trick for characters the layout
+cannot otherwise produce, the Mac-to-X button reordering -- is the same code,
+so `input.rs` needs no Solaris branch.
+
+`probes/inputtest.c` drives it and then *asks the server what happened* rather
+than trusting a request that returned no error. Pointer moves land exactly
+(`move to 640,480 -> pointer at 640,480`), buttons work, and typing reaches the
+focused window. Two things it found on this machine:
+
+* **The pointer has three buttons.** A wheel is buttons 4 and 5 in X, and
+  faking button 5 against a three-button pointer is a `BadValue` -- not a
+  no-op. The shim reads the button count at startup and declines to inject past
+  it, saying so once.
+* **Xlib's default error handler calls `exit()`.** That `BadValue` killed the
+  process outright. One rejected input event must not take the agent down, so
+  the shim installs a handler that reports and carries on.
+
+End to end, against the session below: typing into the terminal produces damage
+rectangles of `6x13 at 93,90` -- one character cell -- which is the capture path
+reporting exactly what the input path changed.
+
+## The session the agent serves
+
+The console cannot be used for this yet. `/dev/fbs/jfb0` is `crw------- root
+root` and `Xsun` is not setuid, so only root can drive the real screen, and
+while CDE sits at its greeter `dtgreet` holds a server grab that hangs every
+client inside `XOpenDisplay`. So the agent gets a session of its own:
+
+```sh
+./scripts/rd-session.sh start      # Xvfb :2 + dtwm + dtterm
+./scripts/rd-session.sh status
+DISPLAY=:2 ./captest --ppm /tmp/desk.ppm
+```
+
+That is a real CDE desktop -- the CDE window manager, the front panel along the
+bottom, a terminal -- on a virtual screen any ordinary user can start, which
+survives logouts and is there whether or not anyone is at the machine.
+`RD_DISPLAY`, `RD_GEOMETRY`, `RD_WM` and `RD_APPS` set what it is; `:0` is left
+for the console and `:1` for ad-hoc probes.
+
+The server runs with no authorisation file, so any local user can connect --
+the same footing as the machine's own console session, and simpler than
+managing a cookie for a headless display. It does not listen on TCP. Add
+`-auth` and hand the agent the same `XAUTHORITY` if that is too loose.
+
+When the console does become usable, nothing about the agent changes: it is the
+same code against `DISPLAY=:0`, and the probes should be re-run there because
+the timings will differ on a real framebuffer.
+
 ## Probes — run these on the Blade first
 
 ```sh
