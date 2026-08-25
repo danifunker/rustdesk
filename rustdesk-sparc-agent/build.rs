@@ -32,6 +32,18 @@ fn main() {
     }
     println!("cargo:rerun-if-changed=src/capture_shim.h");
 
+    // The portable C the shared modules call: convert.rs and png.rs hand their
+    // inner loops to this. It comes from the PowerPC tree with the rest of
+    // them, so there is one copy of the conversion and one place to fix it.
+    let ppc = "../rustdesk-ppc-agent/src";
+    println!("cargo:rerun-if-changed={}/convert_shim.c", ppc);
+    cc::Build::new()
+        .file(format!("{}/convert_shim.c", ppc))
+        .opt_level(2)
+        .compile("convert_shim");
+    // png.rs deflates with zlib, which Solaris ships.
+    println!("cargo:rustc-link-lib=z");
+
     println!("cargo:rustc-link-search=native={}", x11_lib);
     println!("cargo:rustc-link-search=native={}", sfw_lib);
     println!("cargo:rustc-link-lib=Xext");      // MIT-SHM, for capture

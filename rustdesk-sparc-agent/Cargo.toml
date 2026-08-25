@@ -36,6 +36,12 @@ log = "0.4"
 protobuf = "=3.0.0-alpha.2"
 sha2 = "0.10"
 
+# The portable half, round-tripped on a big-endian machine: protobuf's wire
+# bytes, the PNG encoder's headers, the frame header, the colour conversion.
+[[bin]]
+name = "prototest"
+path = "src/bin/prototest.rs"
+
 [build-dependencies]
 cc = "1.0"
 
