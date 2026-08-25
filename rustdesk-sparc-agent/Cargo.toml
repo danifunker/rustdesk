@@ -16,9 +16,21 @@ edition = "2018"
 build = "build.rs"
 description = "RustDesk agent for Solaris 10 / SPARC"
 
+# Named for the tree the sources come from, not for this directory: main.rs and
+# every shared module refers to the crate as `rustdesk_ppc_agent`, and renaming
+# it here would mean patching those paths in code three ports depend on. The
+# IRIX port carries the same name for the same reason.
 [lib]
-name = "rustdesk_sparc_agent"
+name = "rustdesk_ppc_agent"
 path = "src/lib.rs"
+
+# The agent itself will be built straight from the PowerPC tree's main.rs --
+# the CLI, the session loop and the configuration are shared, and the platform
+# layer under them is this directory's. It waits on the two capture methods
+# noted in src/lib.rs.
+# [[bin]]
+# name = "rustdesk-agent"
+# path = "../rustdesk-ppc-agent/src/main.rs"
 
 # Capture on its own, before any of the protocol exists: opens the display,
 # reports which path the server allowed, times a full read against an idle

@@ -15,7 +15,7 @@
 //! So this round-trips each of them and checks the *bytes*, not just that a
 //! value survives a trip through its own code.
 
-use rustdesk_sparc_agent::{convert, crypto, frame, message_proto, png, rendezvous_proto, sys};
+use rustdesk_ppc_agent::{convert, crypto, encode, frame, message_proto, png, rendezvous_proto, sys};
 
 use protobuf::Message;
 
@@ -172,6 +172,40 @@ fn main() {
             failures += 1;
         }
         println!("login hash: {} bytes, stable, and discriminating", expect.len());
+    }
+
+    // --- VP8 --------------------------------------------------------------
+    // libvpx is portable C with no SPARC assembly, which is exactly why it is
+    // worth checking rather than assuming: nothing about this configuration
+    // has been exercised on a big-endian machine by anyone else.
+    {
+        let (vw, vh) = (320usize, 240usize);
+        let mut img = convert::I420::new(vw, vh);
+        // A gradient rather than flat colour: a frame with no detail compresses
+        // to almost nothing and would pass whatever the encoder did.
+        for y in 0..vh {
+            for x in 0..vw {
+                img.y[y * vw + x] = ((x + y) & 0xff) as u8;
+            }
+        }
+        match encode::Encoder::new(vw, vh, 400) {
+            Ok(mut enc) => match enc.encode(&img, 0, true) {
+                Ok(frame) => {
+                    let data = frame.data;
+                    println!("vp8: keyframe {} bytes, first bytes {}",
+                             data.len(), hex(&data[..data.len().min(6)]));
+                    // A VP8 keyframe starts with the 3-byte frame tag followed
+                    // by the start code 9d 01 2a, which is where a byte-order
+                    // mistake in the bitstream writer would show first.
+                    if data.len() < 10 || data[3..6] != [0x9d, 0x01, 0x2a] {
+                        println!("  FAIL: that is not a VP8 keyframe");
+                        failures += 1;
+                    }
+                }
+                Err(e) => { println!("vp8: encode failed: {}", e); failures += 1 }
+            },
+            Err(e) => { println!("vp8: encoder would not start: {}", e); failures += 1 }
+        }
     }
 
     // --- what this machine says about itself ------------------------------

@@ -407,7 +407,7 @@ fn main() {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "irix"))]
+#[cfg(any(target_os = "macos", target_os = "irix", target_os = "solaris"))]
 fn display_size() -> (i32, i32) {
     match rustdesk_ppc_agent::capture::Capturer::new() {
         Ok(c) => (c.width as i32, c.height as i32),
@@ -417,12 +417,12 @@ fn display_size() -> (i32, i32) {
         }
     }
 }
-#[cfg(not(any(target_os = "macos", target_os = "irix")))]
+#[cfg(not(any(target_os = "macos", target_os = "irix", target_os = "solaris")))]
 fn display_size() -> (i32, i32) {
     (0, 0)
 }
 
-#[cfg(any(target_os = "macos", target_os = "irix"))]
+#[cfg(any(target_os = "macos", target_os = "irix", target_os = "solaris"))]
 fn probe_display() {
     use rustdesk_ppc_agent::convert::{argb_to_i420, I420};
     match rustdesk_ppc_agent::capture::Capturer::new() {
@@ -575,7 +575,7 @@ fn probe_display() {
         Err(e) => println!("capture unavailable: {}", e),
     }
 }
-#[cfg(not(any(target_os = "macos", target_os = "irix")))]
+#[cfg(not(any(target_os = "macos", target_os = "irix", target_os = "solaris")))]
 fn probe_display() {
     println!("--probe-display is only meaningful on macOS");
 }
@@ -722,7 +722,7 @@ fn dirty_patch(img: &mut rustdesk_ppc_agent::convert::I420, n: u8) {
 /// was given, so Cmd+Space then a known word makes the result readable off the
 /// screen. Goes through `Injector` deliberately -- this exercises the same path
 /// the session loop uses, `chr` values and all.
-#[cfg(any(target_os = "macos", target_os = "irix"))]
+#[cfg(any(target_os = "macos", target_os = "irix", target_os = "solaris"))]
 fn probe_keys_fn(click_at: Option<(i32, i32)>) {
     use protobuf::ProtobufEnumOrUnknown;
     use rustdesk_ppc_agent::message_proto::MouseEvent;
@@ -828,13 +828,13 @@ fn probe_keys_fn(click_at: Option<(i32, i32)>) {
     ctrl_c(&mut inj);
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "irix")))]
+#[cfg(not(any(target_os = "macos", target_os = "irix", target_os = "solaris")))]
 fn probe_keys_fn(_click_at: Option<(i32, i32)>) {
     println!("--probe-keys is only meaningful on macOS");
 }
 
 /// Dump an ARGB frame as a binary PPM. Memory order is A,R,G,B, so RGB is at +1.
-#[cfg(any(target_os = "macos", target_os = "irix"))]
+#[cfg(any(target_os = "macos", target_os = "irix", target_os = "solaris"))]
 fn write_ppm(path: &str, frame: &[u8], w: usize, h: usize, stride: usize) -> std::io::Result<()> {
     use std::io::Write;
     let mut f = std::io::BufWriter::new(std::fs::File::create(path)?);
@@ -850,7 +850,7 @@ fn write_ppm(path: &str, frame: &[u8], w: usize, h: usize, stride: usize) -> std
     f.flush()
 }
 
-#[cfg(any(target_os = "macos", target_os = "irix"))]
+#[cfg(any(target_os = "macos", target_os = "irix", target_os = "solaris"))]
 fn probe_live_fn() {
     use rustdesk_ppc_agent::input::{cursor_position, Injector};
     use rustdesk_ppc_agent::message_proto::MouseEvent;
@@ -998,7 +998,7 @@ fn probe_live_fn() {
         if dirty_after_escape { "repainted the screen (menu closed)" } else { "changed nothing" }
     );
 }
-#[cfg(not(any(target_os = "macos", target_os = "irix")))]
+#[cfg(not(any(target_os = "macos", target_os = "irix", target_os = "solaris")))]
 fn probe_live_fn() {
     println!("--probe-live is only meaningful on macOS");
 }

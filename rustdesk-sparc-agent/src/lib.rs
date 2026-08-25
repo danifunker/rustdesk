@@ -41,10 +41,15 @@ pub mod input;
 pub mod cursor;
 #[path = "../../rustdesk-ppc-agent/src/http.rs"]
 pub mod http;
+#[path = "../../rustdesk-ppc-agent/src/encode.rs"]
+pub mod encode;
 
-// Still out: encode wants libvpx -- its entry points are
-// referenced whether or not the session calls them, so `no_vpx` is not enough
-// to leave the library out -- and session wants both.
+
+// session.rs, and clipboard/api/rendezvous with it, wait on two capture
+// methods this port does not have yet: `read_band`, and a `to_i420_rect` that
+// fuses the downscale with the colour conversion. The IRIX port's is written
+// for A,B,G,R; this machine's canvas is A,R,G,B, so it needs its own inner
+// loop rather than a rename.
 
 /// Screen capture over MIT-SHM, with DAMAGE deciding what to report.
 #[cfg(target_os = "solaris")]

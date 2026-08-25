@@ -135,6 +135,17 @@ build_vpx() {
         mv "$sh_file.bash" "$sh_file"
         chmod +x "$sh_file"
     done
+    # vp8_ratectrl_rtc.cc is the only C++ in what we build, and it is the
+    # real-time rate-controller API the agent does not call. Compiling it needs
+    # a g++ that understands these headers -- the one here trips over Solaris'
+    # _RESTRICT_KYWD and reports a "redefinition of const char* restrict" in
+    # /usr/include -- so drop it rather than install a C++ compiler for a file
+    # nothing references. `pkgutil -i gcc5g++` is the alternative.
+    for mk in vp8/vp8cx.mk libs.mk; do
+        sed "/ratectrl_rtc/d" "$mk" > "$mk.tmp"
+        mv "$mk.tmp" "$mk"
+    done
+    rm -f vp8/vp8_ratectrl_rtc.cc vp9/ratectrl_rtc.cc
     gmake SHELL=/usr/bin/bash
     gmake SHELL=/usr/bin/bash install
 }

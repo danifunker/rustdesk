@@ -67,10 +67,15 @@ fn main() {
     // Clipboard payloads from a current client arrive zstd-compressed.
     println!("cargo:rustc-link-lib=zstd");
 
-    // No VP8 yet: libvpx has not been built for this target. The shared
-    // session code has a path for that, and encode.rs's vpx entry points are
-    // simply never called, so nothing asks the linker for them.
-    println!("cargo:rustc-cfg=no_vpx");
+    // VP8. The shim is the PowerPC agent's, so what the encoder does is
+    // comparable between the ports rather than merely similar.
+    println!("cargo:rerun-if-changed={}/vpx_shim.c", ppc);
+    cc::Build::new()
+        .file(format!("{}/vpx_shim.c", ppc))
+        .include(format!("{}/include", deps))
+        .opt_level(2)
+        .compile("vpx_shim");
+    println!("cargo:rustc-link-lib=vpx");
 
     println!("cargo:rustc-link-search=native={}", x11_lib);
     println!("cargo:rustc-link-search=native={}", sfw_lib);

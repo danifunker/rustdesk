@@ -17,7 +17,7 @@
 use std::io::Write;
 use std::time::Instant;
 
-use rustdesk_sparc_agent::capture::{self, Capturer, ORDER_ARGB, PATH_DAMAGE, PATH_GETIMAGE, PATH_SHM};
+use rustdesk_ppc_agent::capture::{self, Capturer, ORDER_ARGB, PATH_DAMAGE, PATH_GETIMAGE, PATH_SHM};
 
 fn usage() -> ! {
     eprintln!(

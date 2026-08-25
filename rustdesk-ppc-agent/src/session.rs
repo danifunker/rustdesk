@@ -80,9 +80,9 @@ const DEFAULT_BITRATE_KBPS: u32 = 1500;
 ///
 /// Must be a power of two: the box average folds into the BT.601 weights as a
 /// shift, and a per-pixel integer divide is not affordable on an R5000.
-#[cfg(target_os = "irix")]
+#[cfg(any(target_os = "irix", target_os = "solaris"))]
 const DEFAULT_SCALE: usize = 2;
-#[cfg(not(target_os = "irix"))]
+#[cfg(not(any(target_os = "irix", target_os = "solaris")))]
 const DEFAULT_SCALE: usize = 1;
 /// How long the screen must be still before re-reading a slice of it to cover
 /// anything the sampled change detection missed, and how much to re-read each
@@ -153,7 +153,7 @@ const KEYFRAME_FRAMES: u32 = 600;
 /// measured 246 ms, and small enough that a tick is never mistaken for a stall.
 /// A 1024-row screen laps in sixteen ticks, so nothing stays uncorrected for
 /// more than about fifteen seconds of quiet.
-#[cfg(target_os = "irix")]
+#[cfg(any(target_os = "irix", target_os = "solaris"))]
 const REFRESH_ROWS: usize = 64;
 
 /// How long to wait before trying to build the video pipeline again, when a
@@ -555,22 +555,22 @@ pub fn serve(stream: TcpStream, ident: &Identity) -> io::Result<()> {
     // set, and an unrecognised string gets whatever the fallback happens to be.
     // IRIX is an X11 desktop with Control-based shortcuts, so Linux is the entry
     // whose behaviour is actually right.
-    #[cfg(not(target_os = "irix"))]
+    #[cfg(not(any(target_os = "irix", target_os = "solaris")))]
     { pi.platform = "Mac OS".to_owned(); }
-    #[cfg(target_os = "irix")]
+    #[cfg(any(target_os = "irix", target_os = "solaris"))]
     { pi.platform = "Linux".to_owned(); }
     pi.version = REPORTED_VERSION.to_owned();
     let mut d = DisplayInfo::new();
     // The size now, not the size when the process started -- the resolution may
     // have been changed since, and this is what sizes the peer's canvas.
-    #[cfg(any(target_os = "macos", target_os = "irix"))]
+    #[cfg(any(target_os = "macos", target_os = "irix", target_os = "solaris"))]
     let (dw, dh) = crate::capture::display_size().unwrap_or((ident.width, ident.height));
-    #[cfg(not(any(target_os = "macos", target_os = "irix")))]
+    #[cfg(not(any(target_os = "macos", target_os = "irix", target_os = "solaris")))]
     let (dw, dh) = (ident.width, ident.height);
     // The size the peer will actually be sent, which is the framebuffer divided
     // by the downscale. See `Video::served_size` for why the peer is told the
     // truth about that rather than being handed a small frame in a big canvas.
-    #[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
+    #[cfg(all(any(target_os = "macos", target_os = "irix", target_os = "solaris"), not(no_vpx)))]
     let (dw, dh) = {
         let sc = clamp_scale(DEFAULT_SCALE, dw.max(0) as usize, dh.max(0) as usize) as i32;
         (dw / sc, dh / sc)
@@ -619,7 +619,7 @@ fn clamp_scale(scale: usize, w: usize, h: usize) -> usize {
 /// for the whole framebuffer, and leaving it there at 1/4 tells the rate
 /// controller it has sixteen times the budget it needs, which it spends on
 /// coefficients nobody asked for and this processor cannot afford to transform.
-#[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
+#[cfg(all(any(target_os = "macos", target_os = "irix", target_os = "solaris"), not(no_vpx)))]
 fn bitrate_for(base_kbps: u32, scale: usize) -> u32 {
     (base_kbps / (scale * scale) as u32).max(120)
 }
@@ -646,10 +646,10 @@ fn bitrate_for(base_kbps: u32, scale: usize) -> u32 {
 /// is what a mostly-static screen wants. Measured on a frame with 30% of its
 /// macroblocks active -- what a scrolling xterm actually reports -- **364 ms at
 /// profile 3 alone against 294 ms with it**.
-#[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
+#[cfg(all(any(target_os = "macos", target_os = "irix", target_os = "solaris"), not(no_vpx)))]
 fn video_tune() -> crate::encode::Tune {
     let t = crate::encode::Tune::default();
-    #[cfg(target_os = "irix")]
+    #[cfg(any(target_os = "irix", target_os = "solaris"))]
     let t = crate::encode::Tune { profile: 3, screen_content: 2, ..t };
     t
 }
@@ -659,7 +659,7 @@ fn video_tune() -> crate::encode::Tune {
 /// `custom_image_quality` is upstream's bitrate percentage and is left to the
 /// bitrate; this is the resolution dial, which is the one that matters on
 /// hardware where the encoder is the bottleneck.
-#[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
+#[cfg(all(any(target_os = "macos", target_os = "irix", target_os = "solaris"), not(no_vpx)))]
 fn scale_for_quality(q: crate::message_proto::ImageQuality) -> Option<usize> {
     use crate::message_proto::ImageQuality;
     match q {
@@ -671,7 +671,7 @@ fn scale_for_quality(q: crate::message_proto::ImageQuality) -> Option<usize> {
 }
 
 /// Video pump state, kept beside the message loop.
-#[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
+#[cfg(all(any(target_os = "macos", target_os = "irix", target_os = "solaris"), not(no_vpx)))]
 struct Video {
     cap: crate::capture::Capturer,
     enc: crate::encode::Encoder,
@@ -725,18 +725,18 @@ struct Video {
     /// than the band flags they replace: the conversion runs over these
     /// rectangles rather than whole bands, and the encoder's active map is
     /// built from them so VP8 never looks at a macroblock nothing touched.
-    #[cfg(target_os = "irix")]
+    #[cfg(any(target_os = "irix", target_os = "solaris"))]
     rects: Vec<crate::capture::Rect>,
     /// Macroblocks the last frame actually let the encoder consider, for the
     /// per-frame log line.
-    #[cfg(target_os = "irix")]
+    #[cfg(any(target_os = "irix", target_os = "solaris"))]
     last_active: usize,
     /// Framebuffer row the rolling refresh has reached. See `probe`.
-    #[cfg(target_os = "irix")]
+    #[cfg(any(target_os = "irix", target_os = "solaris"))]
     refresh_next: usize,
 }
 
-#[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
+#[cfg(all(any(target_os = "macos", target_os = "irix", target_os = "solaris"), not(no_vpx)))]
 impl Video {
     fn new(bitrate_kbps: u32, scale: usize) -> Result<Self, &'static str> {
         let mut cap = crate::capture::Capturer::new()?;
@@ -768,7 +768,7 @@ impl Video {
         // hour, because the only symptom was every frame reporting 1280 of 1280
         // macroblocks and the agent going quiet. The probes print the path;
         // the agent did not.
-        #[cfg(target_os = "irix")]
+        #[cfg(any(target_os = "irix", target_os = "solaris"))]
         log::info!(
             "capture path: {}{}",
             cap.path_name(),
@@ -797,11 +797,11 @@ impl Video {
             broken: false,
             scale,
             since_key: 0,
-            #[cfg(target_os = "irix")]
+            #[cfg(any(target_os = "irix", target_os = "solaris"))]
             rects: Vec::new(),
-            #[cfg(target_os = "irix")]
+            #[cfg(any(target_os = "irix", target_os = "solaris"))]
             last_active: 0,
-            #[cfg(target_os = "irix")]
+            #[cfg(any(target_os = "irix", target_os = "solaris"))]
             refresh_next: 0,
         })
     }
@@ -970,11 +970,11 @@ impl Video {
         // repair -- and the repair is not free here: a lap is 64 forced
         // whole-band ReadDisplay round trips, 64 band conversions, and (through
         // the keyframe rule just below) a forced keyframe with them.
-        #[cfg(not(target_os = "irix"))]
+        #[cfg(not(any(target_os = "irix", target_os = "solaris")))]
         let repairing = self.repair_left > 0
             && self.last_change.elapsed() >= SETTLE_REPAINT
             && self.last_repair.elapsed() >= SETTLE_REPAINT;
-        #[cfg(not(target_os = "irix"))]
+        #[cfg(not(any(target_os = "irix", target_os = "solaris")))]
         if repairing {
             self.last_repair = std::time::Instant::now();
             let n = REPAIR_BANDS_PER_TICK.min(self.repair_left);
@@ -1001,9 +1001,9 @@ impl Video {
         // against a faint difference. What corrects that drift there is the
         // rolling refresh below, at a fiftieth of the price, so the wall-clock
         // rule is dropped and only the frame count remains as a backstop.
-        #[cfg(target_os = "irix")]
+        #[cfg(any(target_os = "irix", target_os = "solaris"))]
         let periodic_key = self.since_key >= KEYFRAME_FRAMES;
-        #[cfg(not(target_os = "irix"))]
+        #[cfg(not(any(target_os = "irix", target_os = "solaris")))]
         let periodic_key = self.since_key >= KEYFRAME_FRAMES
             || (self.last_key.elapsed() >= KEYFRAME_INTERVAL && self.since_key > 0);
         if periodic_key {
@@ -1015,7 +1015,7 @@ impl Video {
         // `dirty_bands` polled the server, so the rectangles behind those flags
         // are already in hand. Keeping them is what lets the conversion and the
         // encoder work on the change rather than on the screen.
-        #[cfg(target_os = "irix")]
+        #[cfg(any(target_os = "irix", target_os = "solaris"))]
         {
             self.rects.clear();
             self.rects.extend_from_slice(self.cap.last_rects());
@@ -1032,14 +1032,14 @@ impl Video {
         // macroblock rows drives the conversion and the map together, costs a
         // fraction of what a keyframe costs, and only runs while the screen is
         // still, so it never competes with real work.
-        #[cfg(target_os = "irix")]
+        #[cfg(any(target_os = "irix", target_os = "solaris"))]
         let mut dirty = dirty;
         // Set when this pass has nothing but the refresh in it, so the quiet
         // timers are not restarted by our own housekeeping -- otherwise the
         // screen never counts as idle and the probe never backs off.
-        #[cfg(target_os = "irix")]
+        #[cfg(any(target_os = "irix", target_os = "solaris"))]
         let mut refresh_only = false;
-        #[cfg(target_os = "irix")]
+        #[cfg(any(target_os = "irix", target_os = "solaris"))]
         if !dirty.iter().any(|d| *d)
             && self.repair_left > 0
             && self.last_change.elapsed() >= SETTLE_REPAINT
@@ -1077,7 +1077,7 @@ impl Video {
             self.t.probe = tp.elapsed();
             // A repair tick dirties bands by design. Letting that restart the
             // rotation would mean it never finished a lap of the screen.
-            #[cfg(not(target_os = "irix"))]
+            #[cfg(not(any(target_os = "irix", target_os = "solaris")))]
             {
                 self.last_change = std::time::Instant::now();
                 if !repairing {
@@ -1089,7 +1089,7 @@ impl Video {
             // either clock: it is our own housekeeping, not the screen moving,
             // and treating it as movement would keep the session permanently
             // "busy" and stop the probe ever backing off.
-            #[cfg(target_os = "irix")]
+            #[cfg(any(target_os = "irix", target_os = "solaris"))]
             if !refresh_only {
                 self.last_change = std::time::Instant::now();
                 self.repair_left = self.cap.height;
@@ -1104,7 +1104,7 @@ impl Video {
     /// Deliberately per-band: the caller services input between bands, so a
     /// screen-wide change no longer blocks input for the ~520 ms that reading
     /// and converting a whole frame takes.
-    #[cfg(not(target_os = "irix"))]
+    #[cfg(not(any(target_os = "irix", target_os = "solaris")))]
     fn band(&mut self, b: usize) {
         let stride = self.cap.stride();
         let t = std::time::Instant::now();
@@ -1131,7 +1131,7 @@ impl Video {
     ///   - The conversion is fused with the downscale and reads A,B,G,R.
     ///     `convert::argb_to_i420_rows` reads A,R,G,B, which is the Mac's
     ///     framebuffer -- against this one it swaps red and blue.
-    #[cfg(target_os = "irix")]
+    #[cfg(any(target_os = "irix", target_os = "solaris"))]
     fn band(&mut self, b: usize) {
         let t = std::time::Instant::now();
         let (y0, y1) = self.cap.read_band(b);
@@ -1206,7 +1206,7 @@ impl Video {
         // so an unreported change is permanent rather than late. That is why
         // this is IRIX-only -- the Mac's sampled checksum is exactly the case
         // it would break.
-        #[cfg(target_os = "irix")]
+        #[cfg(any(target_os = "irix", target_os = "solaris"))]
         {
             if force || self.rects.is_empty() {
                 self.enc.active_all();
@@ -1226,7 +1226,7 @@ impl Video {
             }
         }
 
-        #[cfg(target_os = "irix")]
+        #[cfg(any(target_os = "irix", target_os = "solaris"))]
         {
             self.t.active = self.last_active;
             self.t.total_mb = self.enc.mb_rows() * self.enc.mb_cols();
@@ -1264,7 +1264,7 @@ impl Video {
 /// not changing, and a live session is the only place some of this shows up at
 /// all. `--probe-display` measures the same stages in isolation; this measures
 /// them under a real client, with input arriving and a socket to write to.
-#[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
+#[cfg(all(any(target_os = "macos", target_os = "irix", target_os = "solaris"), not(no_vpx)))]
 #[derive(Default)]
 struct FrameTimes {
     probe: std::time::Duration,
@@ -1289,7 +1289,7 @@ struct FrameTimes {
     rect_pct: usize,
 }
 
-#[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
+#[cfg(all(any(target_os = "macos", target_os = "irix", target_os = "solaris"), not(no_vpx)))]
 impl FrameTimes {
     fn ms(d: std::time::Duration) -> u128 {
         d.as_millis()
@@ -1334,7 +1334,7 @@ impl FrameTimes {
 /// cursor seed serves, since it is exactly "which shape is this". A shape that
 /// cannot be read falls back to the built-in arrow rather than to nothing --
 /// the pointer being in the right place matters more than its picture.
-#[cfg(any(target_os = "macos", target_os = "irix"))]
+#[cfg(any(target_os = "macos", target_os = "irix", target_os = "solaris"))]
 fn send_cursor_data(peer: &mut Peer, id: u64) -> io::Result<()> {
     let c = crate::cursor::current().unwrap_or_else(crate::cursor::arrow);
     let mut cd = CursorData::new();
@@ -1351,7 +1351,7 @@ fn send_cursor_data(peer: &mut Peer, id: u64) -> io::Result<()> {
 }
 
 /// Send where the pointer is, if it has moved since last time.
-#[cfg(any(target_os = "macos", target_os = "irix"))]
+#[cfg(any(target_os = "macos", target_os = "irix", target_os = "solaris"))]
 fn send_cursor_position(
     peer: &mut Peer,
     tracker: &mut crate::cursor::Tracker,
@@ -1380,7 +1380,7 @@ fn send_cursor_position(
 /// costs only the dirty-band probe -- and once it has been idle for a few
 /// seconds, not even that on every pass. See `IDLE_AFTER`.
 fn message_loop(peer: &mut Peer) -> io::Result<()> {
-    #[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
+    #[cfg(all(any(target_os = "macos", target_os = "irix", target_os = "solaris"), not(no_vpx)))]
     let mut video = match Video::new(DEFAULT_BITRATE_KBPS, DEFAULT_SCALE) {
         Ok(v) => Some(v),
         Err(e) => {
@@ -1398,16 +1398,17 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
             None
         }
     };
-    #[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
+    #[cfg(all(any(target_os = "macos", target_os = "irix", target_os = "solaris"), not(no_vpx)))]
     let mut video_retry_at = std::time::Instant::now() + VIDEO_RETRY;
     // The downscale this session is serving at, kept out here because the input
     // path needs it too: the peer's coordinates are in the served space, so a
     // click at (100, 100) on a 1/2 frame is (200, 200) on the framebuffer.
     // `Video` owns the authoritative copy; this follows it.
-    #[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
+    #[cfg(all(any(target_os = "macos", target_os = "irix", target_os = "solaris"), not(no_vpx)))]
     let mut video_scale = video.as_ref().map(|v| v.scale).unwrap_or(DEFAULT_SCALE);
 
-    // IRIX has no SO_RCVTIMEO: setsockopt returns ENOPROTOOPT, and taking that
+    // IRIX has no SO_RCVTIMEO -- Solaris does, and takes the ordinary path
+    // below. There, setsockopt returns ENOPROTOOPT, and taking that
     // as fatal ended the session the instant the video pump started -- the peer
     // logged in, saw the encoder come up, and was then dropped. The loop's
     // pacing moves to poll(2) there; see `drain_input` and `sys::wait_readable`.
@@ -1417,33 +1418,33 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
     if let Err(e) = peer.stream.set_read_timeout(Some(std::time::Duration::from_millis(POLL_MS))) {
         log::debug!("no read timeout on this platform ({}); pacing with poll instead", e);
     }
-    #[cfg(any(target_os = "macos", target_os = "irix"))]
+    #[cfg(any(target_os = "macos", target_os = "irix", target_os = "solaris"))]
     let mut injector = crate::input::Injector::new();
-    #[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
+    #[cfg(all(any(target_os = "macos", target_os = "irix", target_os = "solaris"), not(no_vpx)))]
     injector.set_display_scale(video_scale);
 
     // The pointer is a hardware overlay and is not in the captured image, so
     // the peer sees none unless we send one. Shape once, then positions as they
     // change. See `crate::cursor`.
-    #[cfg(any(target_os = "macos", target_os = "irix"))]
+    #[cfg(any(target_os = "macos", target_os = "irix", target_os = "solaris"))]
     let mut cursor_tracker = crate::cursor::Tracker::new();
-    #[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
+    #[cfg(all(any(target_os = "macos", target_os = "irix", target_os = "solaris"), not(no_vpx)))]
     cursor_tracker.set_scale(video_scale);
     // When this peer last sent input. Its own cursor position is held back for
     // a moment afterwards -- see `cursor::SUPPRESS_AFTER_INPUT_MS`.
-    #[cfg(any(target_os = "macos", target_os = "irix"))]
+    #[cfg(any(target_os = "macos", target_os = "irix", target_os = "solaris"))]
     let mut last_peer_input = std::time::Instant::now()
         - std::time::Duration::from_millis(crate::cursor::SUPPRESS_AFTER_INPUT_MS + 1);
     // Start from a clean slate: see `input::release_modifiers`.
-    #[cfg(any(target_os = "macos", target_os = "irix"))]
+    #[cfg(any(target_os = "macos", target_os = "irix", target_os = "solaris"))]
     crate::input::release_modifiers();
 
     // The pointer changes shape over a text field, a resize edge, a link. The
     // seed is one call and changes only when the shape does, so it is polled
     // every pass and the image is fetched only when it has actually moved on.
-    #[cfg(any(target_os = "macos", target_os = "irix"))]
+    #[cfg(any(target_os = "macos", target_os = "irix", target_os = "solaris"))]
     let mut cursor_seed = crate::cursor::seed();
-    #[cfg(any(target_os = "macos", target_os = "irix"))]
+    #[cfg(any(target_os = "macos", target_os = "irix", target_os = "solaris"))]
     send_cursor_data(peer, cursor_seed as u32 as u64)?;
 
     // Liveness. See TEST_DELAY_INTERVAL -- without this the session dies of
@@ -1483,7 +1484,7 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
     macro_rules! pump_input {
         () => { pump_input!(true) };
         ($wait:expr) => {{
-            #[cfg(any(target_os = "macos", target_os = "irix"))]
+            #[cfg(any(target_os = "macos", target_os = "irix", target_os = "solaris"))]
             let alive = drain_input(
                 peer,
                 $wait,
@@ -1497,7 +1498,7 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
                 &mut cursor_tracker,
                 &mut last_peer_input,
             )?;
-            #[cfg(not(any(target_os = "macos", target_os = "irix")))]
+            #[cfg(not(any(target_os = "macos", target_os = "irix", target_os = "solaris")))]
             let alive = drain_input(
                 peer,
                 $wait,
@@ -1544,7 +1545,7 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
     loop {
         pump_input!(idle_last_pass);
         keep_alive!();
-        #[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
+        #[cfg(all(any(target_os = "macos", target_os = "irix", target_os = "solaris"), not(no_vpx)))]
         {
             idle_last_pass = true;
         }
@@ -1563,9 +1564,9 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
         // Both ways a session ends up without a picture: never having had one,
         // and `broken`, which `poll_geometry` sets when the encoder cannot be
         // rebuilt around a new screen size. Neither recovers on its own.
-        #[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
+        #[cfg(all(any(target_os = "macos", target_os = "irix", target_os = "solaris"), not(no_vpx)))]
         let no_picture = video.as_ref().map_or(true, |v| v.broken);
-        #[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
+        #[cfg(all(any(target_os = "macos", target_os = "irix", target_os = "solaris"), not(no_vpx)))]
         if no_picture && std::time::Instant::now() >= video_retry_at {
             video_retry_at = std::time::Instant::now() + VIDEO_RETRY;
             match Video::new(DEFAULT_BITRATE_KBPS, video_scale) {
@@ -1580,7 +1581,7 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
             }
         }
 
-        #[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
+        #[cfg(all(any(target_os = "macos", target_os = "irix", target_os = "solaris"), not(no_vpx)))]
         if let Some(v) = video.as_mut() {
             // Announce a new size before sending a frame in it: the peer sizes
             // its canvas from what it was last told, so a frame that arrives
@@ -1672,7 +1673,7 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
         // `ScreenshotResponse.msg` is documented as "empty if success", so a
         // refusal is a first-class reply that the client displays -- where
         // silence leaves it waiting on a picture that is never coming.
-        #[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
+        #[cfg(all(any(target_os = "macos", target_os = "irix", target_os = "solaris"), not(no_vpx)))]
         if let Some((sid, display)) = screenshot_requested.take() {
             let shot = if display != 0 {
                 // The client only offers displays it was told about, so this
@@ -1728,7 +1729,7 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
             }
         }
 
-        #[cfg(any(target_os = "macos", target_os = "irix"))]
+        #[cfg(any(target_os = "macos", target_os = "irix", target_os = "solaris"))]
         {
             let s = crate::cursor::seed();
             if s != cursor_seed {
@@ -1740,7 +1741,7 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
 
         // Also poll once an iteration: the person at the G5 can move the
         // pointer themselves, and no input event announces that.
-        #[cfg(any(target_os = "macos", target_os = "irix"))]
+        #[cfg(any(target_os = "macos", target_os = "irix", target_os = "solaris"))]
         send_cursor_position(peer, &mut cursor_tracker, last_peer_input)?;
     }
 }
@@ -1780,9 +1781,9 @@ fn drain_input(
     screenshot_requested: &mut Option<(String, i32)>,
     clip_sync: &mut crate::clipboard::Sync,
     clip_disabled: &mut bool,
-    #[cfg(any(target_os = "macos", target_os = "irix"))] injector: &mut crate::input::Injector,
-    #[cfg(any(target_os = "macos", target_os = "irix"))] cursor_tracker: &mut crate::cursor::Tracker,
-    #[cfg(any(target_os = "macos", target_os = "irix"))] last_peer_input: &mut std::time::Instant,
+    #[cfg(any(target_os = "macos", target_os = "irix", target_os = "solaris"))] injector: &mut crate::input::Injector,
+    #[cfg(any(target_os = "macos", target_os = "irix", target_os = "solaris"))] cursor_tracker: &mut crate::cursor::Tracker,
+    #[cfg(any(target_os = "macos", target_os = "irix", target_os = "solaris"))] last_peer_input: &mut std::time::Instant,
 ) -> io::Result<bool> {
     loop {
         // `wait` is what paces an idle loop, and is right exactly once per
@@ -1815,7 +1816,7 @@ fn drain_input(
         };
         match msg.union {
             Some(message::Union::mouse_event(me)) => {
-                #[cfg(any(target_os = "macos", target_os = "irix"))]
+                #[cfg(any(target_os = "macos", target_os = "irix", target_os = "solaris"))]
                 {
                     injector.mouse(&me);
                     *last_peer_input = std::time::Instant::now();
@@ -1824,7 +1825,7 @@ fn drain_input(
                 let _ = &me;
             }
             Some(message::Union::key_event(ke)) => {
-                #[cfg(any(target_os = "macos", target_os = "irix"))]
+                #[cfg(any(target_os = "macos", target_os = "irix", target_os = "solaris"))]
                 {
                     injector.key(&ke);
                     *last_peer_input = std::time::Instant::now();
@@ -1833,7 +1834,7 @@ fn drain_input(
             }
             // Touch gestures. Field 26, backported -- see `Injector::touch`,
             // which drops them on anything older than 10.6.
-            #[cfg(any(target_os = "macos", target_os = "irix"))]
+            #[cfg(any(target_os = "macos", target_os = "irix", target_os = "solaris"))]
             Some(message::Union::pointer_device_event(pd)) => {
                 injector.touch(&pd);
                 *last_peer_input = std::time::Instant::now();
@@ -1888,7 +1889,7 @@ fn drain_input(
                     // The resolution dial, which the peer has been asking for
                     // and being ignored on. `custom_image_quality` is upstream's
                     // bitrate percentage and is a separate question.
-                    #[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
+                    #[cfg(all(any(target_os = "macos", target_os = "irix", target_os = "solaris"), not(no_vpx)))]
                     {
                         *quality_requested =
                             scale_for_quality(o.image_quality.enum_value_or_default());
@@ -1902,7 +1903,7 @@ fn drain_input(
                             if *clip_disabled { "disabled" } else { "re-enabled" }
                         );
                     }
-                    #[cfg(any(target_os = "macos", target_os = "irix"))]
+                    #[cfg(any(target_os = "macos", target_os = "irix", target_os = "solaris"))]
                     if o.show_remote_cursor.enum_value_or_default() == BoolOption::Yes {
                         // Usually flipped mid-session, long after the shape was
                         // sent at login; without this the peer never gets one.
