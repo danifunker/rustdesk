@@ -186,6 +186,48 @@ runs a 64-bit kernel, so the only cost is that every C library the agent links
 must also be 64-bit — see the `sysprobe.sh` output for whether
 `/usr/openwin/lib/sparcv9` has X11.
 
+## The capture path
+
+`src/capture_shim.c` and `src/capture.rs` are the first piece of the agent, and
+`captest` exercises them alone -- no protocol, no crypto, no encoder, so every
+number it prints is about the screen. Measured on the Blade against `Xvfb :1`
+at 1280x1024, with an `xclock -update 1` on screen:
+
+| | DAMAGE + MIT-SHM | MIT-SHM + comparison |
+|---|---|---|
+| full screen read | 4.9 ms | 4.9 ms |
+| 20 idle polls | **1.4 ms total** | 168 ms total |
+| what a change reports | `181x181 at 51,51` -- the clock | a band, `1280x64 at 0,96` |
+
+Two paths, because the good one cannot be trusted blindly. A damage object on
+the root *does* report a child window's drawing here, but a compositing server
+redirects windows away from the root and the same code would see nothing --
+and the failure mode is a frozen screen served confidently, with no error
+anywhere. So the damage path checks itself: after two seconds of reported
+silence it reads the screen and compares, and if the screen moved while damage
+said nothing, it downgrades to comparison for good. That costs one 5 ms read
+and one comparison per two seconds of idle, which is the price of never being
+silently wrong. A synthetic probe at startup -- draw into a window of our own,
+see if it reports -- was tried first and answered wrongly on both servers it
+ran against.
+
+Two bugs are worth recording because neither announced itself:
+
+* **The comparison hashed the padding byte.** A 24-bit screen in a 32-bit image
+  has one byte per pixel that is not colour, and which end it sits at depends
+  on byte order -- first under A,R,G,B, last under B,G,R,A. Sampling byte 0
+  worked on the little-endian development box and hashed a constant zero on the
+  Blade, so a screen with a clock ticking on it reported no change whatsoever.
+  The hash samples bytes 1 and 2, a colour channel under either order.
+* **minicargo does not honour `cargo:rerun-if-changed`.** An edited `.c` file
+  links against the stale archive and the build still succeeds, so what runs is
+  the old code -- a very confusing thing to debug against a machine across the
+  network. `scripts/build-sparc.sh` drops the build-script cache when a shim is
+  newer, as the PowerPC agent's script does.
+
+`RD_DEBUG=1` traces what change detection decided, since that is invisible from
+the outside and the machine is usually somewhere else.
+
 ## Probes — run these on the Blade first
 
 ```sh
