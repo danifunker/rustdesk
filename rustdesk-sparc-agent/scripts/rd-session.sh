@@ -100,8 +100,11 @@ stop)
         exit 0
     fi
     # Reverse order: the clients first, the server last, so nothing is killed
-    # while still talking to a server that has gone away.
-    tail -r "$PIDFILE" 2>/dev/null || cat "$PIDFILE" | while read pid cmd; do
+    # while still talking to a server that has gone away. The braces are not
+    # decoration: without them this reads as `tail || (cat | while ...)`, so a
+    # working `tail -r` printed the list and the loop never ran -- stop killed
+    # nothing and then deleted the file that said what to kill.
+    { tail -r "$PIDFILE" 2>/dev/null || cat "$PIDFILE"; } | while read pid cmd; do
         if kill -0 "$pid" 2>/dev/null; then
             kill "$pid" 2>/dev/null || true
             log "stopped $cmd (pid $pid)"

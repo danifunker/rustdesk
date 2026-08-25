@@ -104,18 +104,39 @@ build_vpx() {
     log "libvpx $VPX_VER (this one takes a while)"
     unpack "$SRCDIR/libvpx-$VPX_VER.tar.gz" "libvpx-$VPX_VER"
     cd "$BUILDDIR/libvpx-$VPX_VER"
+    # OpenCSW keeps the GNU tools under their plain names in /opt/csw/gnu.
+    # libvpx's configure runs `diff --version` and gives up when Solaris' own
+    # diff answers "illegal option" -- which it reports as a toolchain problem
+    # rather than as a missing tool. Only this build needs them.
+    PATH=/opt/csw/gnu:$PATH
+    export PATH
     # generic-gnu is the portable C build: there is no SPARC assembly in libvpx
     # and asking for a target it does not know ends the configure immediately.
     # VP8 only, and none of the tooling -- the agent encodes, and the examples
     # and unit tests drag in a C++ compiler and webm.
-    CC="$CC" CFLAGS="$CFLAGS" ./configure \
+    # bash, not /bin/sh: libvpx's configure uses substitutions the Bourne shell
+    # this machine ships does not have, and says only "bad substitution".
+    # LD as well as CC: libvpx's configure compiles its probes with $CC and
+    # links them with a bare `gcc`, which here defaults to 32-bit sparc and
+    # fails with "wrong ELF class: ELFCLASS64" -- reported as a toolchain
+    # misconfiguration rather than as the missing -m64 that it is.
+    CC="$CC" LD="$CC" CFLAGS="$CFLAGS" LDFLAGS="-m64" bash ./configure \
         --prefix="$PREFIX" --target=generic-gnu \
         --enable-vp8 --disable-vp9 --enable-vp8-encoder --enable-vp8-decoder \
         --disable-examples --disable-tools --disable-docs --disable-unit-tests \
         --disable-webm-io --disable-libyuv --enable-static --disable-shared \
         --enable-pic
-    gmake
-    gmake install
+    # libvpx's helper scripts say #!/bin/sh and are written for a shell with
+    # ${var%%...} and friends, so on Solaris they fail with "bad substitution"
+    # -- and the first visible sign is a compile failing on vpx_version.h, a
+    # header that should have been generated. Point their shebangs at bash.
+    for sh_file in build/make/*.sh; do
+        sed "1s|^#!.*|#!/usr/bin/bash|" "$sh_file" > "$sh_file.bash"
+        mv "$sh_file.bash" "$sh_file"
+        chmod +x "$sh_file"
+    done
+    gmake SHELL=/usr/bin/bash
+    gmake SHELL=/usr/bin/bash install
 }
 
 case "${1:-all}" in
