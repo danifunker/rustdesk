@@ -755,3 +755,269 @@ int rd_capture_poll(rd_capture *c, int *rects, int max_rects)
 dead_out:
     return -1;
 }
+
+/* ---------------------------------------------------------------------------
+ * Fused downscale + I420 conversion. See the header for why this exists, and
+ * for why it is a separate function from the IRIX port's rather than a rename
+ * of it: that one reads A,B,G,R and this canvas is A,R,G,B.
+ *
+ * The structure below is the IRIX one -- three kernels, chosen by factor --
+ * because the reasons for each hold here too. What changed is every source
+ * offset: byte 1 is red here and blue there, byte 3 is blue here and red
+ * there. Green and alpha sit in the same places.
+ * ------------------------------------------------------------------------- */
+
+static unsigned char clamp8(int v)
+{
+    if (v < 0) return 0;
+    if (v > 255) return 255;
+    return (unsigned char)v;
+}
+
+/* BT.601 studio swing, taking a *sum* of `1 << sh` samples per channel rather
+ * than an average, so the box divide folds into the shift and no per-pixel
+ * integer division survives.
+ *
+ *   Y = (( 66R + 129G +  25B + 128) >> 8) +  16
+ *   U = ((-38R -  74G + 112B + 128) >> 8) + 128
+ *   V = ((112R -  94G -  18B + 128) >> 8) + 128
+ *
+ * Worst case magnitude is 129 * 255 * (1 << sh); at the largest factor this
+ * accepts (8, so sh reaches 6 for luma and 8 for chroma) that is 8.4e6, well
+ * inside a 32-bit int on a machine whose int is 32 bits even in LP64.
+ */
+#define Y_OF(r, g, b, sh) \
+    clamp8(((((66 * (r) + 129 * (g) + 25 * (b)) >> (sh)) + 128) >> 8) + 16)
+#define U_OF(r, g, b, sh) \
+    clamp8(((((-38 * (r) - 74 * (g) + 112 * (b)) >> (sh)) + 128) >> 8) + 128)
+#define V_OF(r, g, b, sh) \
+    clamp8(((((112 * (r) - 94 * (g) - 18 * (b)) >> (sh)) + 128) >> 8) + 128)
+
+int rd_argb_to_i420_rect(const unsigned char *src, size_t src_len, int src_stride,
+                         unsigned char *yp, unsigned char *up, unsigned char *vp,
+                         int dst_w, int dst_h, int chroma_stride,
+                         int factor,
+                         int dx0, int dy0, int dx1, int dy1)
+{
+    int by, bx, sh, step;
+
+    if (!src || !yp || !up || !vp) return -1;
+    if (dst_w < 2 || dst_h < 2 || chroma_stride < dst_w / 2) return -1;
+    if (factor < 1) return -1;
+    if (src_stride < dst_w * factor * 4) return -1;
+
+    /* Power of two only -- the whole point of the shift form above. */
+    switch (factor) {
+        case 1: sh = 0; break;
+        case 2: sh = 2; break;
+        case 4: sh = 4; break;
+        case 8: sh = 6; break;
+        default: return -1;
+    }
+
+    if (dx0 < 0) dx0 = 0;
+    if (dy0 < 0) dy0 = 0;
+    if (dx1 > dst_w) dx1 = dst_w;
+    if (dy1 > dst_h) dy1 = dst_h;
+    dx0 &= ~1;
+    dy0 &= ~1;
+    dx1 = (dx1 + 1) & ~1;
+    dy1 = (dy1 + 1) & ~1;
+    if (dx1 > (dst_w & ~1)) dx1 = dst_w & ~1;
+    if (dy1 > (dst_h & ~1)) dy1 = dst_h & ~1;
+    if (dx0 >= dx1 || dy0 >= dy1) return 0;
+
+    /* Refuse rather than read off the end: the caller's geometry can go stale
+     * if the display mode changes mid-frame, and a segfault is a worse outcome
+     * than a skipped frame. */
+    if (src_len < (size_t)src_stride * (size_t)(dy1 * factor)) return -1;
+
+    if (factor == 1) {
+        /* No box to average: the common shape reduces to a plain converter,
+         * and writing it out separately keeps three loads per pixel instead of
+         * three loads plus the accumulate the general path would do. */
+        for (by = dy0 / 2; by < dy1 / 2; by++) {
+            const unsigned char *row0 = src + (size_t)(by * 2) * src_stride;
+            const unsigned char *row1 = row0 + src_stride;
+            unsigned char *ya = yp + (size_t)(by * 2) * dst_w;
+            unsigned char *yb = ya + dst_w;
+            unsigned char *ua = up + (size_t)by * chroma_stride;
+            unsigned char *va = vp + (size_t)by * chroma_stride;
+
+            for (bx = dx0 / 2; bx < dx1 / 2; bx++) {
+                const unsigned char *p0 = row0 + (size_t)bx * 8;
+                const unsigned char *p1 = row1 + (size_t)bx * 8;
+                /* A,R,G,B: byte 0 is alpha, byte 1 is RED, byte 3 is blue.
+                 * The IRIX loop reads 1 as blue and 3 as red. */
+                int r0 = p0[1], g0 = p0[2], b0 = p0[3];
+                int r1 = p0[5], g1 = p0[6], b1 = p0[7];
+                int r2 = p1[1], g2 = p1[2], b2 = p1[3];
+                int r3 = p1[5], g3 = p1[6], b3 = p1[7];
+                int r = r0 + r1 + r2 + r3;
+                int g = g0 + g1 + g2 + g3;
+                int b = b0 + b1 + b2 + b3;
+
+                ya[bx * 2]     = Y_OF(r0, g0, b0, 0);
+                ya[bx * 2 + 1] = Y_OF(r1, g1, b1, 0);
+                yb[bx * 2]     = Y_OF(r2, g2, b2, 0);
+                yb[bx * 2 + 1] = Y_OF(r3, g3, b3, 0);
+                ua[bx] = U_OF(r, g, b, 2);
+                va[bx] = V_OF(r, g, b, 2);
+            }
+        }
+        return 0;
+    }
+
+    if (factor == 2) {
+        /* The likely default, and worth its own kernel.
+         *
+         * A destination 2x2 block is a 4x4 source block: sixteen pixels at
+         * fixed offsets from four row pointers. The general path below reaches
+         * them through two loops whose trip count is a runtime value, so the
+         * compiler cannot unroll either -- and at four iterations apiece the
+         * compare-and-branch is a large fraction of the work being scheduled.
+         * On the Indy this was measured at roughly half the general path's
+         * cost for byte-identical output; not yet measured here.
+         */
+        for (by = dy0 / 2; by < dy1 / 2; by++) {
+            const unsigned char *r0 = src + (size_t)(by * 4) * src_stride
+                                    + (size_t)dx0 * 8;
+            const unsigned char *r1 = r0 + src_stride;
+            const unsigned char *r2 = r1 + src_stride;
+            const unsigned char *r3 = r2 + src_stride;
+            unsigned char *ya = yp + (size_t)(by * 2) * dst_w + dx0;
+            unsigned char *yb = ya + dst_w;
+            unsigned char *ua = up + (size_t)by * chroma_stride + dx0 / 2;
+            unsigned char *va = vp + (size_t)by * chroma_stride + dx0 / 2;
+            int blocks = (dx1 - dx0) / 2;
+
+            for (bx = 0; bx < blocks; bx++) {
+                int o = bx * 16;
+                /* A,R,G,B: byte 0 alpha, 1 red, 2 green, 3 blue. Each of the
+                 * four sums is one destination pixel's 2x2 source box. */
+                int q0 = r0[o+1] + r0[o+5] + r1[o+1] + r1[o+5];
+                int g0 = r0[o+2] + r0[o+6] + r1[o+2] + r1[o+6];
+                int b0 = r0[o+3] + r0[o+7] + r1[o+3] + r1[o+7];
+                int q1 = r0[o+9] + r0[o+13] + r1[o+9] + r1[o+13];
+                int g1 = r0[o+10] + r0[o+14] + r1[o+10] + r1[o+14];
+                int b1 = r0[o+11] + r0[o+15] + r1[o+11] + r1[o+15];
+                int q2 = r2[o+1] + r2[o+5] + r3[o+1] + r3[o+5];
+                int g2 = r2[o+2] + r2[o+6] + r3[o+2] + r3[o+6];
+                int b2 = r2[o+3] + r2[o+7] + r3[o+3] + r3[o+7];
+                int q3 = r2[o+9] + r2[o+13] + r3[o+9] + r3[o+13];
+                int g3 = r2[o+10] + r2[o+14] + r3[o+10] + r3[o+14];
+                int b3 = r2[o+11] + r2[o+15] + r3[o+11] + r3[o+15];
+
+                ya[bx * 2]     = Y_OF(q0, g0, b0, 2);
+                ya[bx * 2 + 1] = Y_OF(q1, g1, b1, 2);
+                yb[bx * 2]     = Y_OF(q2, g2, b2, 2);
+                yb[bx * 2 + 1] = Y_OF(q3, g3, b3, 2);
+                {
+                    int cr = q0 + q1 + q2 + q3;
+                    int cg = g0 + g1 + g2 + g3;
+                    int cb = b0 + b1 + b2 + b3;
+                    ua[bx] = U_OF(cr, cg, cb, 4);
+                    va[bx] = V_OF(cr, cg, cb, 4);
+                }
+            }
+        }
+        return 0;
+    }
+
+    /* Above 1/2, sample the box rather than averaging all of it.
+     *
+     * The conversion's cost is dominated by *reading the source*, not by
+     * writing the output or by the arithmetic: at factor 4 each destination
+     * pixel averages sixteen source pixels, so shrinking the output does not
+     * shrink the work.
+     *
+     * Averaging a 2x2 sample of each box instead of all of it reads a quarter
+     * of the source at factor 4 and a sixteenth at factor 8. The quality
+     * argument is that at 1/4 a 1280x1024 desktop is already 320x256: text is
+     * unreadable either way, and what the box filter buys at that point is a
+     * slightly smoother version of something nobody is reading. At 1/2, where
+     * text is marginal and each box is only four pixels anyway, the full
+     * average is kept.
+     *
+     * `step` is the gap between the two samples in each direction, so the pair
+     * straddles the box rather than sitting in its corner.
+     */
+    step = (factor >= 4) ? (factor / 2) : 1;
+    if (step > 1) {
+        /* Two samples per axis regardless of factor: the shift is fixed at 2. */
+        for (by = dy0 / 2; by < dy1 / 2; by++) {
+            const unsigned char *brow = src + (size_t)(by * 2 * factor) * src_stride;
+            unsigned char *ya = yp + (size_t)(by * 2) * dst_w;
+            unsigned char *yb = ya + dst_w;
+            unsigned char *ua = up + (size_t)by * chroma_stride;
+            unsigned char *va = vp + (size_t)by * chroma_stride;
+
+            for (bx = dx0 / 2; bx < dx1 / 2; bx++) {
+                int q, cr = 0, cg = 0, cb = 0;
+                int sr[4], sg[4], sb[4];
+
+                for (q = 0; q < 4; q++) {
+                    const unsigned char *s0 = brow
+                        + (size_t)((q >> 1) * factor) * src_stride
+                        + (size_t)((bx * 2 + (q & 1)) * factor) * 4;
+                    const unsigned char *s1 = s0 + (size_t)step * src_stride;
+                    int o = step * 4;
+                    int ar = s0[1] + s0[o + 1] + s1[1] + s1[o + 1];
+                    int ag = s0[2] + s0[o + 2] + s1[2] + s1[o + 2];
+                    int ab = s0[3] + s0[o + 3] + s1[3] + s1[o + 3];
+                    sr[q] = ar; sg[q] = ag; sb[q] = ab;
+                    cr += ar; cg += ag; cb += ab;
+                }
+
+                ya[bx * 2]     = Y_OF(sr[0], sg[0], sb[0], 2);
+                ya[bx * 2 + 1] = Y_OF(sr[1], sg[1], sb[1], 2);
+                yb[bx * 2]     = Y_OF(sr[2], sg[2], sb[2], 2);
+                yb[bx * 2 + 1] = Y_OF(sr[3], sg[3], sb[3], 2);
+                ua[bx] = U_OF(cr, cg, cb, 4);
+                va[bx] = V_OF(cr, cg, cb, 4);
+            }
+        }
+        return 0;
+    }
+
+    for (by = dy0 / 2; by < dy1 / 2; by++) {
+        /* Top-left source pixel of this destination 2x2 block's row pair. */
+        const unsigned char *brow = src + (size_t)(by * 2 * factor) * src_stride;
+        unsigned char *ya = yp + (size_t)(by * 2) * dst_w;
+        unsigned char *yb = ya + dst_w;
+        unsigned char *ua = up + (size_t)by * chroma_stride;
+        unsigned char *va = vp + (size_t)by * chroma_stride;
+
+        for (bx = dx0 / 2; bx < dx1 / 2; bx++) {
+            int q, cr = 0, cg = 0, cb = 0;
+            int sr[4], sg[4], sb[4];
+
+            for (q = 0; q < 4; q++) {
+                const unsigned char *s0 = brow
+                    + (size_t)((q >> 1) * factor) * src_stride
+                    + (size_t)((bx * 2 + (q & 1)) * factor) * 4;
+                int ky, kx, ar = 0, ag = 0, ab = 0;
+
+                for (ky = 0; ky < factor; ky++) {
+                    const unsigned char *s = s0 + (size_t)ky * src_stride;
+                    for (kx = 0; kx < factor; kx++) {
+                        ar += s[kx * 4 + 1];
+                        ag += s[kx * 4 + 2];
+                        ab += s[kx * 4 + 3];
+                    }
+                }
+                sr[q] = ar; sg[q] = ag; sb[q] = ab;
+                cr += ar; cg += ag; cb += ab;
+            }
+
+            ya[bx * 2]     = Y_OF(sr[0], sg[0], sb[0], sh);
+            ya[bx * 2 + 1] = Y_OF(sr[1], sg[1], sb[1], sh);
+            yb[bx * 2]     = Y_OF(sr[2], sg[2], sb[2], sh);
+            yb[bx * 2 + 1] = Y_OF(sr[3], sg[3], sb[3], sh);
+            /* Four boxes, so two more halvings than the luma shift. */
+            ua[bx] = U_OF(cr, cg, cb, sh + 2);
+            va[bx] = V_OF(cr, cg, cb, sh + 2);
+        }
+    }
+    return 0;
+}

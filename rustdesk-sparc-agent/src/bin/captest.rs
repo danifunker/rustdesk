@@ -137,6 +137,68 @@ fn main() {
     }
     println!("20 idle polls     {:?} total, {} reported nothing", t.elapsed(), idle);
 
+    // --- the fused conversion, on a real frame ---------------------------
+    //
+    // `convtest` checks `to_i420_rect` against synthetic images, which is where
+    // an arithmetic error shows. This is the other half: the same conversion on
+    // pixels that actually came out of the framebuffer, through the whole
+    // `Capturer` -- its stride, its buffer length, its pixel-order gate. Those
+    // are what a synthetic test cannot reach, and getting the stride wrong on a
+    // padded mode would look exactly like a working conversion here and a
+    // sheared picture on the peer.
+    //
+    // At factor 1 the answer must be the shared converter's, and the luma must
+    // be bit-identical -- the chroma differs by at most one code because the
+    // shared one averages each channel before weighting it and this one weights
+    // the sums. Anything larger than that, on a real desktop, is a red/blue
+    // swap.
+    {
+        use rustdesk_ppc_agent::convert::{argb_to_i420, I420};
+        cap.frame();
+        let (w, h) = (cap.width(), cap.height());
+        let mut want = I420::new(w, h);
+        let tr = Instant::now();
+        argb_to_i420(cap.buffer(), cap.stride(), &mut want);
+        let ref_ms = tr.elapsed().as_secs_f64() * 1000.0;
+
+        let mut got = I420::new(w, h);
+        let tf = Instant::now();
+        let ok = cap.to_i420(&mut got, 1);
+        let fused_ms = tf.elapsed().as_secs_f64() * 1000.0;
+
+        let dmax = |a: &[u8], b: &[u8]| -> i32 {
+            let mut m = 0;
+            for i in 0..a.len().min(b.len()) {
+                let d = (a[i] as i32 - b[i] as i32).abs();
+                if d > m { m = d }
+            }
+            m
+        };
+        let (dy, du, dv) = (dmax(&want.y, &got.y), dmax(&want.u, &got.u), dmax(&want.v, &got.v));
+        println!(
+            "to_i420 factor 1  {} in {:.0} ms (shared converter {:.0} ms); \
+             vs it: Y max {} U max {} V max {}  {}",
+            if ok { "converted" } else { "REFUSED" }, fused_ms, ref_ms, dy, du, dv,
+            if ok && dy == 0 && du <= 1 && dv <= 1 { "ok" } else { "FAIL" }
+        );
+
+        // And the downscales, timed on this screen. Nothing to compare them
+        // against here -- a box filter is not the same picture -- but the cost
+        // is the number `DEFAULT_SCALE` should be chosen from, and it has never
+        // been measured on this machine.
+        for &f in [2i32, 4].iter() {
+            let mut small = I420::new(w / f as usize, h / f as usize);
+            let t = Instant::now();
+            let ok = cap.to_i420(&mut small, f);
+            println!(
+                "to_i420 factor {}  {}x{} in {:.0} ms {}",
+                f, small.width, small.height,
+                t.elapsed().as_secs_f64() * 1000.0,
+                if ok { "" } else { " REFUSED" }
+            );
+        }
+    }
+
     if let Some(path) = ppm {
         cap.frame();
         match write_ppm(&path, cap.buffer(), cap.width(), cap.height(), cap.stride(), cap.pixel_order()) {

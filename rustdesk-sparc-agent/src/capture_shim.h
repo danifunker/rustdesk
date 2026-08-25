@@ -107,6 +107,48 @@ const char *rd_capture_last_error(const rd_capture *c);
  * agent has to notice and reopen rather than sit on a dead display. */
 int rd_capture_is_dead(const rd_capture *c);
 
+/*
+ * Box-filter downscale **fused with the A,R,G,B -> I420 conversion**, over a
+ * destination rectangle.
+ *
+ * The IRIX port has the same function for A,B,G,R canvases
+ * (`rd_abgr_to_i420_rect`). This one is not a rename of it: this machine's
+ * XVR-600 hands back A,R,G,B -- byte 1 is red, byte 3 is blue -- and reading
+ * the IRIX loop's offsets here swaps red and blue in every frame, which over a
+ * remote display looks like a fault in the client rather than in the agent.
+ * `rd_capture_pixel_order` reports what the server actually said; the Rust side
+ * refuses to call this when it is not RD_ORDER_ARGB.
+ *
+ * Three things it does that a scale-then-convert pair does not, each of which
+ * was worth measuring on its own when the IRIX port was written:
+ *
+ *   - One walk of the canvas instead of two, with no full-size intermediate
+ *     written and read back. On the emulated Indy at 1/2 those two steps cost
+ *     386 + 306 ms, with a whole scaled framebuffer of memory traffic between
+ *     them.
+ *   - A destination rectangle, so a frame costs what the damage costs rather
+ *     than what the screen costs. The DAMAGE extension hands us exact
+ *     rectangles; the band model threw them away.
+ *   - The right byte order, which is the part that differs here.
+ *
+ * `factor` must be a power of two (1, 2, 4, 8), and anything else is refused
+ * rather than quietly rounded: that restriction is what lets the box average
+ * fold into the BT.601 weights as a shift, instead of three integer divides
+ * per destination pixel. Anything else returns -1 with nothing written.
+ *
+ * dx0/dy0/dx1/dy1 are in **destination** pixels, half-open, and are snapped
+ * outward to even -- a 4:2:0 chroma sample is shared by a 2x2 destination
+ * block, so a bound falling inside one would leave half of it unwritten.
+ *
+ * Returns 0 on success, -1 if the arguments do not make sense (in which case
+ * nothing is written).
+ */
+int rd_argb_to_i420_rect(const unsigned char *src, size_t src_len, int src_stride,
+                         unsigned char *yp, unsigned char *up, unsigned char *vp,
+                         int dst_w, int dst_h, int chroma_stride,
+                         int factor,
+                         int dx0, int dy0, int dx1, int dy1);
+
 #ifdef __cplusplus
 }
 #endif

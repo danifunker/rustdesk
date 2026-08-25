@@ -61,6 +61,23 @@ extern "C" {
     fn rd_capture_read_rect(c: *mut RdCapture, x: c_int, y: c_int, w: c_int, h: c_int) -> c_int;
     fn rd_capture_last_error(c: *const RdCapture) -> *const c_char;
     fn rd_capture_is_dead(c: *const RdCapture) -> c_int;
+
+    fn rd_argb_to_i420_rect(
+        src: *const c_uchar,
+        src_len: usize,
+        src_stride: c_int,
+        yp: *mut c_uchar,
+        up: *mut c_uchar,
+        vp: *mut c_uchar,
+        dst_w: c_int,
+        dst_h: c_int,
+        chroma_stride: c_int,
+        factor: c_int,
+        dx0: c_int,
+        dy0: c_int,
+        dx1: c_int,
+        dy1: c_int,
+    ) -> c_int;
 }
 
 /// A changed region of the screen, in screen coordinates.
@@ -85,17 +102,33 @@ pub fn display_size() -> Option<(i32, i32)> {
 
 pub struct Capturer {
     inner: *mut RdCapture,
-    width: usize,
-    height: usize,
+    /// Public because `session.rs` reads them as fields on all three ports.
+    pub width: usize,
+    pub height: usize,
     stride: usize,
     rects: Vec<Rect>,
     scratch: Vec<c_int>,
+    /// Bands the caller asked to be re-read regardless of what the server
+    /// said. See [`invalidate_band`](Capturer::invalidate_band).
+    forced: Vec<bool>,
+    /// Set once `refresh` has seen the resolution move.
+    stale: bool,
+    /// When `refresh` last opened a connection, so it can rate-limit itself.
+    last_refresh: Option<std::time::Instant>,
 }
 
 impl Capturer {
     /// Open `$DISPLAY` with the best path the server allows.
-    pub fn new() -> Result<Self, String> {
-        Self::open(None, PATH_DAMAGE)
+    ///
+    /// `&'static str` rather than `String` to match the PowerPC and IRIX
+    /// `Capturer`s, so `session.rs`'s `?` works against any of the three
+    /// without a conversion. The detail goes to the log instead of to the
+    /// caller, which is where it is readable anyway.
+    pub fn new() -> Result<Self, &'static str> {
+        Self::open(None, PATH_DAMAGE).map_err(|e| {
+            log::error!("capture: {}", e);
+            "capture: could not open the display"
+        })
     }
 
     /// Open `display`, refusing any path better than `max_path`. Forcing
@@ -122,6 +155,18 @@ impl Capturer {
         let width = unsafe { rd_capture_width(ptr) } as usize;
         let height = unsafe { rd_capture_height(ptr) } as usize;
         let stride = unsafe { rd_capture_stride(ptr) } as usize;
+        if width == 0 || height == 0 || stride < width * 4 {
+            let why = unsafe {
+                CStr::from_ptr(rd_capture_last_error(ptr))
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            unsafe { rd_capture_close(ptr) };
+            return Err(format!(
+                "implausible geometry {}x{} stride {}: {}",
+                width, height, stride, why
+            ));
+        }
         Ok(Capturer {
             inner: ptr,
             width,
@@ -129,6 +174,9 @@ impl Capturer {
             stride,
             rects: Vec::with_capacity(MAX_RECTS),
             scratch: vec![0; MAX_RECTS * 4],
+            forced: vec![false; BANDS],
+            stale: false,
+            last_refresh: None,
         })
     }
 
@@ -271,9 +319,193 @@ impl Capturer {
         dirty
     }
 
+    /// `dirty_bands` with the Mac's sampling knobs spelled out.
+    ///
+    /// The knobs describe a sampled-checksum probe: how wide a run of bytes to
+    /// read, and how far apart those runs are. Neither reaches anything here.
+    /// On the damage path there is no probe read at all -- the server says what
+    /// changed -- and on the hash fallback the sampling rate is fixed in
+    /// `capture_shim.c` (`HASH_ROW_STEP`) rather than being a per-call dial.
+    /// So the arguments are accepted and ignored rather than making the caller
+    /// special-case the platform, and `--probe-display`'s sweep will report the
+    /// same cost for every setting. That is the honest answer, not a broken
+    /// one.
+    pub fn dirty_bands_tuned(&mut self, _window: usize, _step: usize) -> [bool; BANDS] {
+        self.dirty_bands()
+    }
+
+    /// Bytes one probe reads, for the same sweep.
+    ///
+    /// Zero on the damage path, and not because the probe is free: an idle poll
+    /// touches no pixels, so there is no probe read to measure. On the
+    /// fallbacks every poll reads the whole canvas before comparing it, so the
+    /// honest number is the canvas.
+    pub fn probe_bytes(&self, _window: usize, _step: usize) -> usize {
+        if self.path() == PATH_DAMAGE {
+            0
+        } else {
+            self.stride * self.height
+        }
+    }
+
     /// Make the next poll re-read and report everything.
     pub fn invalidate(&mut self) {
         unsafe { rd_capture_invalidate(self.inner) }
+        self.forced.iter_mut().for_each(|f| *f = true);
+    }
+
+    /// Force one band to report dirty on the next poll.
+    ///
+    /// `session`'s rotating repair uses this. On the Mac it exists because a
+    /// full-screen repair costs ~370 ms and has to be spread out; here the
+    /// server tells us what changed, so a repair is only needed for pixels the
+    /// peer may have lost rather than ones the agent failed to notice. Kept
+    /// because the session logic is shared, and it costs nothing.
+    pub fn invalidate_band(&mut self, b: usize) {
+        if let Some(f) = self.forced.get_mut(b) {
+            *f = true;
+        }
+    }
+
+    /// Re-read the band's rows into the canvas, returning the rows it covers.
+    ///
+    /// The canvas is already current whenever the poll reported anything -- the
+    /// shim reads the whole screen over MIT-SHM before it hands back
+    /// rectangles -- so this only has to do real work when a band was
+    /// force-invalidated, and then it reads just that band's rectangle.
+    /// That read goes through `XGetImage` rather than shared memory, which is
+    /// why it is worth confining to one band: the full-screen version of it
+    /// costs 200 ms here.
+    pub fn read_band(&mut self, b: usize) -> (usize, usize) {
+        let (start, end) = self.band_range(b);
+        if start >= end {
+            return (start, end);
+        }
+        let forced = self.forced.get(b).copied().unwrap_or(false);
+        if forced {
+            unsafe {
+                rd_capture_read_rect(
+                    self.inner,
+                    0,
+                    start as c_int,
+                    self.width as c_int,
+                    (end - start) as c_int,
+                );
+            }
+            if let Some(f) = self.forced.get_mut(b) {
+                *f = false;
+            }
+        }
+        (start, end)
+    }
+
+    /// Re-read the geometry, because the screen resolution may have changed.
+    ///
+    /// Returns true only when the geometry moved, meaning the encoder and the
+    /// I420 buffers have to be rebuilt around the new size.
+    ///
+    /// A resolution change also invalidates the shared-memory canvas and the
+    /// server's damage interest, both of which are sized at open time, so the
+    /// honest answer is to report the change and let `session` rebuild the
+    /// whole `Capturer`. Reporting it without acting on it would leave the
+    /// canvas the wrong size, which is a crash rather than a wrong picture.
+    pub fn refresh(&mut self) -> bool {
+        // Rate-limited, because `session` calls this at the top of every pass
+        // of the message loop and a resolution does not change several times a
+        // second. It is a bare X connection rather than a whole capture
+        // context, but a connection per frame is still not free.
+        match self.last_refresh {
+            Some(t) if t.elapsed() < std::time::Duration::from_secs(5) => return false,
+            _ => self.last_refresh = Some(std::time::Instant::now()),
+        }
+        let (w, h) = match display_size() {
+            Some(wh) => wh,
+            None => return false,
+        };
+        if w <= 0 || h <= 0 {
+            return false;
+        }
+        let changed = w as usize != self.width || h as usize != self.height;
+        if changed {
+            log::warn!(
+                "capture: display changed from {}x{} to {}x{}; the shm canvas and the \
+                 damage interest are both sized at open time, so this Capturer is stale",
+                self.width, self.height, w, h
+            );
+            self.stale = true;
+        }
+        changed
+    }
+
+    /// True once `refresh` has seen the resolution move. The canvas cannot be
+    /// resized in place, so the caller must build a new `Capturer`.
+    pub fn is_stale(&self) -> bool {
+        self.stale
+    }
+
+    /// Downscale **and** convert to I420 in one walk of the canvas, over a
+    /// rectangle of the destination.
+    ///
+    /// This is the frame loop's hot path. It replaces a downscale pass over
+    /// the canvas, the full-size intermediate that pass would write, and
+    /// `convert::argb_to_i420_rows`' pass back over it -- and unlike that
+    /// shared converter it reads this machine's byte order directly. The two
+    /// happen to agree on A,R,G,B, so the *conversion* here is not the reason
+    /// for a private inner loop; the fusion and the destination rectangle are.
+    ///
+    /// `factor` must be a power of two; anything else is refused rather than
+    /// quietly rounded, because the box average folds into the BT.601 weights
+    /// as a shift and a per-pixel divide is not affordable here.
+    ///
+    /// Bounds are in destination pixels and are snapped outward to even.
+    /// Returns false if the arguments did not make sense, in which case
+    /// nothing was written.
+    pub fn to_i420_rect(
+        &self,
+        img: &mut crate::convert::I420,
+        factor: i32,
+        dx0: i32,
+        dy0: i32,
+        dx1: i32,
+        dy1: i32,
+    ) -> bool {
+        let src = unsafe { rd_capture_buffer(self.inner) };
+        if src.is_null() {
+            return false;
+        }
+        // The C loop reads byte 1 as red and byte 3 as blue. If the server
+        // ever hands back the other order, converting anyway would swap red
+        // and blue in every frame -- a fault that looks like the client's.
+        if self.pixel_order() != ORDER_ARGB {
+            return false;
+        }
+        let cs = img.chroma_stride() as c_int;
+        let (w, h) = (img.width as c_int, img.height as c_int);
+        let rc = unsafe {
+            rd_argb_to_i420_rect(
+                src,
+                self.stride * self.height,
+                self.stride as c_int,
+                img.y.as_mut_ptr(),
+                img.u.as_mut_ptr(),
+                img.v.as_mut_ptr(),
+                w,
+                h,
+                cs,
+                factor as c_int,
+                dx0 as c_int,
+                dy0 as c_int,
+                dx1 as c_int,
+                dy1 as c_int,
+            )
+        };
+        rc == 0
+    }
+
+    /// The whole screen through [`to_i420_rect`](Capturer::to_i420_rect).
+    pub fn to_i420(&self, img: &mut crate::convert::I420, factor: i32) -> bool {
+        let (w, h) = (img.width as i32, img.height as i32);
+        self.to_i420_rect(img, factor, 0, 0, w, h)
     }
 
     /// Re-read one rectangle, for repairing a region the *peer* lost. Costs in
