@@ -281,7 +281,7 @@ fn powerpc_name(subtype: u64) -> &'static str {
 /// An unnameable processor yields nothing at all rather than a string of
 /// qualifiers with no subject: "@ 2 GHz (2 cores)" tells a reader less than an
 /// empty cell does.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "macos", target_os = "solaris")), allow(dead_code))]
 fn describe_cpu(name: &str, hz: Option<u64>, cores: usize) -> String {
     if name.is_empty() {
         return String::new();
@@ -324,7 +324,7 @@ fn format_frequency(hz: u64) -> String {
 ///
 /// This is what the Apple System Profiler on these machines says, so a device
 /// list that agrees with it is the one that will not be questioned.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "macos", target_os = "solaris")), allow(dead_code))]
 fn format_memory(bytes: u64) -> String {
     const GIB: u64 = 1 << 30;
     const MIB: u64 = 1 << 20;
@@ -339,6 +339,74 @@ fn format_memory(bytes: u64) -> String {
         format!("{} MB", (bytes + MIB / 2) / MIB)
     } else {
         format!("{} bytes", bytes)
+    }
+}
+
+/// A `sysinfo(2)` string: the platform name, the release, and friends.
+///
+/// The call returns the byte count *including* the terminating NUL, and a
+/// negative number if the buffer was too small -- 257 is what `<sys/systeminfo.h>`
+/// says is enough for every command defined there.
+#[cfg(target_os = "solaris")]
+fn sysinfo_string(cmd: std::os::raw::c_int) -> Option<String> {
+    let mut buf = [0u8; 257];
+    let n = unsafe {
+        libc::sysinfo(
+            cmd,
+            buf.as_mut_ptr() as *mut std::os::raw::c_char,
+            buf.len() as std::os::raw::c_long,
+        )
+    };
+    if n <= 1 {
+        return None;
+    }
+    let end = ((n as usize) - 1).min(buf.len());
+    Some(String::from_utf8_lossy(&buf[..end]).into_owned())
+}
+
+/// The processor, for the console's device list.
+///
+/// `SI_PLATFORM` names the machine -- `SUNW,Sun-Blade-2500` -- and
+/// `processor_info(2)` carries the clock it actually runs at, which no
+/// `sysconf` reports. Processor 0 is asked because there is no portable way to
+/// enumerate them and the answer is the same for every CPU in these machines.
+#[cfg(target_os = "solaris")]
+pub fn cpu_description() -> String {
+    let name = sysinfo_string(libc::SI_PLATFORM).unwrap_or_default();
+    let hz = unsafe {
+        let mut info: libc::processor_info_t = std::mem::zeroed();
+        if libc::processor_info(0, &mut info) == 0 && info.pi_clock > 0 {
+            Some(info.pi_clock as u64 * 1_000_000)
+        } else {
+            None
+        }
+    };
+    describe_cpu(&name, hz, cpu_count())
+}
+
+/// Installed memory, for the console's device list.
+#[cfg(target_os = "solaris")]
+pub fn memory_description() -> String {
+    let pages = unsafe { libc::sysconf(libc::_SC_PHYS_PAGES) };
+    let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    if pages > 0 && page > 0 {
+        format_memory(pages as u64 * page as u64)
+    } else {
+        String::new()
+    }
+}
+
+/// The operating system, for the console's device list.
+#[cfg(target_os = "solaris")]
+pub fn os_description() -> String {
+    // The release is "5.10"; what anyone reading a device list calls it is
+    // "Solaris 10".
+    match sysinfo_string(libc::SI_RELEASE) {
+        Some(r) => match r.strip_prefix("5.") {
+            Some(minor) => format!("Solaris {}", minor),
+            None => format!("SunOS {}", r),
+        },
+        None => "Solaris".to_owned(),
     }
 }
 
@@ -357,7 +425,7 @@ pub fn cpu_description() -> String {
 
 /// Nothing, off a Mac. The host build exists to test the protocol, and
 /// inventing a processor description for it would put fiction in a device list.
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "solaris")))]
 pub fn cpu_description() -> String {
     String::new()
 }
@@ -375,7 +443,7 @@ pub fn memory_description() -> String {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "solaris")))]
 pub fn memory_description() -> String {
     String::new()
 }
@@ -391,7 +459,7 @@ pub fn os_description() -> String {
 }
 
 /// Off a Mac this is a host test build, and saying so is more use than a blank.
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "solaris")))]
 pub fn os_description() -> String {
     std::env::consts::OS.to_owned()
 }

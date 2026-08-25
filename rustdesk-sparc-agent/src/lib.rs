@@ -29,6 +29,8 @@ pub mod frame;
 pub mod zstd_frame;
 #[path = "../../rustdesk-ppc-agent/src/lan.rs"]
 pub mod lan;
+#[path = "../../rustdesk-ppc-agent/src/sys.rs"]
+pub mod sys;
 
 // Still out: config and crypto want libsodium, http wants mbedTLS, encode
 // wants libvpx, and session wants all of them.

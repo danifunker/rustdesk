@@ -15,7 +15,7 @@
 //! So this round-trips each of them and checks the *bytes*, not just that a
 //! value survives a trip through its own code.
 
-use rustdesk_sparc_agent::{convert, frame, png, rendezvous_proto};
+use rustdesk_sparc_agent::{convert, frame, png, rendezvous_proto, sys};
 
 use protobuf::Message;
 
@@ -105,6 +105,15 @@ fn main() {
     println!("white 16x16 -> Y={} U={} V={}", y0, u0, v0);
     if !(230..=240).contains(&y0) || !(126..=130).contains(&u0) || !(126..=130).contains(&v0) {
         println!("  FAIL: not what BT.601 says white is");
+        failures += 1;
+    }
+
+    // --- what this machine says about itself ------------------------------
+    println!("cpu:    {:?}", sys::cpu_description());
+    println!("memory: {:?}", sys::memory_description());
+    println!("os:     {:?}", sys::os_description());
+    if sys::cpu_description().is_empty() || sys::os_description() == "solaris" {
+        println!("  FAIL: the machine is describing itself as a host test build");
         failures += 1;
     }
 
