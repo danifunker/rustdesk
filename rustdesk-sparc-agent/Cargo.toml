@@ -1,0 +1,34 @@
+# rustdesk-sparc-agent -- a RustDesk agent (the controlled side) for Solaris 10
+# on SPARC, built with mrustc.
+#
+# The portable half of the agent is not copied here. As the IRIX port does, the
+# platform-independent modules come from the PowerPC tree by `#[path]`, so this
+# is a build of the code that actually ships and cannot drift from it. What
+# lives in this directory is the Solaris platform layer and nothing else.
+#
+# Its own workspace: resolves independently, never pulled into the parent build.
+[workspace]
+
+[package]
+name = "rustdesk-sparc-agent"
+version = "0.1.0"
+edition = "2018"
+build = "build.rs"
+description = "RustDesk agent for Solaris 10 / SPARC"
+
+[lib]
+name = "rustdesk_sparc_agent"
+path = "src/lib.rs"
+
+# Capture on its own, before any of the protocol exists: opens the display,
+# reports which path the server allowed, times a full read against an idle
+# poll, and writes what it saw to a PPM.
+[[bin]]
+name = "captest"
+path = "src/bin/captest.rs"
+
+[build-dependencies]
+cc = "1.0"
+
+[profile.release]
+opt-level = 2

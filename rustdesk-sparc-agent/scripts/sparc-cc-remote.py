@@ -54,6 +54,11 @@ REMOTE_ROOT = os.environ.get("SPARC_REMOTE_ROOT", "sparc-xbuild")
 REMOTE_PATH = os.environ.get("SPARC_REMOTE_PATH",
                              "/opt/csw/bin:/usr/ccs/bin:/usr/bin:/usr/sbin")
 EXTRA_CFLAGS = shlex.split(os.environ.get("SPARC_CFLAGS", ""))
+# This script *is* the sparcv9 compiler, and gcc on Solaris defaults to 32-bit
+# sparc, so a build script that does not know the triple -- cc-rs does not --
+# otherwise produces objects the linker rejects as "wrong ELF class: ELFCLASS32".
+# mrustc passes -m64 itself; repeating it costs nothing.
+ABI_FLAGS = ["-m64"]
 VERBOSE = bool(os.environ.get("SPARC_CC_VERBOSE"))
 
 # What a Rust libstd needs on Solaris 10 beyond libc:
@@ -77,6 +82,8 @@ OPT_FLAGS = ("-O", "-O0", "-O1", "-O2", "-O3", "-Os", "-Ofast")
 SYSTEM_PREFIXES = ("/usr/", "/lib/", "/opt/", "/bin/", "/sbin/", "/etc/", "/var/",
                    "/platform/", "/devices/")
 INPUT_SUFFIXES = (".c", ".h", ".o", ".a", ".s", ".S")
+# What to upload from a directory named by each flag.
+DIR_CONTENTS = {"-I": (".h", ".inc"), "-L": (".a", ".o")}
 
 
 def die(msg):
@@ -126,9 +133,31 @@ def main():
     remote_dirs = set()
     new_args = []
 
+    def mirror_dir(d, suffixes):
+        """Upload a local directory's files of these kinds, and return its
+        remote path. What a directory is *for* decides what to send: `-I` wants
+        headers, `-L` wants archives. Sending the wrong kind is silent -- the
+        compile or the link simply cannot find what it needs."""
+        r = remote_path(d)
+        for name in sorted(os.listdir(d)):
+            p = os.path.join(d, name)
+            if os.path.isfile(p) and p.endswith(suffixes):
+                uploads.append((p, os.path.join(r, name)))
+        remote_dirs.add(r)
+        return r
+
     i = 0
     while i < len(args):
         a = args[i]
+        # cc-rs passes `-I dir` as two arguments where mrustc passes `-Idir`.
+        if a in ("-I", "-L") and i + 1 < len(args):
+            d = args[i + 1]
+            if os.path.isdir(d) and not is_system(os.path.abspath(d)):
+                new_args.extend([a, mirror_dir(d, DIR_CONTENTS[a])])
+            else:
+                new_args.extend([a, d])
+            i += 2
+            continue
         if a == "-o" and i + 1 < len(args):
             output = args[i + 1]
             r = remote_path(output)
@@ -150,17 +179,20 @@ def main():
         if a[:2] in ("-I", "-L") and len(a) > 2:
             d = a[2:]
             if os.path.isdir(d) and not is_system(os.path.abspath(d)):
-                r = remote_path(d)
-                for name in sorted(os.listdir(d)):
-                    p = os.path.join(d, name)
-                    if os.path.isfile(p) and p.endswith(INPUT_SUFFIXES):
-                        uploads.append((p, os.path.join(r, name)))
-                remote_dirs.add(r)
-                new_args.append(a[:2] + r)
+                new_args.append(a[:2] + mirror_dir(d, DIR_CONTENTS[a[:2]]))
                 i += 1
                 continue
         new_args.append(a)
         i += 1
+
+    # Whatever directory a source file came from, its headers come too: a .c
+    # names them and the command line does not, so nothing else would carry
+    # them across.
+    for local, _ in list(uploads):
+        if local.endswith((".c", ".s", ".S")):
+            d = os.path.dirname(os.path.abspath(local)) or "."
+            if not is_system(d):
+                mirror_dir(d, DIR_CONTENTS["-I"])
 
     # An oversized translation unit gets its own flags.
     big = False
@@ -171,7 +203,7 @@ def main():
     if big:
         new_args = [a for a in new_args if a not in OPT_FLAGS] + BIG_TU_ARGS
 
-    cmd = [REMOTE_CC] + EXTRA_CFLAGS + new_args
+    cmd = [REMOTE_CC] + ABI_FLAGS + EXTRA_CFLAGS + new_args
     if not compiling:
         cmd += LDFLAGS
 

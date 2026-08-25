@@ -1,0 +1,31 @@
+Setup: V V V
+(0.00 s) Setup: DONE
+Target Load: V V V
+(0.00 s) Target Load: DONE
+>rust_compiler=mrustc
+>target_abi=llvm
+>target_arch=sparc64
+>target_endian=big
+>target_env=
+>target_family=unix
+>target_has_atomic=8
+>target_has_atomic=16
+>target_has_atomic=32
+>target_has_atomic=64
+>target_has_atomic=ptr
+>target_has_atomic=cas
+>target_has_atomic_equal_alignment=8
+>target_has_atomic_equal_alignment=16
+>target_has_atomic_equal_alignment=32
+>target_has_atomic_equal_alignment=64
+>target_has_atomic_equal_alignment=ptr
+>target_has_atomic_load_store=8
+>target_has_atomic_load_store=16
+>target_has_atomic_load_store=32
+>target_has_atomic_load_store=64
+>target_has_atomic_load_store=ptr
+>target_os=solaris
+>target_pointer_width=64
+>target_vendor=sun
+>target_vendor=
+>unix
