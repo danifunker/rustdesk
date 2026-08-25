@@ -27,6 +27,15 @@ path = "src/lib.rs"
 name = "captest"
 path = "src/bin/captest.rs"
 
+# Pinned exactly as the PowerPC agent pins them: the generated protocol code
+# and the wire behaviour have to match the peer, so the codegen version is not
+# free. sodiumoxide waits for a libsodium built for sparcv9.
+[dependencies]
+libc = "=0.2.174"
+log = "0.4"
+protobuf = "=3.0.0-alpha.2"
+sha2 = "0.10"
+
 [build-dependencies]
 cc = "1.0"
 
