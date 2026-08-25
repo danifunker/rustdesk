@@ -593,7 +593,7 @@ fn probe_display() {
 /// Median of three, because a single sample on a machine with a window server
 /// on it is noise. Each row builds its own encoder: every knob here is fixed at
 /// `vpx_codec_enc_init` time or depends on state accumulated since it.
-#[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
+#[cfg(all(any(target_os = "macos", target_os = "irix", target_os = "solaris"), not(no_vpx)))]
 fn encode_sweep(img: &mut rustdesk_ppc_agent::convert::I420) -> u128 {
     use rustdesk_ppc_agent::encode::{Encoder, Tune};
 
@@ -700,7 +700,7 @@ fn encode_sweep(img: &mut rustdesk_ppc_agent::convert::I420) -> u128 {
 /// what a terminal redraw costs an encoder than random noise would be. Noise is
 /// the worst case for a codec and would make every configuration here look bad
 /// in the same way.
-#[cfg(all(any(target_os = "macos", target_os = "irix"), not(no_vpx)))]
+#[cfg(all(any(target_os = "macos", target_os = "irix", target_os = "solaris"), not(no_vpx)))]
 fn dirty_patch(img: &mut rustdesk_ppc_agent::convert::I420, n: u8) {
     let (pw, ph) = (256.min(img.width), 64.min(img.height));
     for y in 0..ph {

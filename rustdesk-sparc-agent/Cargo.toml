@@ -24,13 +24,25 @@ description = "RustDesk agent for Solaris 10 / SPARC"
 name = "rustdesk_ppc_agent"
 path = "src/lib.rs"
 
-# The agent itself will be built straight from the PowerPC tree's main.rs --
-# the CLI, the session loop and the configuration are shared, and the platform
-# layer under them is this directory's. It waits on the two capture methods
-# noted in src/lib.rs.
-# [[bin]]
-# name = "rustdesk-agent"
-# path = "../rustdesk-ppc-agent/src/main.rs"
+# The agent itself, built straight from the PowerPC tree's main.rs -- the CLI,
+# the session loop and the configuration are shared, and the platform layer
+# under them is this directory's.
+[[bin]]
+name = "rustdesk-agent"
+path = "../rustdesk-ppc-agent/src/main.rs"
+
+# A client that speaks the real protocol, so the agent can be proved end to end
+# without a GUI in the way: signed identity, sealed key, password hash, login,
+# then it counts and decodes the video frames that come back.
+#
+# Taken from the IRIX port's tree rather than copied, for the same reason the
+# portable modules are: this is the client that port was proved with, and a copy
+# would answer a question about the copy. Its one platform-specific line is an
+# IRIX poll(2) workaround for a missing SO_RCVTIMEO, which Solaris has -- so
+# here it compiles out and the ordinary read timeout does the pacing.
+[[bin]]
+name = "testpeer"
+path = "../rustdesk-irix65-agent/ports/rust/agent-portable/src/bin/testpeer.rs"
 
 # Capture on its own, before any of the protocol exists: opens the display,
 # reports which path the server allowed, times a full read against an idle
@@ -54,6 +66,13 @@ sha2 = "0.10"
 [[bin]]
 name = "prototest"
 path = "src/bin/prototest.rs"
+
+# The fused downscale-and-convert, against the shared converter and against
+# colours whose BT.601 values are written out. Needs no display: the images are
+# synthetic, so a failure here is the conversion's and nothing else's.
+[[bin]]
+name = "convtest"
+path = "src/bin/convtest.rs"
 
 [build-dependencies]
 cc = "1.0"

@@ -3,8 +3,12 @@
 //! The platform layer lives here; everything portable comes from the PowerPC
 //! tree by `#[path]`, the way the IRIX port takes it. That is deliberate: the
 //! point is to build the code that ships, and a copy would answer a question
-//! about the copy. Modules arrive in dependency order as each one's external
-//! libraries are proved out on this machine.
+//! about the copy.
+//!
+//! All of it is wired now, and the agent built from it serves a peer. The
+//! modules arrived in dependency order as each one's external libraries were
+//! proved out on this machine; `capture` is the one exception, and says below
+//! why it is this directory's own.
 
 const PPC: &str = "../../rustdesk-ppc-agent/src";
 
@@ -45,14 +49,28 @@ pub mod http;
 pub mod encode;
 
 
-// session.rs, and clipboard/api/rendezvous with it, wait on two capture
-// methods this port does not have yet: `read_band`, and a `to_i420_rect` that
-// fuses the downscale with the colour conversion. The IRIX port's is written
-// for A,B,G,R; this machine's canvas is A,R,G,B, so it needs its own inner
-// loop rather than a rename.
-
 /// Screen capture over MIT-SHM, with DAMAGE deciding what to report.
+///
+/// The only module here that is this port's own rather than the PowerPC
+/// tree's: what a capturer *is* differs per platform, and the shared
+/// `session.rs` is written against the shape rather than the implementation.
 #[cfg(target_os = "solaris")]
 pub mod capture;
+
+// The session, and the three modules it reaches for. These arrived last
+// because `session.rs` calls four capture methods -- `invalidate_band`,
+// `read_band`, `refresh` and the fused `to_i420_rect` -- that this port did not
+// have until `capture_shim.c` grew an A,R,G,B inner loop of its own. See
+// `convtest`, which checks that loop against `convert::argb_to_i420` and
+// against colours whose BT.601 values are written out, because the way it
+// would be wrong is a red/blue swap that looks like a fault in the client.
+#[path = "../../rustdesk-ppc-agent/src/clipboard.rs"]
+pub mod clipboard;
+#[path = "../../rustdesk-ppc-agent/src/api.rs"]
+pub mod api;
+#[path = "../../rustdesk-ppc-agent/src/rendezvous.rs"]
+pub mod rendezvous;
+#[path = "../../rustdesk-ppc-agent/src/session.rs"]
+pub mod session;
 
 pub fn ppc_src() -> &'static str { PPC }

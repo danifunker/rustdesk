@@ -206,9 +206,19 @@ pub fn outgoing(text: &str, version: &str, platform: &str) -> Message {
     msg
 }
 
-// -- the Mac side ------------------------------------------------------------
+// -- the platform side -------------------------------------------------------
+//
+// Two implementations behind one set of four C symbols. macOS has the
+// pasteboard; Solaris has X selections, in `clipboard_shim.c` -- a different
+// mechanism with the same names, so nothing above this line changes. IRIX has
+// neither wired up and falls through to the stubs, which report the clipboard
+// as unavailable and are what `session` already handles.
+//
+// Note the shape of the gates: `any(macos, solaris)` and its negation
+// `not(any(macos, solaris))`. Those are two different strings, and updating one
+// without the other leaves both arms of a function defined at once.
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "solaris"))]
 extern "C" {
     fn rd_clip_ok() -> c_int;
     fn rd_clip_changed() -> c_int;
@@ -218,25 +228,30 @@ extern "C" {
 
 /// Is the clipboard reachable from this process at all?
 ///
-/// **Usually not**, and that is not a bug in the code below. `PasteboardCreate`
-/// fails from an ssh login and from the detached `screen` the agent normally
-/// runs under -- measured, along with `pbcopy` and `pbpaste` failing the same
-/// way, so it is the session rather than the API. The agent has to be started
-/// from `deploy/com.rustdesk.ppc-agent.plist` for the clipboard to work.
-/// Capture is no guide: that works over ssh, which is exactly why this had to be
-/// established separately.
-#[cfg(target_os = "macos")]
+/// On macOS, **usually not**, and that is not a bug in the code below.
+/// `PasteboardCreate` fails from an ssh login and from the detached `screen`
+/// the agent normally runs under -- measured, along with `pbcopy` and `pbpaste`
+/// failing the same way, so it is the session rather than the API. The agent
+/// has to be started from `deploy/com.rustdesk.ppc-agent.plist` for the
+/// clipboard to work. Capture is no guide: that works over ssh, which is
+/// exactly why this had to be established separately.
+///
+/// On Solaris it is reachable whenever `$DISPLAY` is, because an X selection
+/// belongs to a client rather than to a login session -- the shim owns a hidden
+/// window on the same display the capture reads. So the answer here tracks
+/// whether that window could be created, and nothing else.
+#[cfg(any(target_os = "macos", target_os = "solaris"))]
 pub fn available() -> bool {
     unsafe { rd_clip_ok() != 0 }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "solaris")))]
 pub fn available() -> bool {
     false
 }
 
 /// Has the clipboard changed since the last check? None if it is unreachable.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "solaris"))]
 pub fn changed() -> Option<bool> {
     match unsafe { rd_clip_changed() } {
         -1 => None,
@@ -244,14 +259,14 @@ pub fn changed() -> Option<bool> {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "solaris")))]
 pub fn changed() -> Option<bool> {
     None
 }
 
 /// The clipboard's text, or None if there is none, it is unreachable, or it is
 /// larger than this agent will carry.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "solaris"))]
 pub fn get() -> Option<String> {
     let mut buf = vec![0u8; MAX_CLIPBOARD];
     let n = unsafe { rd_clip_get(buf.as_mut_ptr(), buf.len() as c_int) };
@@ -265,18 +280,18 @@ pub fn get() -> Option<String> {
     String::from_utf8(buf).ok()
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "solaris")))]
 pub fn get() -> Option<String> {
     None
 }
 
 /// Put text on the clipboard. False if it could not be done.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "solaris"))]
 pub fn set(text: &str) -> bool {
     unsafe { rd_clip_set(text.as_ptr(), text.len() as c_int) == 0 }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "solaris")))]
 pub fn set(_text: &str) -> bool {
     false
 }
