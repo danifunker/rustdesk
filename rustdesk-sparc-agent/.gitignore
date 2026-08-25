@@ -1,0 +1,11 @@
+# Built here, over ssh: the C is compiled on the Blade and the binaries come
+# back into this tree.
+target/
+
+# Tarballs fetched by scripts/fetch-deps.sh. The URLs and their SHA-256 are in
+# that script, which is the part worth versioning; 14 MB of upstream release
+# archives is not.
+ports/distfiles/
+
+# Scratch output from a probe run.
+.temp.txt
