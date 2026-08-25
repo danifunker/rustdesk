@@ -6,7 +6,10 @@
 //! peer sees no pointer at all unless the agent sends one, which makes pointing
 //! at anything guesswork.
 //!
-//! Reading the *actual* cursor image is not available here. `NSCursor` only
+//! Reading the *actual* cursor image is not available on this vintage of macOS.
+//! It is on Solaris, where XFIXES hands over the real shape -- see that tree's
+//! cursor_shim.c -- so this module's macOS caveat applies to macOS alone.
+//! `NSCursor` only
 //! knows about the calling application's own cursor, and the system-wide shape
 //! lives behind private CoreGraphics calls (`CGSCurrentCursorSeed` and
 //! friends). So this sends a standard arrow once, and then only tracks where it
@@ -17,7 +20,7 @@
 /// cached shapes on this.
 pub const CURSOR_ID: u64 = 1;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "solaris"))]
 extern "C" {
     fn rd_cursor_seed() -> std::os::raw::c_int;
     fn rd_cursor_image(
@@ -42,12 +45,12 @@ const MAX_CURSOR_PX: usize = 128;
 /// Cheap enough to poll every pass, which is the whole point: fetching the
 /// image costs an allocation and a copy, and the shape changes a handful of
 /// times a session.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "solaris"))]
 pub fn seed() -> i32 {
     unsafe { rd_cursor_seed() }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "solaris")))]
 pub fn seed() -> i32 {
     0
 }
@@ -57,7 +60,7 @@ pub fn seed() -> i32 {
 /// `None` is not a failure to report to the peer -- the caller keeps sending
 /// whatever it had, or falls back to [`arrow`]. A pointer in the right place
 /// with the wrong picture is much better than no pointer.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "solaris"))]
 pub fn current() -> Option<Cursor> {
     let mut rgba = vec![0u8; MAX_CURSOR_PX * MAX_CURSOR_PX * 4];
     let (mut w, mut h, mut hotx, mut hoty) = (0, 0, 0, 0);
@@ -84,7 +87,7 @@ pub fn current() -> Option<Cursor> {
     })
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "solaris")))]
 pub fn current() -> Option<Cursor> {
     None
 }

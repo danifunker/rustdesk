@@ -21,17 +21,22 @@ fn main() {
     let sfw_lib = std::env::var("X11_SFW_LIB_DIR")
         .unwrap_or_else(|_| "/usr/openwin/sfw/lib/sparcv9".to_owned());
 
-    println!("cargo:rerun-if-changed=src/capture_shim.c");
+    // One archive per shim, so a link error names the half it came from.
+    for shim in &["capture_shim", "input_shim", "cursor_shim"] {
+        println!("cargo:rerun-if-changed=src/{}.c", shim);
+        cc::Build::new()
+            .file(format!("src/{}.c", shim))
+            .include(&x11_inc)
+            .opt_level(2)
+            .compile(shim);
+    }
     println!("cargo:rerun-if-changed=src/capture_shim.h");
-    cc::Build::new()
-        .file("src/capture_shim.c")
-        .include(&x11_inc)
-        .opt_level(2)
-        .compile("capture_shim");
 
     println!("cargo:rustc-link-search=native={}", x11_lib);
     println!("cargo:rustc-link-search=native={}", sfw_lib);
-    println!("cargo:rustc-link-lib=Xext");
-    println!("cargo:rustc-link-lib=Xdamage");
+    println!("cargo:rustc-link-lib=Xext");      // MIT-SHM, for capture
+    println!("cargo:rustc-link-lib=Xdamage");   // change reporting
+    println!("cargo:rustc-link-lib=Xtst");      // XTEST, for injection
+    println!("cargo:rustc-link-lib=Xfixes");    // the pointer's real shape
     println!("cargo:rustc-link-lib=X11");
 }
