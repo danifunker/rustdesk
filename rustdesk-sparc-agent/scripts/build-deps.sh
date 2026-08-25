@@ -8,7 +8,10 @@
 # the build host and copying the tarballs across means the thing that verifies
 # the download is a machine that can.
 #
-#   scp libsodium-1.0.18.tar.gz zstd-1.5.6.tar.gz mbedtls-3.6.2.tar.bz2 blade:/tmp/
+# `scripts/fetch-deps.sh` is the other half: it has the URLs and the SHA-256 of
+# each tarball, and will copy them and this script across for you.
+#
+#   ./scripts/fetch-deps.sh --push dani@192.168.99.176
 #   ssh blade 'sh /tmp/build-deps.sh all'
 #
 # Everything is built static, 64-bit and -fPIC, and installed under $PREFIX.
