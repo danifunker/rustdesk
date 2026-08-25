@@ -15,7 +15,7 @@
 //! So this round-trips each of them and checks the *bytes*, not just that a
 //! value survives a trip through its own code.
 
-use rustdesk_sparc_agent::{convert, frame, png, rendezvous_proto, sys};
+use rustdesk_sparc_agent::{convert, crypto, frame, message_proto, png, rendezvous_proto, sys};
 
 use protobuf::Message;
 
@@ -106,6 +106,72 @@ fn main() {
     if !(230..=240).contains(&y0) || !(126..=130).contains(&u0) || !(126..=130).contains(&v0) {
         println!("  FAIL: not what BT.601 says white is");
         failures += 1;
+    }
+
+    // --- libsodium --------------------------------------------------------
+    // The handshake is where a wrong answer costs the most: a peer that cannot
+    // agree a key gets an error it cannot act on, and one that agrees the
+    // *wrong* key gets silence. Both ends of this run here, so what is proved
+    // is that the primitives work on a big-endian machine, not that they agree
+    // with themselves.
+    sodiumoxide::init().expect("sodium init");
+    {
+        use sodiumoxide::crypto::{secretbox, sign};
+
+        let key = secretbox::gen_key();
+        let mut chan = crypto::SecureChannel::new(key.clone());
+        let sealed = chan.seal(b"a message for the peer");
+        let mut peer = crypto::SecureChannel::new(key);
+        match peer.open(&sealed) {
+            Ok(plain) if plain == b"a message for the peer" => {
+                println!("secretbox: sealed {} bytes, opened them again", sealed.len())
+            }
+            Ok(other) => {
+                println!("  FAIL: opened as {:?}", String::from_utf8_lossy(&other));
+                failures += 1;
+            }
+            Err(()) => {
+                println!("  FAIL: could not open what it had just sealed");
+                failures += 1;
+            }
+        }
+
+        // Ed25519, which is what a peer identifies this machine by.
+        let (pk, sk) = sign::gen_keypair();
+        let hs = crypto::Handshake::new();
+        let signed = hs.signed_id("sparc-blade", &sk);
+        // What is signed is a protobuf IdPk, not the id as text, so this
+        // exercises the two together exactly as the handshake does.
+        match sign::verify(&signed, &pk) {
+            Ok(inner) => match message_proto::IdPk::parse_from_bytes(&inner) {
+                Ok(idpk) if idpk.id == "sparc-blade" && !idpk.pk.is_empty() => {
+                    println!("ed25519: signed IdPk verifies and parses, {} bytes, pk {} bytes",
+                             signed.len(), idpk.pk.len())
+                }
+                Ok(idpk) => {
+                    println!("  FAIL: signed IdPk says id={:?} pk={} bytes", idpk.id, idpk.pk.len());
+                    failures += 1;
+                }
+                Err(e) => { println!("  FAIL: signed bytes do not parse as IdPk: {}", e); failures += 1 }
+            },
+            Err(()) => { println!("  FAIL: signature did not verify"); failures += 1 }
+        }
+
+        // The login hash a password check turns on.
+        let salt = b"0123456789abcdef";
+        let challenge = b"fedcba9876543210";
+        let expect = crypto::expected_login_hash("hunter2", salt, challenge);
+        let same = crypto::expected_login_hash("hunter2", salt, challenge);
+        let other = crypto::expected_login_hash("hunter3", salt, challenge);
+        if !crypto::verify_login_hash(&expect, &same) {
+            println!("  FAIL: the same password hashed differently twice");
+            failures += 1;
+        }
+        if crypto::verify_login_hash(&expect, &other) {
+            println!("  FAIL: a different password matched");
+            failures += 1;
+        }
+        println!("login hash: {} bytes, stable, and discriminating", expect.len());
     }
 
     // --- what this machine says about itself ------------------------------

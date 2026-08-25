@@ -31,9 +31,12 @@ pub mod zstd_frame;
 pub mod lan;
 #[path = "../../rustdesk-ppc-agent/src/sys.rs"]
 pub mod sys;
+#[path = "../../rustdesk-ppc-agent/src/crypto.rs"]
+pub mod crypto;
+#[path = "../../rustdesk-ppc-agent/src/config.rs"]
+pub mod config;
 
-// Still out: config and crypto want libsodium, http wants mbedTLS, encode
-// wants libvpx, and session wants all of them.
+// Still out: http wants mbedTLS, encode wants libvpx, and session wants both.
 
 /// Screen capture over MIT-SHM, with DAMAGE deciding what to report.
 #[cfg(target_os = "solaris")]

@@ -24,6 +24,9 @@ STDLIB="${STDLIB:-$MRUSTC_DIR/output-$RUSTC_VERSION-$TARGET}"
 # The portable modules and the vendored crates both come from the PowerPC tree.
 PPC_DIR="${PPC_DIR:-$HERE/../rustdesk-ppc-agent}"
 OUT="${OUT:-$HERE/target/$TARGET}"
+# Built from source on the Blade by scripts/build-deps.sh, and named here by
+# the path they have *there*.
+REMOTE_DEPS="${REMOTE_DEPS:-$HOME/sparc-deps}"
 
 export SPARC_HOST="${SPARC_HOST:?set SPARC_HOST, e.g. dani@192.168.99.176}"
 # gcc 4.9 compiles all of this and then fails to link: __builtin_add_overflow
@@ -34,7 +37,15 @@ export MRUSTC_TARGET_VER="${MRUSTC_TARGET_VER:-1.74}"
 export CC_sparcv9_sun_solaris="$HERE/scripts/sparc-cc-remote.py"
 # Solaris' default 64-bit search path has neither X prefix on it, so the
 # runpaths have to be linked in or the binary will not start.
-export SPARC_LDFLAGS="${SPARC_LDFLAGS:--lsocket -lnsl -lrt -lpthread -R/usr/openwin/lib/sparcv9 -R/usr/openwin/sfw/lib/sparcv9}"
+# -lssp, statically: libsodium is built with the stack protector, whose runtime
+# (__stack_chk_fail, __stack_chk_guard) is in gcc's libssp here rather than in
+# libc as it would be on Solaris 11 or Linux. Static so the agent does not
+# depend on OpenCSW being installed wherever it ends up running.
+export SPARC_LDFLAGS="${SPARC_LDFLAGS:--lsocket -lnsl -lrt -lpthread -R/usr/openwin/lib/sparcv9 -R/usr/openwin/sfw/lib/sparcv9 -L/opt/csw/lib/sparcv9 -Wl,-Bstatic -lssp -Wl,-Bdynamic}"
+# Where the C libraries built on the Blade live. These are *remote* paths: they
+# do not exist on this machine, and the wrapper passes a directory it cannot
+# find through untouched for exactly that reason.
+export SODIUM_LIB_DIR="${SODIUM_LIB_DIR:-$REMOTE_DEPS/lib}"
 
 [ -d "$STDLIB" ] || { echo "no stdlib at $STDLIB -- see the header of this script" >&2; exit 1; }
 [ -d "$PPC_DIR/vendor" ] || { echo "no vendor tree at $PPC_DIR/vendor" >&2; exit 1; }
