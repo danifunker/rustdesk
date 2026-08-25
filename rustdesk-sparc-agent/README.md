@@ -13,9 +13,9 @@ Sun Blade 2500 (UltraSPARC IIIi, XVR graphics). Third in the line after
   and Xsun has DAMAGE and XFIXES besides. The Mac agent's framebuffer code has
   no equivalent here.
 
-Nothing in this directory builds an agent yet. What is here is the groundwork:
-the compiler wrapper the build will run through, and the probes that decide the
-capture design.
+There is no complete agent here yet. What builds and runs today is the capture
+path -- the half a remote desktop lives or dies by -- plus the compiler wrapper
+the build goes through and the probes that shaped the design.
 
 ## Where the port stands
 
