@@ -22,7 +22,7 @@ fn main() {
         .unwrap_or_else(|_| "/usr/openwin/sfw/lib/sparcv9".to_owned());
 
     // One archive per shim, so a link error names the half it came from.
-    for shim in &["capture_shim", "input_shim", "cursor_shim"] {
+    for shim in &["capture_shim", "input_shim", "cursor_shim", "clipboard_shim"] {
         println!("cargo:rerun-if-changed=src/{}.c", shim);
         cc::Build::new()
             .file(format!("src/{}.c", shim))
