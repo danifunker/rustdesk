@@ -132,6 +132,42 @@ look absent at first: Xlib/Xext/Xtst are in `/usr/openwin/lib`, but
 settled it: `X/src/packages/SUNWxwplt/prototype_com` lists
 `openwin/sfw/lib/$plat_64/libXfixes.so.1` explicitly.
 
+**The display can be worked on without the console.** `Xvfb`, `Xephyr`, `Xnest`
+and `Xvnc` are all installed, so a virtual server runs as an ordinary user with
+no framebuffer access at all -- which matters, because `/dev/fbs/jfb0` is
+`crw------- root root` and `Xsun` is not setuid, so *only root* can drive the
+real screen. Use the Xorg build; Sun's own `/usr/openwin/bin/Xvfb` does not
+take `-screen`:
+
+```sh
+/usr/X11/bin/Xvfb :1 -screen 0 1280x1024x24 &
+DISPLAY=:1 ./xprobe64
+```
+
+`probes/xprobe.c` against that, on the Blade, 1280x1024:
+
+| | |
+|---|---|
+| `XGetImage` full screen | **200 ms** (5 fps ceiling) |
+| `XShmGetImage` full screen | **5.3 ms** (189 fps ceiling) |
+| pixel format | 32bpp, MSBFirst, `R=00ff0000 G=0000ff00 B=000000ff` |
+| bytes per line | 5120, exactly `width*4` -- no row padding |
+| XFIXES cursor | 16x16, hotspot 7,7, 8 bytes per pixel |
+| DAMAGE | reports, bounding-box mode |
+| XTEST | `asked for 641,512 -> cursor at 641,512 OK` |
+
+Two conclusions the agent has to be built around. **MIT-SHM is not an
+optimisation here, it is the whole game**: 200 ms per grab means five frames a
+second before a single pixel is encoded, and the SHM path is forty times
+faster. And the byte order in memory is **A,R,G,B** -- the same as the
+PowerPC Mac, *not* the IRIX agent's A,B,G,R -- so `convert.rs` can take the Mac
+path rather than the SGI one.
+
+Caveat: those are Xvfb numbers. The formats and the extension set should carry
+over to Xsun on the XVR-600 (its binary advertises the same extensions), but
+the timings will not -- a real framebuffer read is a different cost. Rerun the
+probe against `:0` once the console is usable.
+
 **Solaris things that bit, worth knowing before writing another probe.**
 `/usr/bin/grep` has no `\|` alternation (use `egrep`) -- a pattern that looked
 for the X server silently matched nothing and made a running Xsun look absent.
@@ -193,9 +229,11 @@ at all, and it needs nothing but ssh.
 
 ## Next
 
-1. **A graphical login on the console**, so `dtgreet` releases its grab and
-   `probes/xprobe.c` can report what Xsun does with `XGetImage`/`XShmGetImage`.
-   Until someone logs in, every X client hangs in `XOpenDisplay`.
+1. **A graphical login on the console** is still wanted, so the probe can be
+   rerun against the XVR-600 rather than a virtual screen. Until someone logs
+   in, `dtgreet` holds its grab and every X client hangs in `XOpenDisplay` --
+   and only root can start a server on `/dev/fbs/jfb0`. Agent work does not
+   have to wait for it: `Xvfb :1` covers capture, damage, cursor and input.
 2. Fork `rustdesk-ppc-agent` here, add `target_os = "solaris"` arms alongside
    the existing `macos`/`irix` ones, and port the IRIX X11 shims.
 3. libsodium for sparcv9 (the PPC and IRIX ports both build it from source);
