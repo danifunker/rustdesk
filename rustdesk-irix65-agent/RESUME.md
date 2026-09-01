@@ -8,6 +8,12 @@ to a real focused window; and there is a `.tardist` that installs with `inst`
 on a machine that has never had a cross toolchain or SGUG-RSE on it. See
 §THE BUTTONS WORK and §THE PACKAGE.
 
+`RESUME-PROMPT-PIPELINE.md` is the handover, and it opens with the two things
+that changed underneath this work after it was finished: the branch was rebased,
+so `dist/` names a commit that no longer exists, and the shared PowerPC tree has
+since moved — including inside IRIX `cfg` blocks. **Read that before you build
+anything**, because the next build will not be the binary that was tested.
+
 Before that, the session of 2026-08-23 **made it fast
 enough to use**. Ordinary interaction — a pointer moving, text appearing — runs
 at **5-20 fps on the emulator**, which is three times that on a real Indy. A
