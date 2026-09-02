@@ -5,13 +5,13 @@
 # distinct name is the informed consent, exactly as the deb and rpm variants. The flutter bundle and
 # libdrmtap .so are built by the same CI job that makes the deb; this only repackages them.
 # Build with: makepkg -p PKGBUILD-drm  (HBB=repo root, FLUTTER=1)
-pkgname=rustdesk-unattended-wayland
+pkgname=r-deskway
 pkgver=1.5.0
 pkgrel=0
 epoch=
-pkgdesc="RustDesk with unattended Wayland (DRM/KMS) capture"
+pkgdesc="R-DeskWay - unattended Wayland remote desktop (unofficial RustDesk fork)"
 arch=('x86_64')
-url="https://rustdesk.com"
+url="https://github.com/danifunker/rustdesk"
 license=('AGPL-3.0')
 groups=()
 depends=('gtk3' 'xdotool' 'libxcb' 'libxfixes' 'alsa-lib' 'libva' 'libappindicator-gtk3' 'gst-plugins-base' 'gst-plugin-pipewire' 'libdrm' 'libglvnd')
@@ -19,8 +19,8 @@ makedepends=()
 checkdepends=()
 optdepends=()
 provides=('rustdesk')
-conflicts=('rustdesk')
-replaces=('rustdesk')
+conflicts=('rustdesk' 'rustdesk-unattended-wayland')
+replaces=('rustdesk' 'rustdesk-unattended-wayland')
 backup=()
 options=('!strip' '!debug') # no debug companion pkg; keep binaries identical to the deb/rpm
 install=pacman_install
@@ -35,10 +35,10 @@ package() {
   mkdir -p "${pkgdir}/usr/bin"
   pushd ${pkgdir} && ln -s /usr/share/rustdesk/rustdesk usr/bin/rustdesk && popd
   install -Dm 644 $HBB/res/rustdesk.service -t "${pkgdir}/usr/share/rustdesk/files"
-  install -Dm 644 $HBB/res/rustdesk.desktop -t "${pkgdir}/usr/share/rustdesk/files"
+  install -Dm 644 $HBB/branding/r-deskway.desktop "${pkgdir}/usr/share/rustdesk/files/rustdesk.desktop"
   install -Dm 644 $HBB/res/rustdesk-link.desktop -t "${pkgdir}/usr/share/rustdesk/files"
-  install -Dm 644 $HBB/res/128x128@2x.png "${pkgdir}/usr/share/icons/hicolor/256x256/apps/rustdesk.png"
-  install -Dm 644 $HBB/res/scalable.svg "${pkgdir}/usr/share/icons/hicolor/scalable/apps/rustdesk.svg"
+  install -Dm 644 $HBB/branding/r-deskway-256.png "${pkgdir}/usr/share/icons/hicolor/256x256/apps/rustdesk.png"
+  install -Dm 644 $HBB/branding/r-deskway.svg "${pkgdir}/usr/share/icons/hicolor/scalable/apps/rustdesk.svg"
 
   # --- DRM backend: stage libdrmtap under /usr/lib/rustdesk (resolved by absolute path at dlopen) ---
   _drmdir="${HBB}/third_party/libdrmtap/build-pkg"

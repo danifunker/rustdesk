@@ -1,4 +1,4 @@
-# Fork-only workflow: build the consent-free Wayland variant (rustdesk-unattended-wayland, the
+# Fork-only workflow: build the consent-free Wayland variant, rebranded as R-DeskWay (the
 # DRM/KMS capture backend) for BOTH x86_64 and aarch64 and publish the debs to a GitHub release.
 #
 # Upstream builds this variant only for x86_64, in the `build-rustdesk-linux-drm` job of
@@ -7,8 +7,10 @@
 # arm64 vcpkg triplet). Keep it in step with those two jobs when syncing from upstream.
 #
 # The variant is deb-only by design (build.py refuses --drm on the rpm/pacman paths), so this
-# workflow produces exactly two files: rustdesk-unattended-wayland-<ver>-x86_64.deb and
-# rustdesk-unattended-wayland-<ver>-aarch64.deb.
+# workflow produces the rebranded R-DeskWay packages: r-deskway-<ver>-{x86_64,aarch64}.deb, the
+# matching rpms, and an x86_64 Arch package. The binary/service/config dir stay `rustdesk` so it is
+# a settings-preserving drop-in that conflicts with/replaces the stock package; only the package
+# identity, maintainer, launcher and icon are rebranded, all via fork-only files (rebase-safe).
 name: Linux unattended-wayland (DRM) build
 
 # workflow_dispatch only registers once the file exists on the default branch, so while this lives on
@@ -46,7 +48,7 @@ jobs:
 
   build-unattended-wayland:
     needs: [generate-bridge]
-    name: build rustdesk-unattended-wayland ${{ matrix.job.arch }}
+    name: build R-DeskWay ${{ matrix.job.arch }}
     runs-on: ${{ matrix.job.on }}
     permissions:
       contents: write
@@ -109,7 +111,7 @@ jobs:
         run: |
           VERSION=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          echo "building rustdesk-unattended-wayland $VERSION for ${{ matrix.job.arch }}"
+          echo "building R-DeskWay (r-deskway) $VERSION for ${{ matrix.job.arch }}"
           # Release settings: dispatch inputs win; a push to the branch always goes to a draft
           # pre-release (inputs are empty on push, and an empty `draft` would mean "public").
           RELEASE_TAG="${{ inputs.release-tag }}"
@@ -365,6 +367,22 @@ jobs:
               mv "$name" "${name%%.deb}-${{ matrix.job.arch }}.deb"
             done
 
+      - name: Rebrand deb to R-DeskWay
+        # Fork-only: post-process the stock-built deb (rustdesk-unattended-wayland) into the rebranded
+        # R-DeskWay package -- rename, fork maintainer/homepage, rusty icon, R-DeskWay launcher. Leaves
+        # build.py and every upstream file untouched, so the branch keeps rebasing cleanly.
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          ins=(rustdesk-unattended-wayland-*-${{ matrix.job.arch }}.deb)
+          if [ "${#ins[@]}" -ne 1 ]; then
+            echo "::error::expected one stock drm deb to rebrand, found ${#ins[@]}: ${ins[*]-none}"; exit 1
+          fi
+          out="r-deskway-${VERSION}-${{ matrix.job.arch }}.deb"
+          bash branding/rebrand-deb.sh "${ins[0]}" "${{ matrix.job.deb_arch }}" "$out"
+          rm -f "${ins[0]}"   # never ship the stock-named deb
+        shell: bash
+
       # build.py can exit 0 on some inner failures, so check the artifact rather than the status.
       # The package name is the informed consent for consent-free capture, so a stock binary must
       # never ship under it: assert the bundled library AND the dlopen path in the binary.
@@ -372,12 +390,15 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          debs=(rustdesk-unattended-wayland-*-${{ matrix.job.arch }}.deb)
+          debs=(r-deskway-*-${{ matrix.job.arch }}.deb)
           if [ "${#debs[@]}" -ne 1 ]; then
-            echo "::error::expected one rustdesk-unattended-wayland-*-${{ matrix.job.arch }}.deb, found ${#debs[@]}: ${debs[*]-none}"
+            echo "::error::expected one r-deskway-*-${{ matrix.job.arch }}.deb, found ${#debs[@]}: ${debs[*]-none}"
             exit 1
           fi
           deb="${debs[0]}"
+          # the rebrand must have taken: fork identity, not the stock rustdesk one
+          [ "$(dpkg-deb -f "$deb" Package)" = "r-deskway" ] || { echo "::error::$deb Package is not r-deskway"; exit 1; }
+          dpkg-deb -f "$deb" Maintainer | grep -qF "dani@funkervogt.com" || { echo "::error::$deb maintainer not rebranded"; exit 1; }
           dpkg-deb -I "$deb"
           contents="$(dpkg -c "$deb")"
           if [[ ! "$contents" =~ usr/lib/rustdesk/libdrmtap\.so\.0\.[0-9]+\.[0-9]+ ]]; then
@@ -410,7 +431,7 @@ jobs:
         # Build the rpm on the runner host, reusing the flutter bundle + libdrmtap the container build
         # already left in the workspace. build.py refuses --drm on the rpm path by design (only the deb
         # branch bundles libdrmtap and renames the package), so we drive rpmbuild directly with a
-        # DRM-aware spec that keeps the same rustdesk-unattended-wayland rename + Conflicts discipline.
+        # DRM-aware spec that keeps the rename to r-deskway + Conflicts: rustdesk discipline.
         # Build AND verify in one step, and only export DRM_RPM at the very end, so an unverified rpm
         # is never publishable by the always()-gated upload/publish steps below.
         if: env.DRM_DEB != ''
@@ -423,7 +444,7 @@ jobs:
             sed -i "s#linux/x64#linux/arm64#g" "$spec"
           fi
           HBB="$(pwd)" rpmbuild --define "_topdir $HOME/rpmbuild" --target ${{ matrix.job.arch }} -bb "$spec"
-          rpm="$(find "$HOME/rpmbuild/RPMS" -name 'rustdesk-unattended-wayland-*.rpm' | head -1)"
+          rpm="$(find "$HOME/rpmbuild/RPMS" -name 'r-deskway-*.rpm' | head -1)"
           if [ -z "$rpm" ]; then echo "::error::rpmbuild produced no rpm"; exit 1; fi
           cp "$rpm" "./$(basename "$rpm")"; rpm="$(basename "$rpm")"
           rpm -qip "$rpm" || true
@@ -453,7 +474,7 @@ jobs:
         with:
           packages:
           scripts: |
-            cd res && HBB=`pwd`/.. FLUTTER=1 makepkg -p PKGBUILD-drm -f
+            cd res && HBB=`pwd`/.. FLUTTER=1 PACKAGER="Dani Sarfati <dani@funkervogt.com>" makepkg -p PKGBUILD-drm -f
 
       - name: Upload raw Arch package (debug aid)
         # Always keep the makepkg output as a workflow artifact, even if the check below fails, so it
@@ -462,7 +483,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: arch-pkg-raw-x86_64
-          path: res/rustdesk-unattended-wayland-*-x86_64.pkg.tar.zst
+          path: res/r-deskway-*-x86_64.pkg.tar.zst
           if-no-files-found: ignore
 
       - name: Check the Arch package (x86_64)
@@ -477,7 +498,7 @@ jobs:
           sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE/.git" || true
           shopt -s nullglob
           pkgs=()
-          for p in res/rustdesk-unattended-wayland-*-x86_64.pkg.tar.zst; do
+          for p in res/r-deskway-*-x86_64.pkg.tar.zst; do
             # makepkg can emit a -debug- companion package; the release ships only the real one.
             [[ "$p" == *-debug-* ]] || pkgs+=("$p")
           done

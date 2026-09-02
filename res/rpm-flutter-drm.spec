@@ -8,17 +8,17 @@
 # The compiled flutter bundle and the built libdrmtap .so are produced by the same CI build that makes
 # the deb; this spec only repackages them, so %build has nothing to do. $HBB is the repo root and
 # points rpmbuild at both. Keep in step with res/rpm-flutter.spec when syncing from upstream.
-Name:       rustdesk-unattended-wayland
+Name:       r-deskway
 Version:    1.5.0
 Release:    0
-Summary:    RustDesk with unattended Wayland (DRM/KMS) capture
+Summary:    R-DeskWay - unattended Wayland remote desktop (unofficial RustDesk fork)
 License:    GPL-3.0
-URL:        https://rustdesk.com
-Vendor:     rustdesk <info@rustdesk.com>
+URL:        https://github.com/danifunker/rustdesk
+Vendor:     Dani Sarfati <dani@funkervogt.com>
 Requires:   gtk3 libxcb libXfixes alsa-lib libva gstreamer1-plugins-base libdrm mesa-libEGL mesa-libGLES
 Recommends: libayatana-appindicator-gtk3 libxdo
 Conflicts:  rustdesk
-Obsoletes:  rustdesk
+Obsoletes:  rustdesk rustdesk-unattended-wayland
 Provides:   rustdesk
 Provides:   libdesktop_drop_plugin.so()(64bit), libdesktop_multi_window_plugin.so()(64bit), libfile_selector_linux_plugin.so()(64bit), libflutter_custom_cursor_plugin.so()(64bit), libflutter_linux_gtk.so()(64bit), libscreen_retriever_plugin.so()(64bit), libtray_manager_plugin.so()(64bit), liburl_launcher_linux_plugin.so()(64bit), libwindow_manager_plugin.so()(64bit), libwindow_size_plugin.so()(64bit), libtexture_rgba_renderer_plugin.so()(64bit)
 
@@ -42,10 +42,10 @@ under /usr/lib/rustdesk and conflicts with the stock rustdesk package.
 mkdir -p "%{buildroot}/usr/share/rustdesk" && cp -r ${HBB}/flutter/build/linux/x64/release/bundle/* -t "%{buildroot}/usr/share/rustdesk"
 mkdir -p "%{buildroot}/usr/bin"
 install -Dm 644 $HBB/res/rustdesk.service -t "%{buildroot}/usr/share/rustdesk/files"
-install -Dm 644 $HBB/res/rustdesk.desktop -t "%{buildroot}/usr/share/rustdesk/files"
+install -Dm 644 $HBB/branding/r-deskway.desktop "%{buildroot}/usr/share/rustdesk/files/rustdesk.desktop"
 install -Dm 644 $HBB/res/rustdesk-link.desktop -t "%{buildroot}/usr/share/rustdesk/files"
-install -Dm 644 $HBB/res/128x128@2x.png "%{buildroot}/usr/share/icons/hicolor/256x256/apps/rustdesk.png"
-install -Dm 644 $HBB/res/scalable.svg "%{buildroot}/usr/share/icons/hicolor/scalable/apps/rustdesk.svg"
+install -Dm 644 $HBB/branding/r-deskway-256.png "%{buildroot}/usr/share/icons/hicolor/256x256/apps/rustdesk.png"
+install -Dm 644 $HBB/branding/r-deskway.svg "%{buildroot}/usr/share/icons/hicolor/scalable/apps/rustdesk.svg"
 
 # --- DRM backend: stage libdrmtap under /usr/lib/rustdesk (resolved by absolute path at dlopen) ---
 # The one real versioned object (libdrmtap.so.0.X.Y), never the .so/.so.0 symlinks meson also leaves.
