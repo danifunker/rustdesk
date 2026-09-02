@@ -150,6 +150,24 @@ jobs:
           name: bridge-artifact
           path: ./
 
+      # aarch64 only. vcpkg runs with VCPKG_FORCE_SYSTEM_BINARIES=1 on arm64 hosts, so instead of
+      # fetching its own CMake 4.4.0 (as it does on x86_64) it uses the runner's system cmake, which is
+      # too old for the `string(JSON ... STRING_ENCODE)` call in vcpkg's z_vcpkg_spdx.cmake at the
+      # pinned VCPKG_COMMIT_ID. Every port then fails to configure. Upstream's own nightly aarch64 job
+      # fails the same way. Install the CMake vcpkg would have fetched, first on PATH.
+      - name: Install CMake 4.4.0 (aarch64 vcpkg needs it)
+        if: ${{ matrix.job.arch == 'aarch64' }}
+        run: |
+          set -euo pipefail
+          url=https://github.com/Kitware/CMake/releases/download/v4.4.0/cmake-4.4.0-linux-aarch64.tar.gz
+          curl -sSL --retry 5 -o /tmp/cmake.tar.gz "$url"
+          echo "e98bb53e0b00a8f672424517d34c05bb9b94fd1c888c89e0b81bc8df51d1a94b  /tmp/cmake.tar.gz" | sha256sum -c -
+          sudo rm -rf /opt/cmake && sudo mkdir -p /opt/cmake
+          sudo tar -xzf /tmp/cmake.tar.gz -C /opt/cmake --strip-components=1
+          echo "/opt/cmake/bin" >> "$GITHUB_PATH"
+          /opt/cmake/bin/cmake --version
+        shell: bash
+
       - name: Setup vcpkg with Github Actions binary cache
         uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
         with:
