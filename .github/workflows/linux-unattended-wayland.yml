@@ -455,6 +455,16 @@ jobs:
           scripts: |
             cd res && HBB=`pwd`/.. FLUTTER=1 makepkg -p PKGBUILD-drm -f
 
+      - name: Upload raw Arch package (debug aid)
+        # Always keep the makepkg output as a workflow artifact, even if the check below fails, so it
+        # can be inspected without a full rebuild. Not published to the release (that needs the check).
+        if: always() && matrix.job.arch == 'x86_64'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: arch-pkg-raw-x86_64
+          path: res/rustdesk-unattended-wayland-*-x86_64.pkg.tar.zst
+          if-no-files-found: ignore
+
       - name: Check the Arch package (x86_64)
         if: env.DRM_DEB != '' && matrix.job.arch == 'x86_64'
         run: |
@@ -469,13 +479,21 @@ jobs:
           if [ "${#pkgs[@]}" -ne 1 ]; then
             echo "::error::expected one Arch pkg, found ${#pkgs[@]}: ${pkgs[*]-none}"; exit 1
           fi
-          pkg="${pkgs[0]}"
-          mv "$pkg" "./$(basename "$pkg")"; pkg="$(basename "$pkg")"
-          list="$(tar --use-compress-program=unzstd -tf "$pkg")"
-          echo "$list" | grep -qE 'usr/lib/rustdesk/libdrmtap\.so\.0\.[0-9]+\.[0-9]+' || { echo "::error::$pkg has no versioned libdrmtap"; exit 1; }
-          tar --use-compress-program=unzstd -xOf "$pkg" .PKGINFO | grep -qE '^conflict = rustdesk$' || { echo "::error::$pkg does not conflict rustdesk"; exit 1; }
+          # makepkg ran as root inside a container, so the .pkg is root-owned in res/. Copy it out to
+          # the (runner-owned) workspace root with sudo and take ownership, so the rest of this step
+          # and the always()-gated upload/publish can read and sit beside it.
+          src="${pkgs[0]}"
+          pkg="$(basename "$src")"
+          sudo cp "$src" "./$pkg"
+          sudo chown "$(id -u):$(id -g)" "./$pkg"
+          # Extract the whole package once, rather than named members (whose exact path prefix could
+          # differ and fail the extraction hard), then verify against the extracted tree.
           rm -rf /tmp/arch && mkdir /tmp/arch
-          tar --use-compress-program=unzstd -xf "$pkg" -C /tmp/arch usr/share/rustdesk/lib/librustdesk.so usr/lib/rustdesk
+          tar --use-compress-program=unzstd -xf "$pkg" -C /tmp/arch
+          find /tmp/arch/usr/lib/rustdesk -regextype posix-extended -regex '.*/libdrmtap\.so\.0\.[0-9]+\.[0-9]+' | grep -q . || { echo "::error::$pkg has no versioned libdrmtap"; exit 1; }
+          [ -L /tmp/arch/usr/lib/rustdesk/libdrmtap.so.0 ] || { echo "::error::$pkg has no libdrmtap.so.0 symlink"; exit 1; }
+          grep -qE '^conflict = rustdesk$' /tmp/arch/.PKGINFO || { echo "::error::$pkg does not conflict rustdesk"; exit 1; }
+          file /tmp/arch/usr/share/rustdesk/lib/librustdesk.so /tmp/arch/usr/lib/rustdesk/libdrmtap.so.0.*
           grep -qF /usr/lib/rustdesk/libdrmtap.so.0 /tmp/arch/usr/share/rustdesk/lib/librustdesk.so || { echo "::error::$pkg binary is not a drm build"; exit 1; }
           sha256sum "$pkg" | tee "$pkg.sha256"
           echo "DRM_ARCH_PKG=$pkg" >> "$GITHUB_ENV"
