@@ -378,7 +378,6 @@ jobs:
             exit 1
           fi
           deb="${debs[0]}"
-          echo "DRM_DEB=$deb" >> "$GITHUB_ENV"
           dpkg-deb -I "$deb"
           contents="$(dpkg -c "$deb")"
           if [[ ! "$contents" =~ usr/lib/rustdesk/libdrmtap\.so\.0\.[0-9]+\.[0-9]+ ]]; then
@@ -403,6 +402,79 @@ jobs:
             exit 1
           fi
           sha256sum "$deb" | tee "$deb.sha256"
+          # Only now that every check passed does the deb become publishable.
+          echo "DRM_DEB=$deb" >> "$GITHUB_ENV"
+        shell: bash
+
+      - name: Build and verify the DRM rpm (Fedora)
+        # Build the rpm on the runner host, reusing the flutter bundle + libdrmtap the container build
+        # already left in the workspace. build.py refuses --drm on the rpm path by design (only the deb
+        # branch bundles libdrmtap and renames the package), so we drive rpmbuild directly with a
+        # DRM-aware spec that keeps the same rustdesk-unattended-wayland rename + Conflicts discipline.
+        # Build AND verify in one step, and only export DRM_RPM at the very end, so an unverified rpm
+        # is never publishable by the always()-gated upload/publish steps below.
+        if: env.DRM_DEB != ''
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo apt-get install -y rpm cpio file
+          spec=res/rpm-flutter-drm.spec
+          if [ "${{ matrix.job.arch }}" = "aarch64" ]; then
+            sed -i "s#linux/x64#linux/arm64#g" "$spec"
+          fi
+          HBB="$(pwd)" rpmbuild --define "_topdir $HOME/rpmbuild" --target ${{ matrix.job.arch }} -bb "$spec"
+          rpm="$(find "$HOME/rpmbuild/RPMS" -name 'rustdesk-unattended-wayland-*.rpm' | head -1)"
+          if [ -z "$rpm" ]; then echo "::error::rpmbuild produced no rpm"; exit 1; fi
+          cp "$rpm" "./$(basename "$rpm")"; rpm="$(basename "$rpm")"
+          rpm -qip "$rpm" || true
+          got="$(rpm -qp --qf '%{ARCH}' "$rpm")"
+          if [ "$got" != "${{ matrix.job.arch }}" ]; then
+            echo "::error::$rpm is arch $got, expected ${{ matrix.job.arch }}"; exit 1
+          fi
+          if ! rpm -qp --conflicts "$rpm" | grep -qx rustdesk; then
+            echo "::error::$rpm does not Conflict: rustdesk (the distinct name is the informed consent)"; exit 1
+          fi
+          list="$(rpm -qlp "$rpm")"
+          echo "$list" | grep -qE '/usr/lib/rustdesk/libdrmtap\.so\.0\.[0-9]+\.[0-9]+' || { echo "::error::$rpm has no versioned libdrmtap"; exit 1; }
+          echo "$list" | grep -qx '/usr/lib/rustdesk/libdrmtap.so.0' || { echo "::error::$rpm has no libdrmtap.so.0 symlink"; exit 1; }
+          rpmabs="$(pwd)/$rpm"
+          rm -rf /tmp/rpm && mkdir /tmp/rpm && ( cd /tmp/rpm && rpm2cpio "$rpmabs" | cpio -idm --quiet )
+          file /tmp/rpm/usr/share/rustdesk/lib/librustdesk.so /tmp/rpm/usr/lib/rustdesk/libdrmtap.so.0.*
+          grep -qF /usr/lib/rustdesk/libdrmtap.so.0 /tmp/rpm/usr/share/rustdesk/lib/librustdesk.so || { echo "::error::$rpm binary is not a drm build"; exit 1; }
+          sha256sum "$rpm" | tee "$rpm.sha256"
+          echo "DRM_RPM=$rpm" >> "$GITHUB_ENV"
+        shell: bash
+
+      - name: Build the Arch package (x86_64)
+        # x86_64 only, matching upstream: there is no current arm64 Arch image and arm64 makepkg fails
+        # under emulation. Reuses the same flutter bundle + libdrmtap via HBB.
+        if: env.DRM_DEB != '' && matrix.job.arch == 'x86_64'
+        uses: rustdesk-org/arch-makepkg-action@04200739ed1d0bf6f2188b6736b26a767c57a7f9 # no release tag; commit 2026-05-26
+        with:
+          packages:
+          scripts: |
+            cd res && HBB=`pwd`/.. FLUTTER=1 makepkg -p PKGBUILD-drm -f
+
+      - name: Check the Arch package (x86_64)
+        if: env.DRM_DEB != '' && matrix.job.arch == 'x86_64'
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y zstd file
+          shopt -s nullglob
+          pkgs=(res/rustdesk-unattended-wayland-*-x86_64.pkg.tar.zst)
+          if [ "${#pkgs[@]}" -ne 1 ]; then
+            echo "::error::expected one Arch pkg, found ${#pkgs[@]}: ${pkgs[*]-none}"; exit 1
+          fi
+          pkg="${pkgs[0]}"
+          mv "$pkg" "./$(basename "$pkg")"; pkg="$(basename "$pkg")"
+          list="$(tar --use-compress-program=unzstd -tf "$pkg")"
+          echo "$list" | grep -qE 'usr/lib/rustdesk/libdrmtap\.so\.0\.[0-9]+\.[0-9]+' || { echo "::error::$pkg has no versioned libdrmtap"; exit 1; }
+          tar --use-compress-program=unzstd -xOf "$pkg" .PKGINFO | grep -qE '^conflict = rustdesk$' || { echo "::error::$pkg does not conflict rustdesk"; exit 1; }
+          rm -rf /tmp/arch && mkdir /tmp/arch
+          tar --use-compress-program=unzstd -xf "$pkg" -C /tmp/arch usr/share/rustdesk/lib/librustdesk.so usr/lib/rustdesk
+          grep -qF /usr/lib/rustdesk/libdrmtap.so.0 /tmp/arch/usr/share/rustdesk/lib/librustdesk.so || { echo "::error::$pkg binary is not a drm build"; exit 1; }
+          sha256sum "$pkg" | tee "$pkg.sha256"
+          echo "DRM_ARCH_PKG=$pkg" >> "$GITHUB_ENV"
         shell: bash
 
       - name: Upload deb
@@ -414,8 +486,28 @@ jobs:
             ${{ env.DRM_DEB }}
             ${{ env.DRM_DEB }}.sha256
 
-      - name: Publish to GitHub release
-        if: env.RELEASE_TAG != ''
+      - name: Upload rpm
+        if: always() && env.DRM_RPM != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ env.DRM_RPM }}
+          path: |
+            ${{ env.DRM_RPM }}
+            ${{ env.DRM_RPM }}.sha256
+
+      - name: Upload Arch package
+        if: always() && env.DRM_ARCH_PKG != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ env.DRM_ARCH_PKG }}
+          path: |
+            ${{ env.DRM_ARCH_PKG }}
+            ${{ env.DRM_ARCH_PKG }}.sha256
+
+      # One softprops step per artifact type, each always()-gated, so a failure building the rpm or
+      # Arch package never blocks shipping the deb (or each other). Same tag: softprops appends.
+      - name: Publish deb to GitHub release
+        if: always() && env.RELEASE_TAG != '' && env.DRM_DEB != ''
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
           tag_name: ${{ env.RELEASE_TAG }}
@@ -427,3 +519,27 @@ jobs:
           files: |
             ${{ env.DRM_DEB }}
             ${{ env.DRM_DEB }}.sha256
+
+      - name: Publish rpm to GitHub release
+        if: always() && env.RELEASE_TAG != '' && env.DRM_RPM != ''
+        uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
+          prerelease: ${{ env.PRERELEASE }}
+          draft: ${{ env.DRAFT }}
+          files: |
+            ${{ env.DRM_RPM }}
+            ${{ env.DRM_RPM }}.sha256
+
+      - name: Publish Arch package to GitHub release
+        if: always() && env.RELEASE_TAG != '' && env.DRM_ARCH_PKG != ''
+        uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
+          prerelease: ${{ env.PRERELEASE }}
+          draft: ${{ env.DRAFT }}
+          files: |
+            ${{ env.DRM_ARCH_PKG }}
+            ${{ env.DRM_ARCH_PKG }}.sha256

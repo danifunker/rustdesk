@@ -1,0 +1,49 @@
+# DRM / unattended-wayland variant of res/PKGBUILD. Fork-only, x86_64 only (upstream ships Arch for
+# x86_64 only; arm64 makepkg is not built). Same package as PKGBUILD but carrying the DRM/KMS
+# consent-free capture backend: it bundles libdrmtap.so under /usr/lib/rustdesk and is named
+# distinctly (rustdesk-unattended-wayland), which conflicts/replaces the stock rustdesk -- the
+# distinct name is the informed consent, exactly as the deb and rpm variants. The flutter bundle and
+# libdrmtap .so are built by the same CI job that makes the deb; this only repackages them.
+# Build with: makepkg -p PKGBUILD-drm  (HBB=repo root, FLUTTER=1)
+pkgname=rustdesk-unattended-wayland
+pkgver=1.5.0
+pkgrel=0
+epoch=
+pkgdesc="RustDesk with unattended Wayland (DRM/KMS) capture"
+arch=('x86_64')
+url="https://rustdesk.com"
+license=('AGPL-3.0')
+groups=()
+depends=('gtk3' 'xdotool' 'libxcb' 'libxfixes' 'alsa-lib' 'libva' 'libappindicator-gtk3' 'gst-plugins-base' 'gst-plugin-pipewire' 'libdrm' 'libglvnd')
+makedepends=()
+checkdepends=()
+optdepends=()
+provides=('rustdesk')
+conflicts=('rustdesk')
+replaces=('rustdesk')
+backup=()
+options=()
+install=pacman_install
+changelog=
+noextract=()
+md5sums=() #generate with 'makepkg -g'
+
+package() {
+  if [[ ${FLUTTER} ]]; then
+	  mkdir -p "${pkgdir}/usr/share/rustdesk" && cp -r ${HBB}/flutter/build/linux/x64/release/bundle/* -t "${pkgdir}/usr/share/rustdesk"
+  fi
+  mkdir -p "${pkgdir}/usr/bin"
+  pushd ${pkgdir} && ln -s /usr/share/rustdesk/rustdesk usr/bin/rustdesk && popd
+  install -Dm 644 $HBB/res/rustdesk.service -t "${pkgdir}/usr/share/rustdesk/files"
+  install -Dm 644 $HBB/res/rustdesk.desktop -t "${pkgdir}/usr/share/rustdesk/files"
+  install -Dm 644 $HBB/res/rustdesk-link.desktop -t "${pkgdir}/usr/share/rustdesk/files"
+  install -Dm 644 $HBB/res/128x128@2x.png "${pkgdir}/usr/share/icons/hicolor/256x256/apps/rustdesk.png"
+  install -Dm 644 $HBB/res/scalable.svg "${pkgdir}/usr/share/icons/hicolor/scalable/apps/rustdesk.svg"
+
+  # --- DRM backend: stage libdrmtap under /usr/lib/rustdesk (resolved by absolute path at dlopen) ---
+  _drmdir="${HBB}/third_party/libdrmtap/build-pkg"
+  _so="$(find "${_drmdir}" -maxdepth 1 -type f -regex '.*/libdrmtap\.so\.0\.[0-9]+\.[0-9]+' | head -1)"
+  if [ -z "${_so}" ]; then echo "PKGBUILD-drm: no versioned libdrmtap.so.0.x.y in ${_drmdir}" >&2; return 1; fi
+  install -Dm 755 "${_so}" "${pkgdir}/usr/lib/rustdesk/$(basename "${_so}")"
+  ln -sf "$(basename "${_so}")" "${pkgdir}/usr/lib/rustdesk/libdrmtap.so.0"
+}
