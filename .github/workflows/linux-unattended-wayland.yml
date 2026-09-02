@@ -118,7 +118,7 @@ jobs:
           DRAFT="${{ inputs.draft }}"
           PRERELEASE="${{ inputs.prerelease }}"
           if [[ "${{ github.event_name }}" == "push" ]]; then
-            RELEASE_TAG="${VERSION}-unattended-wayland"
+            RELEASE_TAG="r-deskway-${VERSION}"
             DRAFT=true
             PRERELEASE=true
           fi
