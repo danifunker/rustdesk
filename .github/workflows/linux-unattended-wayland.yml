@@ -470,6 +470,11 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get install -y zstd file
+          # makepkg ran as root inside the arch-makepkg-action container and left the workspace root
+          # (and .git) root-owned, so this step could not write the .sha256 and the post-job git
+          # cleanup failed. Reclaim ownership of what we write.
+          sudo chown "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" || true
+          sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE/.git" || true
           shopt -s nullglob
           pkgs=()
           for p in res/rustdesk-unattended-wayland-*-x86_64.pkg.tar.zst; do
