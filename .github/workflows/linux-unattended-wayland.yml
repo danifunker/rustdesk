@@ -419,6 +419,9 @@ jobs:
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
           tag_name: ${{ env.RELEASE_TAG }}
+          # Pin the tag to the commit that was actually built. Without this a draft targets the
+          # default branch, so publishing it later would tag whatever master had moved to by then.
+          target_commitish: ${{ github.sha }}
           prerelease: ${{ env.PRERELEASE }}
           draft: ${{ env.DRAFT }}
           files: |
