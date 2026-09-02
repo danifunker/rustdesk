@@ -461,7 +461,11 @@ jobs:
           set -euo pipefail
           sudo apt-get install -y zstd file
           shopt -s nullglob
-          pkgs=(res/rustdesk-unattended-wayland-*-x86_64.pkg.tar.zst)
+          pkgs=()
+          for p in res/rustdesk-unattended-wayland-*-x86_64.pkg.tar.zst; do
+            # makepkg can emit a -debug- companion package; the release ships only the real one.
+            [[ "$p" == *-debug-* ]] || pkgs+=("$p")
+          done
           if [ "${#pkgs[@]}" -ne 1 ]; then
             echo "::error::expected one Arch pkg, found ${#pkgs[@]}: ${pkgs[*]-none}"; exit 1
           fi
