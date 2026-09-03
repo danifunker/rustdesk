@@ -82,7 +82,7 @@ OPTIONS:
     --ca-bundle PATH certificates used to verify an https console. Persisted.
                      Empty is the default and searches the usual places; set it
                      for a console behind a private CA. --ca-bundle '' clears it.
-    --config PATH    config file (default ~/.rustdesk-ppc-agent.conf)
+    --config PATH    config file (default {5})
     --secure         require the signed_id/public_key exchange. OFF by default:
                      a client connecting by IP does not take part, and enabling
                      it there deadlocks the handshake.
@@ -96,7 +96,8 @@ fastest way to find where a client diverges.",
         env!("CARGO_PKG_VERSION"),
         PRODUCT,
         PLATFORM,
-        DEFAULT_PORT
+        DEFAULT_PORT,
+        Config::default_path().display()
     );
     exit(2)
 }
@@ -236,6 +237,16 @@ fn main() {
     log::set_max_level(level);
 
     let mut cfg = Config::load(cfg_path);
+    // Worth one line: there are now two plausible files on the disk and only
+    // one of them is live. Saying nothing invites somebody to edit the old one
+    // and conclude the setting does not work.
+    if let Some(old) = cfg.migrated_from() {
+        eprintln!(
+            "note: settings read from {}; the next change writes {}",
+            old.display(),
+            Config::default_path().display()
+        );
+    }
 
     if let Some(p) = set_password {
         if p.len() < 6 {

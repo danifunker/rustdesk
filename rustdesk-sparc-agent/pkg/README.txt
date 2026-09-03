@@ -30,16 +30,25 @@ Removing:
 which un-wires startup first, so removal cannot leave the machine with an rc
 link pointing at a deleted directory or -- worse -- with no login manager.
 
-Your configuration is NOT removed. It lives in ~/.rustdesk-ppc-agent.conf and
-holds this machine's identity; delete it by hand if you want that gone too.
+Your configuration is NOT removed. It lives in ~/.rdeskvint.conf and holds this
+machine's identity; delete it by hand if you want that gone too.
+
+An agent from before this file was renamed kept its settings in
+~/.rustdesk-ppc-agent.conf. That one is still read when ~/.rdeskvint.conf does
+not exist, so an existing machine keeps its ID, its uuid and its keypair rather
+than quietly becoming a new machine -- which matters more than it sounds, since
+hbbs pins the first uuid it sees for an ID and refuses every later one. The
+first setting you change writes the new file; the old one is left alone rather
+than deleted, and the agent says which it read.
 
 
 CONFIGURING
 -----------
 
-Settings live in ~/.rustdesk-ppc-agent.conf, one `key = value` per line, mode
-0600 because the machine's signing key is in it. It is created on first use and
-you should not need to edit it -- everything is set through the binary:
+Settings live in ~/.rdeskvint.conf, one `key = value` per line, mode 0600
+because the machine's signing key is in it. It is created on first use and you
+should not need to edit it -- every setting below is written there by the binary
+as soon as you set it, and applies on every start from then on:
 
     rdeskvint --password SECRET    set the password (6 characters or more)
     rdeskvint --show-id            the ID a peer connects to

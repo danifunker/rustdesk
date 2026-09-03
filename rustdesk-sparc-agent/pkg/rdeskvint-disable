@@ -15,7 +15,7 @@
 # is the right default: leaving a machine with no login manager and no agent is
 # leaving it with no way in at all.
 #
-# The configuration -- ~/.rustdesk-ppc-agent.conf, which holds the machine's ID
+# The configuration -- ~/.rdeskvint.conf, which holds the machine's ID
 # and its signing key -- is deliberately left alone. Removing an autostart hook
 # should not throw away the identity peers know this machine by.
 #
@@ -72,5 +72,5 @@ fi
 if [ "$removed" = 0 ]; then
 	echo "Nothing was enabled. Any running agent has been stopped."
 else
-	echo "Done. The configuration in ~/.rustdesk-ppc-agent.conf is left alone."
+	echo "Done. The configuration in ~/.rdeskvint.conf is left alone."
 fi

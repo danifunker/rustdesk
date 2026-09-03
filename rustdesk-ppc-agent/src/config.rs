@@ -19,21 +19,78 @@ use sodiumoxide::crypto::sign;
 /// so anything we generate is accepted by a stock peer.
 const CHARS: &[u8] = b"1234567890abcdefghijklmnopqrstuvwxyz";
 
+/// What the configuration file is called, per port.
+///
+/// Solaris ships as `rdeskvint` in a package that is new, so its file is named
+/// for the product. The other ports keep the old name deliberately: installs of
+/// them exist, and this file holds the machine's ID, its uuid and its signing
+/// key -- see `LEGACY_NAME` for why losing track of it is worse than an
+/// inconsistent filename.
+#[cfg(target_os = "solaris")]
+const CONFIG_NAME: &str = ".rdeskvint.conf";
+#[cfg(not(target_os = "solaris"))]
+const CONFIG_NAME: &str = ".rustdesk-ppc-agent.conf";
+
+/// What this file was called before the rename, and still is on the other
+/// ports.
+///
+/// It is read when the current name is absent, because the alternative is
+/// silently generating a fresh identity: a new ID, a new keypair, and -- worst
+/// of the three -- a new uuid. hbbs pins the first uuid it sees for an id and
+/// answers UUID_MISMATCH to every later one for ever, so a machine that
+/// "upgraded" into a new config file does not re-register under a new name. It
+/// stops being able to register at all.
+const LEGACY_NAME: &str = ".rustdesk-ppc-agent.conf";
+
 #[derive(Default)]
 pub struct Config {
     path: PathBuf,
     kv: BTreeMap<String, String>,
+    /// Set when the values came from `LEGACY_NAME` rather than from `path`, so
+    /// the agent can say so once rather than leaving somebody to wonder which
+    /// of two files on the disk is the live one.
+    migrated_from: Option<PathBuf>,
 }
 
 impl Config {
     pub fn default_path() -> PathBuf {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-        Path::new(&home).join(".rustdesk-ppc-agent.conf")
+        Path::new(&home).join(CONFIG_NAME)
+    }
+
+    /// The pre-rename name beside `path`, when there is a distinct one.
+    ///
+    /// Derived from `path` rather than from `$HOME` so that `--config` keeps
+    /// working: point it at a directory and the same migration applies there.
+    fn legacy_path(path: &Path) -> Option<PathBuf> {
+        if CONFIG_NAME == LEGACY_NAME {
+            return None;
+        }
+        match path.file_name() {
+            Some(n) if n == CONFIG_NAME => Some(path.with_file_name(LEGACY_NAME)),
+            _ => None,
+        }
     }
 
     pub fn load(path: PathBuf) -> Self {
         let mut kv = BTreeMap::new();
-        if let Ok(s) = std::fs::read_to_string(&path) {
+        let mut migrated_from = None;
+
+        // Read the current name; fall back to the old one if it is not there
+        // yet. The old file is left where it is rather than moved: the next
+        // `store()` writes the new name, and deleting somebody's only copy of a
+        // signing key to tidy up a filename is not a trade worth making.
+        let mut source = path.clone();
+        if !source.exists() {
+            if let Some(legacy) = Self::legacy_path(&path) {
+                if legacy.exists() {
+                    migrated_from = Some(legacy.clone());
+                    source = legacy;
+                }
+            }
+        }
+
+        if let Ok(s) = std::fs::read_to_string(&source) {
             for line in s.lines() {
                 let line = line.trim();
                 if line.is_empty() || line.starts_with('#') {
@@ -44,11 +101,18 @@ impl Config {
                 }
             }
         }
-        Self { path, kv }
+        Self { path, kv, migrated_from }
+    }
+
+    /// The old file these values were read out of, if they were.
+    pub fn migrated_from(&self) -> Option<&Path> {
+        self.migrated_from.as_deref()
     }
 
     pub fn store(&self) -> io::Result<()> {
-        let mut out = String::from("# rustdesk-ppc-agent\n");
+        let mut out = String::from(
+            "# R-DeskVint agent -- written by the agent; use its flags, not an editor\n",
+        );
         for (k, v) in &self.kv {
             out.push_str(k);
             out.push_str(" = ");

@@ -73,9 +73,9 @@ id | grep 'uid=0(' > /dev/null 2>&1 || die "run this as root."
 warn_if_unconfigured() {
 	_home=`getent passwd "$1" 2>/dev/null | cut -d: -f6`
 	[ -n "$_home" ] || _home=/home/$1
-	if [ ! -f "$_home/.rustdesk-ppc-agent.conf" ]; then
+	if [ ! -f "$_home/.rdeskvint.conf" ] && [ ! -f "$_home/.rustdesk-ppc-agent.conf" ]; then
 		echo ""
-		echo "NOTE: $1 has no ~/.rustdesk-ppc-agent.conf yet, so no password is set."
+		echo "NOTE: $1 has no ~/.rdeskvint.conf yet, so no password is set."
 		echo "      Run this as $1 before expecting a peer to connect:"
 		echo ""
 		echo "          $BASEDIR/bin/rdeskvint --password SECRET"

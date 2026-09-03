@@ -147,10 +147,11 @@ That is not a preference. Section 4 explains why the two cannot share a console.
 
 ## 3. Configure it
 
-Configuration is a flat `key = value` file at `~/.rustdesk-ppc-agent.conf`, mode
-`0600`, holding six scalars — id, password, salt, and the Ed25519 keypair whose
-secret half is why the mode matters. It is created on first use. Everything is
-set through the binary rather than by editing the file:
+Configuration is a flat `key = value` file at `~/.rdeskvint.conf`, mode `0600`,
+holding the id, password, salt, uuid and the Ed25519 keypair whose secret half
+is why the mode matters — plus whatever server settings you set. It is created
+on first use. Every setter writes the file immediately, so anything below
+applies on every start from then on:
 
 ```sh
 rdeskvint --password SECRET     # at least 6 characters. Required.
@@ -188,6 +189,16 @@ deadlocks the handshake.
 
 `--log debug` (`-v`) or `--log trace` (`-vv`) prints every message and frame,
 which is the fastest way to find where a client diverges.
+
+An agent from before the rename kept its settings in
+`~/.rustdesk-ppc-agent.conf`. That file is still read when `~/.rdeskvint.conf`
+is absent, so an existing machine keeps its ID, uuid and keypair instead of
+quietly becoming a new one — which matters more than a filename usually would,
+because hbbs pins the first uuid it sees for an ID and answers `UUID_MISMATCH`
+to every later one for ever after. A machine that "upgraded" into a fresh config
+would not re-register under a new name; it would stop being able to register at
+all. The first setting you change writes the new file, the old one is left
+alone, and the agent prints which it read.
 
 ### Against a CortenDesk server
 
