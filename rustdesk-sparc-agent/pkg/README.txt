@@ -193,6 +193,49 @@ LAN discovery answers broadcasts on udp/21119, so the machine turns up in a
 client's local-network list by hostname without any of the above.
 
 
+ONE MACHINE, WHOEVER LOGS IN
+----------------------------
+
+The agent runs inside whoever's session is on the console, and by default reads
+~/.rdeskvint.conf from that account's home. So a second account that logs in is
+a SECOND MACHINE as far as the server is concerned: another ID, another row in
+the device list, another uuid -- and hbbs pins the first uuid it sees for an ID
+and refuses every later one, for ever. Logging in as root when everything was
+set up as someone else is the usual way to meet this; the agent starts, finds no
+password, and exits.
+
+    rdeskvint-share-config -u USER
+
+copies that account's configuration to /etc/opt/rdeskvint/agent.conf, which the
+agent prefers over any per-user file. Every session then runs as the same
+machine, root included. `rdeskvint-share-config -r` undoes it.
+
+The cost is that the shared file has to be readable by every account that logs
+in, and it holds the connection password and this machine's private key. It is
+installed root-owned, mode 0640, group-readable by the account's own group
+unless -g names another. Anyone in that group can impersonate this machine.
+Decide before running it.
+
+The agent prints which file it used, so there is never a question:
+
+    config    : /etc/opt/rdeskvint/agent.conf
+
+
+STARTING IT BY HAND
+-------------------
+
+    rdeskvint-session start | stop | status | log
+
+Run it as yourself, from a terminal inside the desktop session you want served.
+The autostart hook does exactly this at login; this is the same thing on demand,
+for a session that was already running when the agent was installed, or after
+stopping it to change a setting.
+
+It needs that session's DISPLAY and X authority, which is exactly what an ssh
+connection does not have -- so this is one of the few things here that cannot be
+done remotely.
+
+
 AUTOSTART
 ---------
 

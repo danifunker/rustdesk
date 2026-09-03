@@ -1,0 +1,89 @@
+#!/bin/sh
+#
+# rdeskvint-session -- start, stop or check the agent in the desktop session you
+# are sitting in. No root, no init script, no logging out.
+#
+#   rdeskvint-session start     serve this session
+#   rdeskvint-session stop      stop serving
+#   rdeskvint-session status    is it running, and as what
+#   rdeskvint-session log       follow the log
+#
+# The autostart hook does exactly this at login. This is the same thing on
+# demand -- for a session that was already running when the agent was installed,
+# or after stopping it to change something.
+#
+# Run it as yourself, inside the session you want served: it needs that
+# session's DISPLAY and its X authority, which is precisely what an ssh
+# connection does not have.
+#
+# Bourne shell: no $( ), no [[ ]], no `local`.
+
+set -u
+
+here=`dirname "$0"`
+AGENT="$here/rdeskvint"
+[ -x "$AGENT" ] || AGENT=/opt/rdeskvint/bin/rdeskvint
+LOG="$HOME/.rdeskvint.log"
+
+running() { pgrep -x rdeskvint > /dev/null 2>&1; }
+
+case "${1:-status}" in
+
+start)
+	if running; then
+		echo "Already running:"
+		ps -ef | grep '[r]deskvint' | head -2
+		exit 0
+	fi
+	if [ -z "${DISPLAY:-}" ]; then
+		echo "rdeskvint-session: DISPLAY is not set." >&2
+		echo "  Run this from a terminal inside the desktop session you want" >&2
+		echo "  served -- over ssh there is no session to serve." >&2
+		exit 1
+	fi
+	echo "Starting against $DISPLAY, logging to $LOG"
+	"$AGENT" --log info >> "$LOG" 2>&1 &
+	sleep 4
+	if running; then
+		# The header, which says which config was used and what the four
+		# server fields are -- the things worth seeing before walking away.
+		sed -n '/^R-DeskVint/,/^Key /p' "$LOG" | tail -12
+		echo ""
+		echo "Watch it with: rdeskvint-session log"
+	else
+		echo "It did not stay up. The last of $LOG:" >&2
+		tail -6 "$LOG" >&2
+		exit 1
+	fi
+	;;
+
+stop)
+	if running; then
+		# By exact name: matching a command line would match this script.
+		pkill -x rdeskvint && echo "Stopped."
+	else
+		echo "Not running."
+	fi
+	;;
+
+status)
+	if running; then
+		echo "Running:"
+		ps -ef | grep '[r]deskvint' | head -2
+		echo "id: `$AGENT --show-id 2>/dev/null`"
+	else
+		echo "Not running."
+		exit 1
+	fi
+	;;
+
+log)
+	[ -f "$LOG" ] || { echo "No log at $LOG yet."; exit 1; }
+	tail -f "$LOG"
+	;;
+
+*)
+	sed -n '2,18p' "$0"
+	exit 2
+	;;
+esac

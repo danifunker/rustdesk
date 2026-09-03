@@ -457,6 +457,10 @@ fn main() {
     };
     let server = cfg.rendezvous_server();
     println!("{} {} on {}", PRODUCT, env!("CARGO_PKG_VERSION"), PLATFORM);
+    // Which file this came out of. There can be two now -- a machine-wide one
+    // and a per-user one -- and "which settings am I actually running with" is
+    // the first question anyone asks when the answer surprises them.
+    println!("config    : {}", cfg.path().display());
     println!("agent id  : {}", ident.id);
     println!("public key: {}", rustdesk_ppc_agent::config::base64_encode(&pk.0));
     println!("display   : {}x{}", width, height);

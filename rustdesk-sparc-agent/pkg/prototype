@@ -18,6 +18,8 @@ d none bin 0755 root bin
 f none bin/rdeskvint 0755 root bin
 f none bin/rdeskvint-enable 0755 root bin
 f none bin/rdeskvint-disable 0755 root bin
+f none bin/rdeskvint-session 0755 root bin
+f none bin/rdeskvint-share-config 0755 root bin
 f none bin/rdeskvint-console-test 0755 root bin
 #
 # The CA bundle, beside the binary because that is the first place the agent

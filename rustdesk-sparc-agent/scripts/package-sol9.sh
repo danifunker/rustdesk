@@ -68,6 +68,8 @@ mkdir -p "$STAGE/root/bin" "$STAGE/root/lib" "$STAGE/root/doc"
 cp "$OUT/rdeskvint"                "$STAGE/root/bin/"
 cp "$HERE/pkg/rdeskvint-enable"         "$STAGE/root/bin/"
 cp "$HERE/pkg/rdeskvint-disable"        "$STAGE/root/bin/"
+cp "$HERE/pkg/rdeskvint-session"        "$STAGE/root/bin/"
+cp "$HERE/pkg/rdeskvint-share-config"   "$STAGE/root/bin/"
 cp "$HERE/scripts/sol9-console-test.sh" "$STAGE/root/bin/rdeskvint-console-test"
 # Solaris 9's trust store is from 2002; the agent looks for cacert.pem beside
 # itself first, so this is what makes an https API Server work at all. Taken

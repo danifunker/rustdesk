@@ -1,0 +1,107 @@
+#!/bin/sh
+#
+# rdeskvint-share-config -- make one configuration serve every session.
+#
+#   rdeskvint-share-config [-u USER] [-g GROUP] [-f]
+#   rdeskvint-share-config -r          undo: remove the shared file
+#
+# WHY THIS EXISTS
+#
+#   The agent runs inside whoever's session is on the console, and reads its
+#   settings from that account's home directory. So logging in as a second
+#   account gives the machine a second identity: a second ID, a second row in
+#   the console's device list, and a second uuid -- and hbbs pins the first uuid
+#   it sees for an ID and refuses every later one, for ever.
+#
+#   This copies one account's configuration to /etc/opt/rdeskvint/agent.conf,
+#   which the agent prefers over any per-user file. Every session then runs as
+#   the same machine, whoever logged in, including root.
+#
+# WHAT IT COSTS
+#
+#   That file holds the connection password and the agent's private key, and it
+#   has to be READABLE BY EVERY ACCOUNT THAT LOGS IN AT THE CONSOLE. It is
+#   installed root-owned, mode 0640, group-readable by the group named with -g
+#   (by default the primary group of the account it was copied from). Anyone in
+#   that group can read the password and impersonate this machine. On a
+#   single-admin box that is a fair trade; decide before running it, not after.
+#
+# Bourne shell: no $( ), no [[ ]], no `local`.
+
+set -u
+
+SHARED_DIR=/etc/opt/rdeskvint
+SHARED=$SHARED_DIR/agent.conf
+SRC_USER=""
+GROUP=""
+FORCE=0
+REMOVE=0
+
+usage() { sed -n '2,32p' "$0"; exit 0; }
+die()   { echo "rdeskvint-share-config: $*" >&2; exit 1; }
+
+while [ $# -gt 0 ]; do
+	case "$1" in
+		-u) SRC_USER="$2"; shift 2 ;;
+		-g) GROUP="$2"; shift 2 ;;
+		-f) FORCE=1; shift ;;
+		-r) REMOVE=1; shift ;;
+		-h|--help) usage ;;
+		*)  die "unknown option: $1" ;;
+	esac
+done
+
+id | grep 'uid=0(' > /dev/null 2>&1 || die "run this as root."
+
+if [ "$REMOVE" = 1 ]; then
+	[ -f "$SHARED" ] || { echo "No shared configuration to remove."; exit 0; }
+	rm -f "$SHARED"
+	rmdir "$SHARED_DIR" 2>/dev/null
+	echo "Removed $SHARED."
+	echo "Sessions fall back to each account's own ~/.rdeskvint.conf, which means"
+	echo "this machine will have a different identity per account again."
+	exit 0
+fi
+
+# Default to whoever invoked sudo, since that is the account whose desktop was
+# configured; fall back to asking.
+[ -n "$SRC_USER" ] || SRC_USER="${SUDO_USER:-}"
+[ -n "$SRC_USER" ] || die "who from? give -u USER (the account whose settings to share)"
+
+HOME_DIR=`getent passwd "$SRC_USER" | cut -d: -f6`
+[ -n "$HOME_DIR" ] || die "no such user: $SRC_USER"
+SRC="$HOME_DIR/.rdeskvint.conf"
+[ -f "$SRC" ] || SRC="$HOME_DIR/.rustdesk-ppc-agent.conf"
+[ -f "$SRC" ] || die "$SRC_USER has no configuration yet. Set one up first:
+       su - $SRC_USER -c '/opt/rdeskvint/bin/rdeskvint --password SECRET'"
+
+if [ -f "$SHARED" ] && [ "$FORCE" != 1 ]; then
+	die "$SHARED already exists.
+       Overwriting it replaces this machine's identity, which is not something
+       to do by accident -- every peer that knows the old ID loses it, and the
+       server will refuse the new uuid under the old ID. Re-run with -f if that
+       is really what you want."
+fi
+
+[ -n "$GROUP" ] || GROUP=`getent passwd "$SRC_USER" | cut -d: -f4`
+[ -n "$GROUP" ] || die "could not work out a group; name one with -g"
+
+mkdir -p "$SHARED_DIR" || die "could not create $SHARED_DIR"
+chmod 755 "$SHARED_DIR"
+cp "$SRC" "$SHARED" || die "could not write $SHARED"
+chown root "$SHARED"
+chgrp "$GROUP" "$SHARED" 2>/dev/null || echo "  warning: could not set group $GROUP"
+chmod 640 "$SHARED"
+
+echo "Shared configuration written:"
+ls -l "$SHARED"
+echo ""
+echo "Every session on this machine now uses it, whoever logs in, and they all"
+echo "share the one identity:"
+/opt/rdeskvint/bin/rdeskvint --show-id 2>/dev/null | sed 's/^/    id /'
+echo ""
+echo "READABLE BY: root, and anyone in group `getent group \"$GROUP\" | cut -d: -f1`."
+echo "It holds the connection password and this machine's private key."
+echo ""
+echo "$SRC is now ignored. Leave it, or delete it once you are satisfied;"
+echo "changes made from now on are written to the shared file, which needs root."

@@ -47,6 +47,24 @@ const LEGACY_NAME: &str = ".rustdesk-ppc-agent.conf";
 /// names the next time anything is set.
 const RENAMED: &[(&str, &str)] = &[("rendezvous_server", "id_server"), ("server_key", "key")];
 
+/// A configuration shared by every session on the machine.
+///
+/// A per-user file is the right shape when one person owns a machine. It is the
+/// wrong shape here, because this agent runs *inside* whoever's session is on
+/// the console -- so the identity would change with the account that logged in.
+/// That is not a cosmetic problem: a second account means a second ID, a second
+/// row in the console's device list, and a second uuid, which hbbs will refuse
+/// the moment it has already pinned one to that ID.
+///
+/// So when this file exists it wins, for everybody. It has to be readable by
+/// every account that logs in, which is why the tool that creates it says out
+/// loud who that is: it holds the connection password and the agent's private
+/// key.
+#[cfg(target_os = "solaris")]
+const SHARED_PATH: Option<&str> = Some("/etc/opt/rdeskvint/agent.conf");
+#[cfg(not(target_os = "solaris"))]
+const SHARED_PATH: Option<&str> = None;
+
 #[derive(Default)]
 pub struct Config {
     path: PathBuf,
@@ -59,8 +77,22 @@ pub struct Config {
 
 impl Config {
     pub fn default_path() -> PathBuf {
+        // The shared file first, when there is one. Only its existence decides:
+        // a machine either has one identity for every session or it does not,
+        // and making that depend on who is logged in is the bug this avoids.
+        if let Some(shared) = SHARED_PATH {
+            let shared = Path::new(shared);
+            if shared.exists() {
+                return shared.to_path_buf();
+            }
+        }
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
         Path::new(&home).join(CONFIG_NAME)
+    }
+
+    /// Where a machine-wide configuration would live on this platform.
+    pub fn shared_path() -> Option<PathBuf> {
+        SHARED_PATH.map(PathBuf::from)
     }
 
     /// The pre-rename name beside `path`, when there is a distinct one.
@@ -120,6 +152,11 @@ impl Config {
         }
 
         Self { path, kv, migrated_from }
+    }
+
+    /// The file these values came out of, and where a change will be written.
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 
     /// The old file these values were read out of, if they were.
