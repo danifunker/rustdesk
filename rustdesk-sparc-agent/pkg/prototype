@@ -42,3 +42,22 @@ f none lib/rdeskvint.xsession 0644 root bin
 #
 d none doc 0755 root bin
 f none doc/README.txt 0644 root bin
+#
+# On PATH, for the two commands a person actually types. /usr/bin because that
+# is what is on the default PATH here -- /usr/local/bin is not, and does not
+# exist on a stock Solaris 9.
+#
+# Symlinks rather than a line added to /etc/profile: a package that edits a
+# shared system file has to un-edit it exactly on removal, and gets one chance
+# to get that right on a file the admin may also have changed. These are owned
+# by the package, so pkgrm takes them away and nothing else is touched.
+#
+# Only these two. The rest -- enable, disable, share-config, console-test -- are
+# root one-offs run from the instructions with a full path, and six third-party
+# symlinks in Sun's own bin directory is more footprint than the convenience is
+# worth.
+#
+# Safe despite the agent finding cacert.pem beside its own binary: current_exe()
+# resolves the link on Solaris, verified on the machine.
+s none /usr/bin/rdeskvint=/opt/rdeskvint/bin/rdeskvint
+s none /usr/bin/rdeskvint-session=/opt/rdeskvint/bin/rdeskvint-session

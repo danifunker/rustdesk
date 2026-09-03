@@ -23,6 +23,15 @@ startup is a separate, reversible step -- see AUTOSTART below.
     /opt/rdeskvint/lib/                        GCC runtime, startup templates
     /opt/rdeskvint/doc/README.txt              this file
 
+Two symlinks go on the default PATH, so the commands you type are just there:
+
+    /usr/bin/rdeskvint            -> /opt/rdeskvint/bin/rdeskvint
+    /usr/bin/rdeskvint-session    -> /opt/rdeskvint/bin/rdeskvint-session
+
+Nothing edits /etc/profile or any other shared file. The admin commands
+(rdeskvint-enable, -disable, -share-config, -console-test) are not linked; run
+them from /opt/rdeskvint/bin, as the examples here do.
+
 Removing:
 
     pkgrm RDVTagent
