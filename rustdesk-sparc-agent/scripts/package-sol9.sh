@@ -44,9 +44,19 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# Numeric and date-led, so pkgadd's own comparison orders releases correctly.
-[ -n "$VERSION" ] || VERSION="0.1.0,REV=$(date +%Y.%m.%d)"
-PKGFILE="$PKG-$(echo "$VERSION" | tr ',=' '--')-sparc.pkg"
+# From Cargo.toml, as the PowerPC release script does, so one number moves both
+# the binary's banner and the artifact's name. REV is date-led so pkgadd's own
+# version comparison orders rebuilds of the same version correctly.
+if [ -z "$VERSION" ]; then
+    CARGO_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' "$HERE/Cargo.toml" | head -1)
+    [ -n "$CARGO_VERSION" ] || die "no version in Cargo.toml; pass --version"
+    VERSION="$CARGO_VERSION,REV=$(date +%Y.%m.%d)"
+fi
+# The plain version, for filenames: R-DeskVint-PPC-1.0.0.dmg is the sibling.
+PLAIN_VERSION=${VERSION%%,*}
+PKGFILE="R-DeskVint-SPARC-$PLAIN_VERSION.pkg"
+MANFILE="R-DeskVint-SPARC-$PLAIN_VERSION.MANIFEST.txt"
+SUMFILE="R-DeskVint-SPARC-$PLAIN_VERSION.SHA256SUMS"
 
 if [ "$DO_BUILD" = 1 ]; then
     echo "==> Building"
@@ -122,9 +132,9 @@ ssh "$SOL9_HOST" "rm -rf $REMOTE"
 # that does not say which is a package whose claims cannot be checked.
 SHA=$(sha256sum "$DIST/$PKGFILE" | cut -d" " -f1)
 SIZE=$(du -h "$DIST/$PKGFILE" | cut -f1)
-( cd "$DIST" && sha256sum "$PKGFILE" > SHA256SUMS )
+( cd "$DIST" && sha256sum "$PKGFILE" > "$SUMFILE" )
 
-cat > "$DIST/MANIFEST.txt" <<MAN
+cat > "$DIST/$MANFILE" <<MAN
 rustdesk-sparc-agent (R-DeskVint) $VERSION
 commit:   $(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo unknown)
 built:    $(date -u '+%Y-%m-%d %H:%M:%S UTC')
@@ -180,4 +190,4 @@ MAN
 
 echo
 echo "==> $DIST"
-ls -l "$DIST/$PKGFILE" "$DIST/MANIFEST.txt" "$DIST/SHA256SUMS"
+ls -l "$DIST/$PKGFILE" "$DIST/$MANFILE" "$DIST/$SUMFILE"
