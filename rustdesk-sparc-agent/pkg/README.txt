@@ -72,6 +72,27 @@ Optional, persisted, and independent of one another:
 --server makes the machine REACHABLE. --api-server makes it VISIBLE. Neither
 implies the other. Each has a --no-... form that switches it back off.
 
+    rdeskvint --scale 1                 serve the screen at full size
+    rdeskvint --scale 2                 half in each direction
+    rdeskvint --scale 0                 back to this platform's default
+
+Scale is a resolution dial, in powers of two up to 8. The Solaris default is 2,
+inherited from the IRIX port where it was measured on a far slower machine, and
+on a Blade 2500 full size is perfectly usable. Measured here at 1280x1024 with a
+terminal scrolling continuously -- so, the whole screen changing every frame:
+
+    scale 1   2.25 fps    74 KB/frame
+    scale 2   5.04 fps   8.5 KB/frame
+
+That is the floor, not the typical case: frames are sent when something changes,
+so an ordinary desktop where one window moves costs a fraction of it. There is
+no DAMAGE on this machine, so every frame is a full-screen read either way --
+what scale changes is the conversion and the encode, both of which cost per
+pixel.
+
+A peer that asks for a particular image quality overrides this for its own
+session: a client set to Best asks for full size whatever the setting says.
+
     rdeskvint --listen ADDR --port N     default 0.0.0.0:21118
     rdeskvint --log debug                or --log trace, to watch a
                                               handshake message by message

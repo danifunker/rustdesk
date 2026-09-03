@@ -110,14 +110,61 @@ impl Config {
     }
 
     pub fn store(&self) -> io::Result<()> {
+        // Grouped, because the two halves of this file are not alike and the
+        // difference is invisible when they are sorted together: half of it is
+        // this machine's identity, which is generated once and must survive,
+        // and half is settings somebody chose. Comments are skipped by `load`,
+        // so this costs nothing to read back.
+        const IDENTITY: &[&str] = &["id", "uuid", "salt", "public_key", "secret_key"];
+        const SETTINGS: &[&str] = &[
+            "password",
+            "rendezvous_server",
+            "relay_server",
+            "server_key",
+            "api_server",
+            "ca_bundle",
+            "scale",
+        ];
+
         let mut out = String::from(
             "# R-DeskVint agent -- written by the agent; use its flags, not an editor\n",
         );
-        for (k, v) in &self.kv {
-            out.push_str(k);
-            out.push_str(" = ");
-            out.push_str(v);
-            out.push('\n');
+        let mut emit = |out: &mut String, k: &str| {
+            if let Some(v) = self.kv.get(k) {
+                out.push_str(k);
+                out.push_str(" = ");
+                out.push_str(v);
+                out.push('\n');
+            }
+        };
+
+        out.push_str(
+            "\n# This machine's identity. Generated once, and not yours to pick.\n\
+             # Losing it makes this a different machine to every peer and to the\n\
+             # server, which pins the first uuid it sees for an id for ever.\n",
+        );
+        for k in IDENTITY {
+            emit(&mut out, k);
+        }
+
+        out.push_str("\n# Settings. Empty means the default; see --help.\n");
+        for k in SETTINGS {
+            emit(&mut out, k);
+        }
+
+        // Anything a newer or older build wrote that this one does not know
+        // about. Kept rather than dropped: a round trip through an old binary
+        // should not silently delete a setting a new one added.
+        let known: Vec<&str> = IDENTITY.iter().chain(SETTINGS.iter()).copied().collect();
+        let unknown: Vec<&String> = self.kv.keys().filter(|k| !known.contains(&k.as_str())).collect();
+        if !unknown.is_empty() {
+            out.push_str("\n# Not written by this version, and kept as found.\n");
+            for k in unknown {
+                out.push_str(k);
+                out.push_str(" = ");
+                out.push_str(self.kv.get(k).map(|s| s.as_str()).unwrap_or(""));
+                out.push('\n');
+            }
         }
         let tmp = self.path.with_extension("tmp");
         {
@@ -251,6 +298,25 @@ impl Config {
 
     pub fn set_api_server(&mut self, s: &str) -> io::Result<()> {
         self.set("api_server", s);
+        self.store()
+    }
+
+    /// The downscale the video starts at, or 0 for the platform's own default.
+    ///
+    /// A resolution dial rather than a quality one: 1 serves the framebuffer at
+    /// full size, 2 at half in each direction, and so on in powers of two. A
+    /// peer that asks for a particular image quality still overrides it for
+    /// that session.
+    pub fn scale(&self) -> usize {
+        self.get("scale").and_then(|s| s.parse().ok()).unwrap_or(0)
+    }
+
+    pub fn set_scale(&mut self, s: usize) -> io::Result<()> {
+        if s == 0 {
+            self.set("scale", "");
+        } else {
+            self.set("scale", &s.to_string());
+        }
         self.store()
     }
 

@@ -82,6 +82,12 @@ OPTIONS:
     --ca-bundle PATH certificates used to verify an https console. Persisted.
                      Empty is the default and searches the usual places; set it
                      for a console behind a private CA. --ca-bundle '' clears it.
+    --scale N        how much to shrink the screen before encoding: 1 serves it
+                     at full size, 2 at half in each direction, 4 at a quarter.
+                     A power of two, up to 8. Persisted, and 0 restores this
+                     platform's own default. A peer that asks for a specific
+                     image quality still overrides it for that session: a
+                     client set to Best asks for 1, whatever this says.
     --config PATH    config file (default {5})
     --secure         require the signed_id/public_key exchange. OFF by default:
                      a client connecting by IP does not take part, and enabling
@@ -107,6 +113,7 @@ fn main() {
     let mut listen = "0.0.0.0".to_owned();
     let mut port = DEFAULT_PORT;
     let mut cfg_path = Config::default_path();
+    let mut scale: Option<usize> = None;
     let mut set_password: Option<String> = None;
     let (mut show_id, mut show_key, mut probe) = (false, false, false);
     let mut probe_live = false;
@@ -138,6 +145,17 @@ fn main() {
             }
             "--password" => {
                 set_password = Some(need(i));
+                i += 2;
+            }
+            "--scale" => {
+                let a = need(i);
+                match a.parse::<usize>() {
+                    Ok(n) if n == 0 || (n.is_power_of_two() && n <= 8) => scale = Some(n),
+                    _ => {
+                        eprintln!("error: --scale wants 0, or a power of two up to 8 (got {:?})", a);
+                        exit(2);
+                    }
+                }
                 i += 2;
             }
             "--config" => {
@@ -246,6 +264,21 @@ fn main() {
             old.display(),
             Config::default_path().display()
         );
+    }
+
+    if let Some(n) = scale {
+        cfg.set_scale(n).unwrap_or_else(|e| {
+            eprintln!("error: could not save config: {}", e);
+            exit(1);
+        });
+        if n == 0 {
+            println!("scale cleared; this platform's default applies");
+        } else if n == 1 {
+            println!("scale set to 1; the screen is served at full size");
+        } else {
+            println!("scale set to {}; the screen is served at 1/{} in each direction", n, n);
+        }
+        return;
     }
 
     if let Some(p) = set_password {
@@ -360,6 +393,10 @@ fn main() {
         probe_keys_fn(probe_keys_at);
         return;
     }
+
+    // Before any peer arrives: `session` reads this once and every session
+    // starts there, unless the peer asks for a different image quality.
+    rustdesk_ppc_agent::session::set_default_scale(cfg.scale());
 
     if cfg.password().is_empty() {
         eprintln!(

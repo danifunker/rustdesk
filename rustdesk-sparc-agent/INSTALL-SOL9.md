@@ -190,6 +190,32 @@ deadlocks the handshake.
 `--log debug` (`-v`) or `--log trace` (`-vv`) prints every message and frame,
 which is the fastest way to find where a client diverges.
 
+### Resolution
+
+```sh
+rdeskvint --scale 1     # full size
+rdeskvint --scale 2     # half in each direction
+rdeskvint --scale 0     # this platform's default
+```
+
+The Solaris default is 2, which came across from the IRIX arm where it was
+measured on an emulated 66 MHz R5000. A Blade 2500 is not that machine. Measured
+on the hardware at 1280x1024, with a terminal scrolling continuously so the
+whole screen changes every frame:
+
+| scale | served | fps | per frame |
+|---|---|---|---|
+| 1 | 1280x1024 | 2.25 | 74 KB |
+| 2 | 640x512 | 5.04 | 8.5 KB |
+
+That is the floor rather than the typical case — frames go out when something
+changes, so a desktop where one window moves costs a fraction of it. There being
+no DAMAGE here, every frame is a full-screen read at either setting; what scale
+changes is the conversion and the encode, which cost per pixel.
+
+A peer asking for a specific image quality still overrides it for that session,
+so a client set to Best gets full size whatever this says.
+
 An agent from before the rename kept its settings in
 `~/.rustdesk-ppc-agent.conf`. That file is still read when `~/.rdeskvint.conf`
 is absent, so an existing machine keeps its ID, uuid and keypair instead of

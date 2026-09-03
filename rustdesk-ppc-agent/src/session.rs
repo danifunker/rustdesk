@@ -84,6 +84,34 @@ const DEFAULT_BITRATE_KBPS: u32 = 1500;
 const DEFAULT_SCALE: usize = 2;
 #[cfg(not(any(target_os = "irix", target_os = "solaris")))]
 const DEFAULT_SCALE: usize = 1;
+
+/// The starting downscale when `--scale` has been set, or 0 for "use
+/// `DEFAULT_SCALE`".
+///
+/// A static rather than a field on `Identity` because `message_loop` is reached
+/// through `Peer` and never sees the identity; threading one number through two
+/// structs to be read in three places is the worse of the two shapes. Written
+/// once at startup, before any peer exists.
+static SCALE_OVERRIDE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Set the starting downscale. 0 restores the per-platform default.
+pub fn set_default_scale(scale: usize) {
+    SCALE_OVERRIDE.store(scale, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The downscale a session starts at, before any peer asks for another.
+///
+/// The per-platform constant is a guess about the machine; this is the answer
+/// from somebody who has measured it. The Solaris default came across from IRIX
+/// with the rest of that arm, and an UltraSPARC IIIi is not an emulated 66 MHz
+/// R5000 -- so it is exactly the kind of guess worth being able to override
+/// without a rebuild.
+fn default_scale() -> usize {
+    match SCALE_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => DEFAULT_SCALE,
+        n => n,
+    }
+}
 /// How long the screen must be still before re-reading a slice of it to cover
 /// anything the sampled change detection missed, and how much to re-read each
 /// time.
@@ -572,7 +600,7 @@ pub fn serve(stream: TcpStream, ident: &Identity) -> io::Result<()> {
     // truth about that rather than being handed a small frame in a big canvas.
     #[cfg(all(any(target_os = "macos", target_os = "irix", target_os = "solaris"), not(no_vpx)))]
     let (dw, dh) = {
-        let sc = clamp_scale(DEFAULT_SCALE, dw.max(0) as usize, dh.max(0) as usize) as i32;
+        let sc = clamp_scale(default_scale(), dw.max(0) as usize, dh.max(0) as usize) as i32;
         (dw / sc, dh / sc)
     };
     d.width = dw;
@@ -665,8 +693,8 @@ fn scale_for_quality(q: crate::message_proto::ImageQuality) -> Option<usize> {
     match q {
         ImageQuality::NotSet => None,
         ImageQuality::Best => Some(1),
-        ImageQuality::Balanced => Some(DEFAULT_SCALE),
-        ImageQuality::Low => Some(DEFAULT_SCALE * 2),
+        ImageQuality::Balanced => Some(default_scale()),
+        ImageQuality::Low => Some(default_scale() * 2),
     }
 }
 
@@ -1381,7 +1409,7 @@ fn send_cursor_position(
 /// seconds, not even that on every pass. See `IDLE_AFTER`.
 fn message_loop(peer: &mut Peer) -> io::Result<()> {
     #[cfg(all(any(target_os = "macos", target_os = "irix", target_os = "solaris"), not(no_vpx)))]
-    let mut video = match Video::new(DEFAULT_BITRATE_KBPS, DEFAULT_SCALE) {
+    let mut video = match Video::new(DEFAULT_BITRATE_KBPS, default_scale()) {
         Ok(v) => Some(v),
         Err(e) => {
             // Worth spelling out: the usual cause is not the display at all but
@@ -1405,7 +1433,7 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
     // click at (100, 100) on a 1/2 frame is (200, 200) on the framebuffer.
     // `Video` owns the authoritative copy; this follows it.
     #[cfg(all(any(target_os = "macos", target_os = "irix", target_os = "solaris"), not(no_vpx)))]
-    let mut video_scale = video.as_ref().map(|v| v.scale).unwrap_or(DEFAULT_SCALE);
+    let mut video_scale = video.as_ref().map(|v| v.scale).unwrap_or(default_scale());
 
     // Neither IRIX nor Solaris 10 has SO_RCVTIMEO: setsockopt returns
     // ENOPROTOOPT, and taking that as fatal ends the session the instant the
