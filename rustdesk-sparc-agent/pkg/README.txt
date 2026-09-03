@@ -140,15 +140,33 @@ does not work.
 Both settings are saved, so they apply on every start from then on.
 --no-id-server and --no-api-server switch them back off, separately.
 
+    rdeskvint --relay-server HOST
     rdeskvint --key '<base64>'
 
-is the server key, and is needed only when the RELAY (hbbr) was started with
--k. It goes into RequestRelay.licence_key, and a keyed relay drops a request
-whose key does not match by simply returning -- so the symptom is a caller
-waiting forever on a relay the agent appears never to have joined, with no error
-anywhere. An unkeyed hbbr, which is the common self-hosted case, ignores it.
-Note that hbbs is keyed even without -k because it generates id_ed25519 for
-itself, while hbbr has no such fallback: the two are configured separately.
+Whether you need these two depends on the deployment, and the honest answer is
+to configure the agent the same way the clients on that deployment are
+configured. If your clients need all four fields filled in to work over the
+internet, so does this -- it is the same protocol and the same server.
+
+Relay Server empty means "whichever relay the ID server advertises", which is
+right when hbbs advertises a publicly reachable one (its -r). Set it when it
+does not: the failure is a call that connects and then dies with no video, and
+the agent's log names the relay it was told to use --
+
+    rendezvous: relay request from <peer> via <relay>, uuid ...
+
+-- so a private address there is the diagnosis.
+
+Key goes into RequestRelay.licence_key and is checked only by a RELAY started
+with -k. A keyed relay drops a request whose key does not match by simply
+returning, so the symptom is a caller waiting forever on a relay this agent
+appears never to have joined, with nothing logged at either end. An unkeyed hbbr
+ignores it, so setting it when it is not needed costs nothing -- which is a good
+reason to just set it.
+
+Note hbbs is keyed even without -k, because it generates id_ed25519 for itself,
+while hbbr has no such fallback. The two are configured separately, and that is
+the usual source of confusion here.
 
 The CLIENT needs that same key -- the server's id_ed25519.pub -- in
 Settings -> Network -> ID/Relay Server, exactly as for any other peer. The ID

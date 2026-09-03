@@ -461,12 +461,28 @@ fn main() {
     println!("public key: {}", rustdesk_ppc_agent::config::base64_encode(&pk.0));
     println!("display   : {}x{}", width, height);
     println!("mode      : {}", if secure { "secure (peer must know our key)" } else { "direct-IP, UNENCRYPTED" });
-    println!("ID Server : {}", if server.is_empty() { "none -- direct IP only".to_owned() } else { server.clone() });
-    if !server.is_empty() {
-        println!("server key: {}", if cfg.server_key().is_empty() { "none (fine unless hbbr was started with -k)" } else { "set" });
-    }
+    // All four of a client's server fields, always, in the order that dialog
+    // shows them. Printing only the ones that are set is how a deployment that
+    // needs all four ends up running with three: the missing one is invisible
+    // precisely when somebody is looking for it.
     let api_server = cfg.api_server();
-    println!("API Server: {}", if api_server.is_empty() { "none -- not in any device list".to_owned() } else { api_server.clone() });
+    let relay = cfg.relay_server();
+    println!(
+        "ID Server : {}",
+        if server.is_empty() { "none -- direct IP only".to_owned() } else { server.clone() }
+    );
+    println!(
+        "Relay     : {}",
+        if relay.is_empty() { "none -- whichever relay the ID server advertises".to_owned() } else { relay.clone() }
+    );
+    println!(
+        "API Server: {}",
+        if api_server.is_empty() { "none -- not in any device list".to_owned() } else { api_server.clone() }
+    );
+    println!(
+        "Key       : {}",
+        if cfg.server_key().is_empty() { "none -- a relay started with -k will drop us".to_owned() } else { "set".to_owned() }
+    );
 
     // Register with a rendezvous server, so the agent is reachable by id from
     // anywhere rather than only by address on this subnet. Its own thread: see
