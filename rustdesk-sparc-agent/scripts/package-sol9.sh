@@ -69,6 +69,12 @@ cp "$OUT/rdeskvint"                "$STAGE/root/bin/"
 cp "$HERE/pkg/rdeskvint-enable"         "$STAGE/root/bin/"
 cp "$HERE/pkg/rdeskvint-disable"        "$STAGE/root/bin/"
 cp "$HERE/scripts/sol9-console-test.sh" "$STAGE/root/bin/rdeskvint-console-test"
+# Solaris 9's trust store is from 2002; the agent looks for cacert.pem beside
+# itself first, so this is what makes an https API Server work at all. Taken
+# from the build host unless CA_BUNDLE says otherwise.
+CA_BUNDLE="${CA_BUNDLE:-/etc/ssl/certs/ca-certificates.crt}"
+[ -f "$CA_BUNDLE" ] || die "no CA bundle at $CA_BUNDLE (set CA_BUNDLE=)"
+cp "$CA_BUNDLE"                         "$STAGE/root/bin/cacert.pem"
 cp "$LIBGCC"                            "$STAGE/root/lib/"
 cp "$HERE/pkg/rdeskvint.init"           "$STAGE/root/lib/"
 cp "$HERE/pkg/rdeskvint.xsession"       "$STAGE/root/lib/"

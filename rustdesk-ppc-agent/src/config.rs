@@ -42,6 +42,11 @@ const CONFIG_NAME: &str = ".rustdesk-ppc-agent.conf";
 /// stops being able to register at all.
 const LEGACY_NAME: &str = ".rustdesk-ppc-agent.conf";
 
+/// Settings that have been renamed, old spelling first. Applied on load, so a
+/// file written by an older build keeps working and is rewritten under the new
+/// names the next time anything is set.
+const RENAMED: &[(&str, &str)] = &[("rendezvous_server", "id_server"), ("server_key", "key")];
+
 #[derive(Default)]
 pub struct Config {
     path: PathBuf,
@@ -101,6 +106,19 @@ impl Config {
                 }
             }
         }
+
+        // These four settings are the four fields a stock RustDesk client shows
+        // -- ID Server, Relay Server, API Server, Key -- and they are named for
+        // them, because somebody configuring both should not have to hold a
+        // translation table. Two of them used to be called something else, from
+        // back when the names came from the protocol rather than from the UI.
+        // Read the old spelling, write the new one.
+        for (was, now) in RENAMED {
+            if let Some(v) = kv.remove(*was) {
+                kv.entry((*now).to_owned()).or_insert(v);
+            }
+        }
+
         Self { path, kv, migrated_from }
     }
 
@@ -116,12 +134,13 @@ impl Config {
         // and half is settings somebody chose. Comments are skipped by `load`,
         // so this costs nothing to read back.
         const IDENTITY: &[&str] = &["id", "uuid", "salt", "public_key", "secret_key"];
+        // Ordered as a client presents them, not alphabetically.
         const SETTINGS: &[&str] = &[
             "password",
-            "rendezvous_server",
+            "id_server",
             "relay_server",
-            "server_key",
             "api_server",
+            "key",
             "ca_bundle",
             "scale",
         ];
@@ -243,11 +262,11 @@ impl Config {
 
     /// The rendezvous server to register with, if one is configured.
     pub fn rendezvous_server(&self) -> String {
-        self.get("rendezvous_server").unwrap_or_default().to_owned()
+        self.get("id_server").unwrap_or_default().to_owned()
     }
 
     pub fn set_rendezvous_server(&mut self, s: &str) -> io::Result<()> {
-        self.set("rendezvous_server", s);
+        self.set("id_server", s);
         self.store()
     }
 
@@ -259,11 +278,11 @@ impl Config {
     /// Not to be confused with `public_key`/`secret_key`, which are this
     /// agent's own identity. This one belongs to the server.
     pub fn server_key(&self) -> String {
-        self.get("server_key").unwrap_or_default().to_owned()
+        self.get("key").unwrap_or_default().to_owned()
     }
 
     pub fn set_server_key(&mut self, k: &str) -> io::Result<()> {
-        self.set("server_key", k);
+        self.set("key", k);
         self.store()
     }
 

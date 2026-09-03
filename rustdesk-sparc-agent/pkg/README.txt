@@ -59,7 +59,7 @@ address on port 21118, give the password.
 
 Optional, persisted, and independent of one another:
 
-    rdeskvint --server HOST        register with a rendezvous server, so
+    rdeskvint --id-server HOST        register with a rendezvous server, so
                                         the machine is reachable by ID from
                                         anywhere rather than by IP on this LAN
     rdeskvint --key KEY            the server's key; only needed if the
@@ -69,7 +69,7 @@ Optional, persisted, and independent of one another:
     rdeskvint --ca-bundle PATH     certificates, for a console behind a
                                         private CA
 
---server makes the machine REACHABLE. --api-server makes it VISIBLE. Neither
+--id-server makes the machine REACHABLE. --api-server makes it VISIBLE. Neither
 implies the other. Each has a --no-... form that switches it back off.
 
     rdeskvint --scale 1                 serve the screen at full size
@@ -105,12 +105,22 @@ part in that exchange, and turning it on deadlocks the handshake.
 POINTING IT AT A CORTENDESK SERVER
 ----------------------------------
 
-Two switches, doing two different jobs. You almost certainly want both.
+The four settings are the four fields a RustDesk client shows, with the same
+names and the same values. Whatever you put in the client, put here:
 
-    rdeskvint --server hbbs.example.org
+    client field      flag                     config file key
+    ------------      ----                     ---------------
+    ID Server         --id-server HOST         id_server
+    Relay Server      --relay-server HOST      relay_server
+    API Server        --api-server URL         api_server
+    Key               --key BASE64             key
+
+Two of them do two different jobs. You almost certainly want both.
+
+    rdeskvint --id-server hbbs.example.org
     rdeskvint --api-server https://console.example.org
 
---server registers with hbbs and makes the machine REACHABLE by ID from
+--id-server registers with hbbs and makes the machine REACHABLE by ID from
 anywhere, rather than by IP on this LAN. HOST or HOST:PORT; the default port is
 21116.
 
@@ -123,12 +133,12 @@ port is 8080, so a local deployment is usually:
 
 Neither implies the other, and this is the trap worth knowing: the console
 builds its device list from that HTTP API and NOT from hbbs registration. An
-agent given only --server registers perfectly, is connectable by ID, and appears
+agent given only --id-server registers perfectly, is connectable by ID, and appears
 in no list at all -- which from the console looks exactly like an agent that
 does not work.
 
 Both settings are saved, so they apply on every start from then on.
---no-server and --no-api-server switch them back off, separately.
+--no-id-server and --no-api-server switch them back off, separately.
 
     rdeskvint --key '<base64>'
 
@@ -146,8 +156,11 @@ from `rdeskvint --show-id` goes in the ID field.
 
     rdeskvint --ca-bundle /path/to/ca.pem
 
-if the console is behind a private CA. Empty is the default and searches the
-usual places.
+only if the console is behind a PRIVATE CA. For a public certificate you need
+nothing: the package ships /opt/rdeskvint/bin/cacert.pem, which is the first
+place the agent looks. Solaris 9's own trust store is from 2002 and cannot
+verify anything on today's internet, so an https API Server would otherwise fail
+at the handshake with "no CA bundle found".
 
 Two things about sessions through a server:
 

@@ -20,6 +20,13 @@ f none bin/rdeskvint-enable 0755 root bin
 f none bin/rdeskvint-disable 0755 root bin
 f none bin/rdeskvint-console-test 0755 root bin
 #
+# The CA bundle, beside the binary because that is the first place the agent
+# looks. Solaris 9's own trust store is from 2002 and cannot verify anything on
+# the modern internet, so without this an https API Server fails at the
+# handshake -- on a machine whose whole problem is that it is twenty years old
+# and cannot be given a newer one.
+f none bin/cacert.pem 0644 root bin
+#
 # The GCC runtime, which Solaris 9 does not ship and Rust's unwind crate asks
 # for by name -- which is why -static-libgcc cannot answer it. The agent carries
 # an rpath naming this directory, so a default install needs nothing on

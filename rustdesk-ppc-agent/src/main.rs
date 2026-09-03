@@ -39,6 +39,36 @@ fn program() -> String {
         .unwrap_or_else(|| "rustdesk-agent".to_owned())
 }
 
+/// Reduce a pasted URL to the host[:port] the ID Server and Relay Server fields
+/// actually take.
+///
+/// Those two are hosts, exactly as they are in a client's own dialog -- but the
+/// API Server beside them IS a URL, so pasting one here is the natural mistake
+/// rather than a careless one. Left alone it fails as
+/// "failed to lookup address information: host/servname not known", retried
+/// every five seconds for ever, with a message pointing squarely at DNS rather
+/// than at the scheme on the front of the name.
+fn host_only(v: &str, what: &str) -> String {
+    let mut s = v;
+    let mut changed = false;
+    for scheme in ["https://", "http://"] {
+        if let Some(rest) = s.strip_prefix(scheme) {
+            s = rest;
+            changed = true;
+            break;
+        }
+    }
+    // A path is no more use here than a scheme was.
+    if let Some(slash) = s.find('/') {
+        s = &s[..slash];
+        changed = true;
+    }
+    if changed {
+        eprintln!("note: {} takes a host, not a URL -- storing {:?}", what, s);
+    }
+    s.to_owned()
+}
+
 fn usage() -> ! {
     let p = program();
     eprintln!(
@@ -48,7 +78,7 @@ USAGE:
     {0} [--listen ADDR] [--port N]
     {0} --password PASS
     {0} --show-id | --show-key
-    {0} --server HOST | --no-server
+    {0} --id-server HOST | --no-id-server
     {0} --api-server URL | --no-api-server
     {0} --probe-display
 
@@ -61,24 +91,26 @@ OPTIONS:
     --probe-display  report what the framebuffer looks like, and exit
     --probe-live     watch the framebuffer for change and self-test the mouse
     --probe-keys [X Y]  click at X,Y to take focus, type, photograph (~/keys.ppm)
-    --server HOST    register with this rendezvous server and exit. HOST or
-                     HOST:PORT (default port 21116). Persisted, so the agent
-                     registers on every start after this. Makes the machine
-                     reachable by ID from anywhere, not just by IP on this LAN.
-    --no-server      stop registering, and exit
-    --relay-server H use this relay instead of the one the server advertises.
-                     Persisted. Empty is the default and means whichever relay
-                     the rendezvous server names, which is normally right.
-                     --relay-server '' clears an override.
-    --key KEY        the server's key -- the same string a RustDesk client
-                     puts in its Key field. Persisted, and sent when joining a
-                     relay. Only needed against an hbbr started with -k; an
-                     unkeyed relay ignores it. --key '' clears it.
-    --api-server URL report in to this console, so the machine appears in its
-                     device list. Persisted. A bare host means https. This is
-                     separate from --server: that one makes the machine
-                     reachable, this one makes it visible.
+  The four settings below are the four fields a RustDesk client shows, and are
+  named for them. All are persisted, and apply on every start after being set.
+
+    --id-server HOST ID Server. HOST or HOST:PORT, default port 21116. Makes
+                     this machine reachable by ID from anywhere rather than by
+                     IP on this LAN. (--server is accepted for this too.)
+    --no-id-server   stop registering, and exit
+    --relay-server H Relay Server. Empty is the default and means whichever
+                     relay the ID server advertises, which is normally right;
+                     set it when the advertised one is unreachable from where
+                     callers actually are. --relay-server '' clears it.
+    --api-server URL API Server -- the console that lists this machine. A bare
+                     host means https. Separate from --id-server: that one makes
+                     the machine REACHABLE, this one makes it VISIBLE, and a
+                     console builds its list from this and not from registration.
     --no-api-server  stop reporting in, and exit
+    --key KEY        Key -- the server's public key, the same base64 string a
+                     client puts in its own Key field. Sent when joining a relay,
+                     and needed only against an hbbr started with -k; an unkeyed
+                     relay ignores it. --key '' clears it.
     --ca-bundle PATH certificates used to verify an https console. Persisted.
                      Empty is the default and searches the usual places; set it
                      for a console behind a private CA. --ca-bundle '' clears it.
@@ -213,11 +245,13 @@ fn main() {
                 secure = true;
                 i += 1;
             }
-            "--server" => {
+            // --server is what this was called before the settings were named
+            // for the fields a client shows. Still accepted: it is in scripts.
+            "--id-server" | "--server" => {
                 set_server = Some(need(i));
                 i += 2;
             }
-            "--no-server" => {
+            "--no-id-server" | "--no-server" => {
                 set_server = Some(String::new());
                 i += 1;
             }
@@ -294,26 +328,28 @@ fn main() {
         return;
     }
     if let Some(s) = set_server {
+        let s = if s.is_empty() { s } else { host_only(&s, "--id-server") };
         cfg.set_rendezvous_server(&s).unwrap_or_else(|e| {
             eprintln!("error: could not save config: {}", e);
             exit(1);
         });
         if s.is_empty() {
-            println!("rendezvous server cleared; the agent is direct-IP only");
+            println!("ID Server cleared; the agent is direct-IP only");
         } else {
-            println!("rendezvous server set to {}", s);
+            println!("ID Server set to {}", s);
         }
         return;
     }
     if let Some(r) = set_relay {
+        let r = if r.is_empty() { r } else { host_only(&r, "--relay-server") };
         cfg.set_relay_server(&r).unwrap_or_else(|e| {
             eprintln!("error: could not save config: {}", e);
             exit(1);
         });
         if r.is_empty() {
-            println!("relay override cleared; the server's relay will be used");
+            println!("Relay Server cleared; the ID server's own relay will be used");
         } else {
-            println!("relay server set to {}", r);
+            println!("Relay Server set to {}", r);
         }
         return;
     }
@@ -323,9 +359,9 @@ fn main() {
             exit(1);
         });
         if k.is_empty() {
-            println!("server key cleared; relays that require one will drop us");
+            println!("Key cleared; a relay started with -k will drop us");
         } else {
-            println!("server key set ({} characters)", k.len());
+            println!("Key set ({} characters)", k.len());
         }
         return;
     }
@@ -345,9 +381,9 @@ fn main() {
             exit(1);
         });
         if a.is_empty() {
-            println!("console cleared; the agent will not report in");
+            println!("API Server cleared; the agent will not report in");
         } else {
-            println!("console set to {}", rustdesk_ppc_agent::http::Url::parse(&a).unwrap());
+            println!("API Server set to {}", rustdesk_ppc_agent::http::Url::parse(&a).unwrap());
         }
         return;
     }
@@ -425,12 +461,12 @@ fn main() {
     println!("public key: {}", rustdesk_ppc_agent::config::base64_encode(&pk.0));
     println!("display   : {}x{}", width, height);
     println!("mode      : {}", if secure { "secure (peer must know our key)" } else { "direct-IP, UNENCRYPTED" });
-    println!("server    : {}", if server.is_empty() { "none -- direct IP only".to_owned() } else { server.clone() });
+    println!("ID Server : {}", if server.is_empty() { "none -- direct IP only".to_owned() } else { server.clone() });
     if !server.is_empty() {
         println!("server key: {}", if cfg.server_key().is_empty() { "none (fine unless hbbr was started with -k)" } else { "set" });
     }
     let api_server = cfg.api_server();
-    println!("console   : {}", if api_server.is_empty() { "none -- not in any device list".to_owned() } else { api_server.clone() });
+    println!("API Server: {}", if api_server.is_empty() { "none -- not in any device list".to_owned() } else { api_server.clone() });
 
     // Register with a rendezvous server, so the agent is reachable by id from
     // anywhere rather than only by address on this subnet. Its own thread: see

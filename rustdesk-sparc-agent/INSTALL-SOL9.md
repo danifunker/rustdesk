@@ -172,14 +172,14 @@ hostname.
 **Optional, and independent of each other:**
 
 ```sh
-rdeskvint --server HOST         # register with a rendezvous server, so the
+rdeskvint --id-server HOST         # register with a rendezvous server, so the
                                      # machine is reachable by ID from anywhere
 rdeskvint --key KEY             # only if the relay was started with -k
 rdeskvint --api-server URL      # report in to a console, so the machine
                                      # appears in its device list
 ```
 
-Both are persisted and both take a `--no-…` form to undo. `--server` makes the
+Both are persisted and both take a `--no-…` form to undo. `--id-server` makes the
 machine *reachable*; `--api-server` makes it *visible*. Neither implies the
 other. `--ca-bundle PATH` is there for a console behind a private CA.
 
@@ -231,20 +231,20 @@ alone, and the agent prints which it read.
 Two switches doing two different jobs, and you almost certainly want both:
 
 ```sh
-rdeskvint --server hbbs.example.org                   # reachable by ID (port 21116)
+rdeskvint --id-server hbbs.example.org                   # reachable by ID (port 21116)
 rdeskvint --api-server https://console.example.org    # visible in the device list
 rdeskvint --api-server http://192.168.1.10:8080       # CortenDesk's container port
 ```
 
-`--server` registers with hbbs. `--api-server` points at the console's HTTP API;
+`--id-server` registers with hbbs. `--api-server` points at the console's HTTP API;
 a bare host means `https`, since assuming `http` would silently downgrade a
 console reachable over TLS and say nothing.
 
 The trap is that the console builds its device list from that HTTP API and *not*
-from hbbs registration. An agent given only `--server` registers perfectly, is
+from hbbs registration. An agent given only `--id-server` registers perfectly, is
 connectable by ID, and appears in no list at all — which from the console is
 indistinguishable from an agent that does not work. Both settings are persisted;
-`--no-server` and `--no-api-server` switch them off separately.
+`--no-id-server` and `--no-api-server` switch them off separately.
 
 `--key '<base64>'` is needed only when the **relay** (hbbr) was started with
 `-k`. A keyed relay drops a mismatched request by simply returning, so the
