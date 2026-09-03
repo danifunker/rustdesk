@@ -23,8 +23,8 @@ DISPLAY_NUM=${3:-:1}
 here=`dirname "$0"`
 AGENT=${AGENT:-}
 if [ -z "$AGENT" ]; then
-    for a in "$here/rustdesk-agent" /opt/rdeskvint/bin/rustdesk-agent \
-             /usr/local/bin/rustdesk-agent; do
+    for a in "$here/rdeskvint" /opt/rdeskvint/bin/rdeskvint \
+             /usr/local/bin/rdeskvint; do
         [ -x "$a" ] && { AGENT=$a; break; }
     done
 fi
@@ -38,7 +38,7 @@ export PATH
 restore() {
     echo "=== restoring the greeter ==="
     # By name, never by pattern: `pkill -f` would match this script too.
-    pkill -x rustdesk-agent 2>/dev/null
+    pkill -x rdeskvint 2>/dev/null
     pkill -x xclock 2>/dev/null
     sudo pkill -x Xsun 2>/dev/null
     sleep 2
@@ -47,7 +47,7 @@ restore() {
 trap 'restore; exit 130' 1 2 15
 
 [ -n "$AGENT" ] && [ -x "$AGENT" ] || {
-    echo "no rustdesk-agent found; set AGENT=/path/to/rustdesk-agent" >&2; exit 1; }
+    echo "no rdeskvint found; set AGENT=/path/to/rdeskvint" >&2; exit 1; }
 
 echo "=== stopping dtlogin: dtgreet holds a server grab that hangs XOpenDisplay ==="
 sudo /etc/init.d/dtlogin stop

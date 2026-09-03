@@ -22,7 +22,7 @@ AGENT_USER=@AGENT_USER@
 DPY=@DISPLAY_NUM@
 FB=@FB@
 
-AGENT=$BASEDIR/bin/rustdesk-agent
+AGENT=$BASEDIR/bin/rdeskvint
 LOG=/var/log/rdeskvint.log
 XPID=/var/run/rdeskvint-x.pid
 OPENWIN=/usr/openwin/bin
@@ -31,7 +31,7 @@ DTBIN=/usr/dt/bin
 PATH=$OPENWIN:$DTBIN:/usr/bin:/usr/sbin:$PATH
 export PATH
 
-running() { pgrep -x rustdesk-agent > /dev/null 2>&1; }
+running() { pgrep -x rdeskvint > /dev/null 2>&1; }
 
 case "$1" in
 
@@ -76,7 +76,7 @@ start)
 stop)
 	echo "Stopping R-DeskVint."
 	# All by exact name: matching a command line would match this script.
-	pkill -x rustdesk-agent > /dev/null 2>&1
+	pkill -x rdeskvint > /dev/null 2>&1
 	pkill -x dtterm        > /dev/null 2>&1
 	pkill -x dtwm          > /dev/null 2>&1
 	if [ -f $XPID ]; then

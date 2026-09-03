@@ -16,7 +16,7 @@ Everything lands under /opt/rdeskvint. Installing changes nothing about how the
 machine starts up: no daemon, no rc script, nothing disabled. Wiring it into
 startup is a separate, reversible step -- see AUTOSTART below.
 
-    /opt/rdeskvint/bin/rustdesk-agent          the agent
+    /opt/rdeskvint/bin/rdeskvint          the agent
     /opt/rdeskvint/bin/rdeskvint-enable        wire it into startup
     /opt/rdeskvint/bin/rdeskvint-disable       take it back out
     /opt/rdeskvint/bin/rdeskvint-console-test  prove it end to end
@@ -41,35 +41,92 @@ Settings live in ~/.rustdesk-ppc-agent.conf, one `key = value` per line, mode
 0600 because the machine's signing key is in it. It is created on first use and
 you should not need to edit it -- everything is set through the binary:
 
-    rustdesk-agent --password SECRET    set the password (6 characters or more)
-    rustdesk-agent --show-id            the ID a peer connects to
-    rustdesk-agent --show-key           the public key a peer can pin
+    rdeskvint --password SECRET    set the password (6 characters or more)
+    rdeskvint --show-id            the ID a peer connects to
+    rdeskvint --show-key           the public key a peer can pin
 
 That is a complete direct-IP setup. Run it, connect a peer to this machine's
 address on port 21118, give the password.
 
 Optional, persisted, and independent of one another:
 
-    rustdesk-agent --server HOST        register with a rendezvous server, so
+    rdeskvint --server HOST        register with a rendezvous server, so
                                         the machine is reachable by ID from
                                         anywhere rather than by IP on this LAN
-    rustdesk-agent --key KEY            the server's key; only needed if the
+    rdeskvint --key KEY            the server's key; only needed if the
                                         relay was started with -k
-    rustdesk-agent --api-server URL     report in to a console, so the machine
+    rdeskvint --api-server URL     report in to a console, so the machine
                                         appears in its device list
-    rustdesk-agent --ca-bundle PATH     certificates, for a console behind a
+    rdeskvint --ca-bundle PATH     certificates, for a console behind a
                                         private CA
 
 --server makes the machine REACHABLE. --api-server makes it VISIBLE. Neither
 implies the other. Each has a --no-... form that switches it back off.
 
-    rustdesk-agent --listen ADDR --port N     default 0.0.0.0:21118
-    rustdesk-agent --log debug                or --log trace, to watch a
+    rdeskvint --listen ADDR --port N     default 0.0.0.0:21118
+    rdeskvint --log debug                or --log trace, to watch a
                                               handshake message by message
 
 --secure requires a signed-identity exchange and is OFF by default. Leave it
 off for direct-IP connections: a client connecting by address does not take
 part in that exchange, and turning it on deadlocks the handshake.
+
+
+POINTING IT AT A CORTENDESK SERVER
+----------------------------------
+
+Two switches, doing two different jobs. You almost certainly want both.
+
+    rdeskvint --server hbbs.example.org
+    rdeskvint --api-server https://console.example.org
+
+--server registers with hbbs and makes the machine REACHABLE by ID from
+anywhere, rather than by IP on this LAN. HOST or HOST:PORT; the default port is
+21116.
+
+--api-server points at the console's HTTP API and makes the machine VISIBLE in
+its device list. A bare host means https -- assuming http would silently
+downgrade a console reachable over TLS and say nothing. CortenDesk's container
+port is 8080, so a local deployment is usually:
+
+    rdeskvint --api-server http://192.168.1.10:8080
+
+Neither implies the other, and this is the trap worth knowing: the console
+builds its device list from that HTTP API and NOT from hbbs registration. An
+agent given only --server registers perfectly, is connectable by ID, and appears
+in no list at all -- which from the console looks exactly like an agent that
+does not work.
+
+Both settings are saved, so they apply on every start from then on.
+--no-server and --no-api-server switch them back off, separately.
+
+    rdeskvint --key '<base64>'
+
+is the server key, and is needed only when the RELAY (hbbr) was started with
+-k. It goes into RequestRelay.licence_key, and a keyed relay drops a request
+whose key does not match by simply returning -- so the symptom is a caller
+waiting forever on a relay the agent appears never to have joined, with no error
+anywhere. An unkeyed hbbr, which is the common self-hosted case, ignores it.
+Note that hbbs is keyed even without -k because it generates id_ed25519 for
+itself, while hbbr has no such fallback: the two are configured separately.
+
+The CLIENT needs that same key -- the server's id_ed25519.pub -- in
+Settings -> Network -> ID/Relay Server, exactly as for any other peer. The ID
+from `rdeskvint --show-id` goes in the ID field.
+
+    rdeskvint --ca-bundle /path/to/ca.pem
+
+if the console is behind a private CA. Empty is the default and searches the
+usual places.
+
+Two things about sessions through a server:
+
+  * They are ALWAYS encrypted, whatever --secure says. A peer arriving via the
+    server takes part in the signed_id/public_key exchange; --secure only ever
+    concerned the direct-IP listener, where nobody does.
+
+  * A caller on the same subnet is handed our address and connects directly;
+    anyone else meets us at the relay. There is no hole punching.
 
 LAN discovery answers broadcasts on udp/21119, so the machine turns up in a
 client's local-network list by hostname without any of the above.
@@ -144,7 +201,7 @@ Two things about the framebuffer itself, on an XVR-600:
 CHECKING IT
 -----------
 
-    rustdesk-agent --probe-display
+    rdeskvint --probe-display
 
 reports what the framebuffer looks like and times the capture, conversion and
 encode path with no networking involved. It runs a full VP8 tuning sweep, so

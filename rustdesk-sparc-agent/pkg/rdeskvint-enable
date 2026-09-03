@@ -65,7 +65,7 @@ while [ $# -gt 0 ]; do
 done
 
 id | grep 'uid=0(' > /dev/null 2>&1 || die "run this as root."
-[ -x "$BASEDIR/bin/rustdesk-agent" ] || die "no agent at $BASEDIR/bin/rustdesk-agent"
+[ -x "$BASEDIR/bin/rdeskvint" ] || die "no agent at $BASEDIR/bin/rdeskvint"
 
 # A password has to exist before any of this is worth switching on: without one
 # the agent starts and then refuses every peer, which looks like a broken
@@ -78,7 +78,7 @@ warn_if_unconfigured() {
 		echo "NOTE: $1 has no ~/.rustdesk-ppc-agent.conf yet, so no password is set."
 		echo "      Run this as $1 before expecting a peer to connect:"
 		echo ""
-		echo "          $BASEDIR/bin/rustdesk-agent --password SECRET"
+		echo "          $BASEDIR/bin/rdeskvint --password SECRET"
 		echo ""
 	fi
 }

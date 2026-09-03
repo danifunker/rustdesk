@@ -53,7 +53,7 @@ if [ "$DO_BUILD" = 1 ]; then
     "$HERE/scripts/build-sol9.sh"
 fi
 
-[ -x "$OUT/rustdesk-agent" ] || die "no agent at $OUT/rustdesk-agent -- build first"
+[ -x "$OUT/rdeskvint" ] || die "no agent at $OUT/rdeskvint -- build first"
 
 # libgcc_s.so.1 comes out of whichever toolchain built the binary; the container
 # and the native toolchain hold the same one.
@@ -65,7 +65,7 @@ STAGE="$HERE/target/pkgstage"
 rm -rf "$STAGE"
 mkdir -p "$STAGE/root/bin" "$STAGE/root/lib" "$STAGE/root/doc"
 
-cp "$OUT/rustdesk-agent"                "$STAGE/root/bin/"
+cp "$OUT/rdeskvint"                "$STAGE/root/bin/"
 cp "$HERE/pkg/rdeskvint-enable"         "$STAGE/root/bin/"
 cp "$HERE/pkg/rdeskvint-disable"        "$STAGE/root/bin/"
 cp "$HERE/scripts/sol9-console-test.sh" "$STAGE/root/bin/rdeskvint-console-test"
@@ -79,7 +79,7 @@ chmod 755 "$STAGE/root/bin/"* "$STAGE/postinstall" "$STAGE/preremove" "$STAGE/po
 
 # Strip: the binary is 13 MB of which most is debug information that no Solaris
 # 9 machine has a debugger for anyway.
-"$TOOLCHAIN/opt/bin/$TARGET-strip" "$STAGE/root/bin/rustdesk-agent" 2>/dev/null || true
+"$TOOLCHAIN/opt/bin/$TARGET-strip" "$STAGE/root/bin/rdeskvint" 2>/dev/null || true
 
 sed -e "s|@VERSION@|$VERSION|" \
     -e "s|@PSTAMP@|$(date -u +%Y%m%d%H%M%S)|" \

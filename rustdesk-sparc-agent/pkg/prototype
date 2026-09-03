@@ -15,7 +15,7 @@ i preremove
 i postremove
 #
 d none bin 0755 root bin
-f none bin/rustdesk-agent 0755 root bin
+f none bin/rdeskvint 0755 root bin
 f none bin/rdeskvint-enable 0755 root bin
 f none bin/rdeskvint-disable 0755 root bin
 f none bin/rdeskvint-console-test 0755 root bin

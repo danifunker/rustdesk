@@ -57,7 +57,7 @@ Then:
 ./scripts/build-sol9.sh
 ```
 
-The binaries land in `target/sparcv9-sun-solaris2.9/`: `rustdesk-agent` itself,
+The binaries land in `target/sparcv9-sun-solaris2.9/`: `rdeskvint` itself,
 plus `testpeer`, `captest`, `prototest` and `convtest`. Every path the script
 needs can be overridden by an environment variable of the same name — read its
 header.
@@ -116,10 +116,10 @@ Two things the package does deliberately:
 Or install by hand, if you would rather see exactly what lands where:
 
 ```sh
-scp target/sparcv9-sun-solaris2.9/rustdesk-agent HOST:/tmp/
+scp target/sparcv9-sun-solaris2.9/rdeskvint HOST:/tmp/
 ssh HOST 'sudo mkdir -p /usr/local/bin \
-       && sudo cp /tmp/rustdesk-agent /usr/local/bin/ \
-       && sudo chmod 755 /usr/local/bin/rustdesk-agent'
+       && sudo cp /tmp/rdeskvint /usr/local/bin/ \
+       && sudo chmod 755 /usr/local/bin/rdeskvint'
 ```
 
 in which case `libgcc_s.so.1` has to go somewhere the runtime linker looks —
@@ -153,15 +153,15 @@ secret half is why the mode matters. It is created on first use. Everything is
 set through the binary rather than by editing the file:
 
 ```sh
-rustdesk-agent --password SECRET     # at least 6 characters. Required.
-rustdesk-agent --show-id             # the 9-character agent ID
-rustdesk-agent --show-key            # the public key a peer needs
+rdeskvint --password SECRET     # at least 6 characters. Required.
+rdeskvint --show-id             # the 9-character agent ID
+rdeskvint --show-key            # the public key a peer needs
 ```
 
 That is the whole of a direct-IP setup. Then just:
 
 ```sh
-DISPLAY=:0 rustdesk-agent --log info
+DISPLAY=:0 rdeskvint --log info
 ```
 
 It listens on `0.0.0.0:21118` (`--listen`, `--port`) and answers LAN-discovery
@@ -171,10 +171,10 @@ hostname.
 **Optional, and independent of each other:**
 
 ```sh
-rustdesk-agent --server HOST         # register with a rendezvous server, so the
+rdeskvint --server HOST         # register with a rendezvous server, so the
                                      # machine is reachable by ID from anywhere
-rustdesk-agent --key KEY             # only if the relay was started with -k
-rustdesk-agent --api-server URL      # report in to a console, so the machine
+rdeskvint --key KEY             # only if the relay was started with -k
+rdeskvint --api-server URL      # report in to a console, so the machine
                                      # appears in its device list
 ```
 
@@ -188,6 +188,41 @@ deadlocks the handshake.
 
 `--log debug` (`-v`) or `--log trace` (`-vv`) prints every message and frame,
 which is the fastest way to find where a client diverges.
+
+### Against a CortenDesk server
+
+Two switches doing two different jobs, and you almost certainly want both:
+
+```sh
+rdeskvint --server hbbs.example.org                   # reachable by ID (port 21116)
+rdeskvint --api-server https://console.example.org    # visible in the device list
+rdeskvint --api-server http://192.168.1.10:8080       # CortenDesk's container port
+```
+
+`--server` registers with hbbs. `--api-server` points at the console's HTTP API;
+a bare host means `https`, since assuming `http` would silently downgrade a
+console reachable over TLS and say nothing.
+
+The trap is that the console builds its device list from that HTTP API and *not*
+from hbbs registration. An agent given only `--server` registers perfectly, is
+connectable by ID, and appears in no list at all — which from the console is
+indistinguishable from an agent that does not work. Both settings are persisted;
+`--no-server` and `--no-api-server` switch them off separately.
+
+`--key '<base64>'` is needed only when the **relay** (hbbr) was started with
+`-k`. A keyed relay drops a mismatched request by simply returning, so the
+symptom is a caller waiting forever on a relay the agent never appears to have
+joined, with no error anywhere. hbbs is keyed even without `-k` because it
+generates `id_ed25519` for itself; hbbr has no such fallback, and the two are
+configured separately. The client needs that same key — the server's
+`id_ed25519.pub` — in Settings → Network → ID/Relay Server, with the ID from
+`rdeskvint --show-id` in the ID field.
+
+Sessions through a server are **always encrypted**, whatever `--secure` says: a
+peer arriving that way takes part in the signed-identity exchange, which is the
+thing `--secure` exists to demand of direct-IP callers who cannot. A caller on
+the same subnet is handed our address and connects directly; anyone else meets
+us at the relay. There is no hole punching.
 
 ## 4. The display, which is the hard part on this machine
 

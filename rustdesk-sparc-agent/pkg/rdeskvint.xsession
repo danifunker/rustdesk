@@ -14,6 +14,6 @@
 # it here rather than from an rc script: it sees the session it is sharing, and
 # input it injects arrives as that user.
 
-if [ -x @BASEDIR@/bin/rustdesk-agent ]; then
-	@BASEDIR@/bin/rustdesk-agent --log info >> "$HOME/.rdeskvint.log" 2>&1 &
+if [ -x @BASEDIR@/bin/rdeskvint ]; then
+	@BASEDIR@/bin/rdeskvint --log info >> "$HOME/.rdeskvint.log" 2>&1 &
 fi

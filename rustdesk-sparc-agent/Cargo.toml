@@ -27,8 +27,14 @@ path = "src/lib.rs"
 # The agent itself, built straight from the PowerPC tree's main.rs -- the CLI,
 # the session loop and the configuration are shared, and the platform layer
 # under them is this directory's.
+#
+# `rdeskvint` rather than `rustdesk-agent`, unlike the PowerPC and IRIX ports.
+# Those two ship the older name because installs of them already exist and refer
+# to it -- a LaunchAgent label, an inst file list. This port's package is new, so
+# there is nothing to keep compatible and the binary can simply be called what
+# the product is called. The config file is shared code and stays put.
 [[bin]]
-name = "rustdesk-agent"
+name = "rdeskvint"
 path = "../rustdesk-ppc-agent/src/main.rs"
 
 # A client that speaks the real protocol, so the agent can be proved end to end

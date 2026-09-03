@@ -41,9 +41,9 @@ if [ -x "$INIT_SCRIPT" ]; then
 	"$INIT_SCRIPT" stop > /dev/null 2>&1
 fi
 
-# By exact name. `pkill -f rustdesk-agent` would match this script's own
+# By exact name. `pkill -f rdeskvint` would match this script's own
 # command line when it is run from a directory with that name in it, and has.
-pkill -x rustdesk-agent > /dev/null 2>&1
+pkill -x rdeskvint > /dev/null 2>&1
 
 removed=0
 if [ -f "$XSESSION_HOOK" ]; then

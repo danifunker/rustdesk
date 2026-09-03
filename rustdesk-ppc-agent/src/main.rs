@@ -1,4 +1,5 @@
-//! `rustdesk-agent` — the controlled side, for PowerPC Mac OS X 10.4/10.5.
+//! The agent — the controlled side. Shared by every port: PowerPC Mac OS X,
+//! IRIX and SPARC Solaris all build this file over their own platform layer.
 //!
 //! Direct-IP only: a peer connects to this machine's address and port, so no
 //! rendezvous/ID server is needed. Its identity is the Ed25519 public key
@@ -27,21 +28,33 @@ const PLATFORM: &str = "SPARC Solaris";
 #[cfg(not(any(target_os = "macos", target_os = "irix", target_os = "solaris")))]
 const PLATFORM: &str = "this host";
 
+/// argv[0] with its directory stripped. The binary is `rustdesk-agent` on the
+/// PowerPC and IRIX ports and `rdeskvint` in the Solaris package, so a usage
+/// message that names one of them is wrong for the other. Ask the kernel.
+fn program() -> String {
+    std::env::args()
+        .next()
+        .map(|a| a.rsplit('/').next().unwrap_or("").to_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "rustdesk-agent".to_owned())
+}
+
 fn usage() -> ! {
+    let p = program();
     eprintln!(
-        "rustdesk-agent {} — {} agent for {}
+        "{0} {1} — {2} agent for {3}
 
 USAGE:
-    rustdesk-agent [--listen ADDR] [--port N]
-    rustdesk-agent --password PASS
-    rustdesk-agent --show-id | --show-key
-    rustdesk-agent --server HOST | --no-server
-    rustdesk-agent --api-server URL | --no-api-server
-    rustdesk-agent --probe-display
+    {0} [--listen ADDR] [--port N]
+    {0} --password PASS
+    {0} --show-id | --show-key
+    {0} --server HOST | --no-server
+    {0} --api-server URL | --no-api-server
+    {0} --probe-display
 
 OPTIONS:
     --listen ADDR    bind address (default 0.0.0.0)
-    --port N         bind port (default {})
+    --port N         bind port (default {4})
     --password PASS  set the permanent password and exit
     --show-id        print this machine's agent ID and exit
     --show-key       print the public key a peer needs, and exit
@@ -79,6 +92,7 @@ OPTIONS:
 
 Use --log trace to see every frame and message during a handshake; that is the
 fastest way to find where a client diverges.",
+        p,
         env!("CARGO_PKG_VERSION"),
         PRODUCT,
         PLATFORM,
@@ -339,7 +353,8 @@ fn main() {
     if cfg.password().is_empty() {
         eprintln!(
             "error: no password set. The agent will not accept connections without one.\n\
-             \n    rustdesk-agent --password <PASSWORD>\n"
+             \n    {} --password <PASSWORD>\n",
+            program()
         );
         exit(1);
     }
