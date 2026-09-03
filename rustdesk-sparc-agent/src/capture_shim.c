@@ -55,6 +55,7 @@ struct rd_capture {
     int             width, height, depth;
     int             path;
     int             order;
+    int             swap_rb;    /* server hands back B and R the other way round */
     int             cursor_embedded;
     int             dead;
 
@@ -158,16 +159,42 @@ static int rd_debug(void)
 
 /* Which order 32-bit pixels land in memory, from the server's own answer
  * rather than from an assumption about the machine. */
-static int pixel_order_of(const XImage *im, int *out)
+static int pixel_order_of(const XImage *im, int *out, int *swap_rb)
 {
     if (im->bits_per_pixel != 32)
         return -1;
-    if (im->red_mask == 0x00ff0000 && im->green_mask == 0x0000ff00 &&
-        im->blue_mask == 0x000000ff) {
+    if (im->green_mask != 0x0000ff00)
+        return -1;
+    if (im->red_mask == 0x00ff0000 && im->blue_mask == 0x000000ff) {
+        *swap_rb = 0;
+        *out = (im->byte_order == MSBFirst) ? RD_ORDER_ARGB : RD_ORDER_BGRA;
+        return 0;
+    }
+    /* The other way round, which is what Solaris' Xsun reports for the XVR-600:
+     * every TrueColor visual it offers has red in the low byte. Rather than
+     * teach the whole conversion chain a third order, swap the two channels as
+     * the canvas is filled and report the order everything downstream expects.
+     * The Solaris 10 port never saw this because it ran against Xvfb. */
+    if (im->red_mask == 0x000000ff && im->blue_mask == 0x00ff0000) {
+        *swap_rb = 1;
         *out = (im->byte_order == MSBFirst) ? RD_ORDER_ARGB : RD_ORDER_BGRA;
         return 0;
     }
     return -1;
+}
+
+/* Exchange the two colour channels either side of green, in place. */
+static void swap_rb_rect(rd_capture *c, int x, int y, int w, int h)
+{
+    int row, col;
+    for (row = 0; row < h; row++) {
+        unsigned char *p = c->buf + (size_t)(y + row) * c->stride + (size_t)x * 4;
+        for (col = 0; col < w; col++, p += 4) {
+            unsigned char t = p[1];
+            p[1] = p[3];
+            p[3] = t;
+        }
+    }
 }
 
 static int alloc_shm_canvas(rd_capture *c)
@@ -279,7 +306,7 @@ static rd_capture *open_common(const char *display, int max_path)
                 g_x_err_count ? g_last_x_err : "no reason given");
         return c;
     }
-    if (pixel_order_of(probe, &order) != 0) {
+    if (pixel_order_of(probe, &order, &c->swap_rb) != 0) {
         err_set(c, "unsupported pixel format: depth %d, %d bpp, masks R=%08lx G=%08lx B=%08lx",
                 probe->depth, probe->bits_per_pixel,
                 probe->red_mask, probe->green_mask, probe->blue_mask);
@@ -398,6 +425,8 @@ static void blit_image(rd_capture *c, XImage *im, int x, int y)
                im->data + (size_t)row * im->bytes_per_line,
                (size_t)bytes);
     }
+    if (c->swap_rb)
+        swap_rb_rect(c, x, y, im->width, im->height);
 }
 
 static int full_getimage(rd_capture *c)
@@ -432,6 +461,9 @@ int rd_capture_full(rd_capture *c)
             XSync(c->dpy, False);
             rc = g_x_err_count ? -1 : 0;
             if (rc != 0) err_set(c, "XShmGetImage: %s", g_last_x_err);
+            /* Nothing copied this one: the segment is the canvas. */
+            if (rc == 0 && c->swap_rb)
+                swap_rb_rect(c, 0, 0, c->width, c->height);
         }
     } else {
         rc = full_getimage(c);
