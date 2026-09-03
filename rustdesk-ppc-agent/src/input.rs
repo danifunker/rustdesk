@@ -45,10 +45,11 @@ extern "C" {
     fn rd_key_with_flags(keycode: c_int, down: c_int, flags: c_uint);
     /// A keycode in the keyspace of the platform we *told the peer we are*,
     /// which is not the same as a Mac virtual keycode anywhere but the Mac.
-    /// Only the Solaris shim has one; see `KeyAction::PlatformKeycode`.
-    #[cfg(target_os = "solaris")]
+    /// Both X11 ports report "Linux" and so both have one; see
+    /// `KeyAction::PlatformKeycode` and `linux_keycodes.h`.
+    #[cfg(any(target_os = "solaris", target_os = "irix"))]
     fn rd_key_platform(keycode: c_int, down: c_int);
-    #[cfg(target_os = "solaris")]
+    #[cfg(any(target_os = "solaris", target_os = "irix"))]
     fn rd_key_platform_with_flags(keycode: c_int, down: c_int, flags: c_uint);
     fn rd_cursor_pos(x: *mut c_double, y: *mut c_double);
 }
@@ -567,12 +568,13 @@ impl Injector {
                     }
                 }
                 KeyAction::PlatformKeycode { code, down, flags, then_up } => {
-                    // Only Solaris translates: it reports "Linux" and runs on a
-                    // Sun keymap, so the two genuinely differ. On the Mac the
-                    // reported platform *is* the Mac, and IRIX has never had
-                    // this looked at on hardware -- so both keep the old path
-                    // rather than being changed blind.
-                    #[cfg(target_os = "solaris")]
+                    // Both X11 ports translate: each reports "Linux" while
+                    // running on a keymap that is not a PC's -- Sun on one, SGI
+                    // on the other -- so the incoming keycode means something
+                    // else locally. On the Mac the reported platform *is* the
+                    // Mac and a Map-mode keycode really is a Mac keycode, so
+                    // that path is unchanged.
+                    #[cfg(any(target_os = "solaris", target_os = "irix"))]
                     {
                         if flags != 0 {
                             rd_key_platform_with_flags(code, d(down), flags);
@@ -583,7 +585,7 @@ impl Injector {
                             rd_key_platform(code, 0);
                         }
                     }
-                    #[cfg(not(target_os = "solaris"))]
+                    #[cfg(not(any(target_os = "solaris", target_os = "irix")))]
                     {
                         if flags != 0 {
                             rd_key_with_flags(code, d(down), flags);

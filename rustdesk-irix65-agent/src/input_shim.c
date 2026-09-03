@@ -34,6 +34,9 @@
 #include <X11/Xlibint.h>
 #include <X11/Xproto.h>
 #include <X11/keysym.h>
+/* See the header: this port reports "Linux" too, so a Map-mode keycode from a
+ * client is an X11/evdev keycode and not a Mac virtual keycode. */
+#include "../../rustdesk-ppc-agent/src/linux_keycodes.h"
 #include <X11/extensions/XTest.h>
 
 /*
@@ -395,6 +398,31 @@ void rd_key(int keycode, int down)
         return;
     }
     press_keysym(sym, down);
+}
+
+/* A keycode from the platform the agent told the peer it was -- Linux -- rather
+ * than a Mac virtual keycode. Decode to a keysym and let press_keysym find
+ * whatever keycode this server actually uses for it. */
+void rd_key_platform(int keycode, int down)
+{
+    KeySym sym = rd_linux_to_keysym(keycode);
+    if (sym == NoSymbol) {
+        fprintf(stderr, "input: no keysym for X11 keycode %d\n", keycode);
+        return;
+    }
+    press_keysym(sym, down);
+}
+
+void rd_key_platform_with_flags(int keycode, int down, unsigned int flags)
+{
+    if (down) {
+        if (flags)
+            mods_down(flags);
+        rd_key_platform(keycode, 1);
+    } else {
+        rd_key_platform(keycode, 0);
+        mods_up();
+    }
 }
 
 void rd_key_with_flags(int keycode, int down, unsigned int flags)

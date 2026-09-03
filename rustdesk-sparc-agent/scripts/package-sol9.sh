@@ -116,6 +116,68 @@ if [ "$DO_INSTALL" = 1 ]; then
 fi
 
 ssh "$SOL9_HOST" "rm -rf $REMOTE"
+
+# The manifest and checksums a release carries, in the shape the PowerPC
+# release uses -- including what was and was not verified, because a package
+# that does not say which is a package whose claims cannot be checked.
+SHA=$(sha256sum "$DIST/$PKGFILE" | cut -d" " -f1)
+SIZE=$(du -h "$DIST/$PKGFILE" | cut -f1)
+( cd "$DIST" && sha256sum "$PKGFILE" > SHA256SUMS )
+
+cat > "$DIST/MANIFEST.txt" <<MAN
+rustdesk-sparc-agent (R-DeskVint) $VERSION
+commit:   $(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo unknown)
+built:    $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+builder:  $(uname -srm), C cross-compiled with $TARGET-gcc $("$TOOLCHAIN/opt/bin/$TARGET-gcc" -dumpversion 2>/dev/null)
+packaged: pkgmk/pkgtrans on $SOL9_HOST
+
+Package -- the download to hand someone
+---------------------------------------
+  $PKGFILE
+      for:        64-bit SPARC, Solaris 9 and later
+      size:       $SIZE
+      sha256:     $SHA
+
+Install
+-------
+  pkgadd -d $PKGFILE RDVTagent
+
+  Everything lands under /opt/rdeskvint and NOTHING starts: no daemon, no
+  rc script, nothing disabled. Then, as the account that will be logged in
+  at the console:
+
+      rdeskvint --password SECRET
+      rdeskvint-session start
+
+  /opt/rdeskvint/bin/rdeskvint-enable wires it into startup, and
+  rdeskvint-disable takes it back out. pkgrm RDVTagent removes the lot and
+  un-wires startup first, so it cannot leave the machine without a login
+  manager. Full instructions ship at /opt/rdeskvint/doc/README.txt.
+
+Verified for this build, on a Sun Blade 2500 running Solaris 9
+--------------------------------------------------------------
+  * pkgadd, pkginfo, enable, disable and pkgrm round trip, with pkgrm
+    leaving nothing behind
+  * the packaged binary serves video to a client speaking the real
+    protocol, at 1280x1024 on the console framebuffer
+  * registers with hbbs and appears in a console's device list
+  * keyboard and mouse injection, after the Map-mode keycode fix
+  * the private libgcc_s.so.1 resolves through the binary's rpath with
+    the system copy moved out of the way -- so the package is
+    self-contained, which is the whole point of shipping it
+
+Not verified
+------------
+  * Solaris 10 and later. This is linked against Solaris 9 and Sun's
+    forward compatibility is documented, but there is no Solaris 10
+    machine here to test it on. DAMAGE and XFIXES are compiled out
+    because Solaris 9 has neither, so a Solaris 10 host would not use
+    them even though it has them.
+  * The relay path from outside the LAN, and a keyed relay: no external
+    caller and no hbbr started with -k was available.
+  * IRIX shares the keycode fix in this build and has not been run.
+MAN
+
 echo
-echo "==> $DIST/$PKGFILE"
-ls -l "$DIST/$PKGFILE"
+echo "==> $DIST"
+ls -l "$DIST/$PKGFILE" "$DIST/MANIFEST.txt" "$DIST/SHA256SUMS"
