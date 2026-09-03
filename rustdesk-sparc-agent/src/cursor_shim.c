@@ -25,7 +25,20 @@
 #include <string.h>
 
 #include <X11/Xlib.h>
+#if RD_HAVE_XFIXES
 #include <X11/extensions/Xfixes.h>
+#else
+/* Solaris 9 has no XFIXES either. fetch() returns NULL once the extension probe
+ * reports absent, so the pointer keeps whatever shape the peer last had. */
+typedef struct {
+    short x, y;
+    unsigned short width, height, xhot, yhot;
+    unsigned long cursor_serial;
+    unsigned long *pixels;
+} XFixesCursorImage;
+#define XFixesQueryExtension(dpy, ev, er)  (0)
+#define XFixesGetCursorImage(dpy)          ((XFixesCursorImage *)0)
+#endif
 
 static Display          *g_dpy;
 static int               g_have_xfixes;

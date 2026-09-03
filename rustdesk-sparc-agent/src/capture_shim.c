@@ -19,7 +19,22 @@
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/extensions/XShm.h>
+#if RD_HAVE_XDAMAGE
 #include <X11/extensions/Xdamage.h>
+#else
+/* Solaris 9 has no DAMAGE: Xsun does not advertise the extension and there is no
+ * client library to link against. Everything below already copes with damage
+ * being unusable -- rd_capture_poll compares canvases instead -- so report the
+ * extension absent and let that path run. These exist only to compile. */
+typedef unsigned long Damage;
+typedef struct { XRectangle area; } XDamageNotifyEvent;
+#define XDamageReportRawRectangles          0
+#define XDamageNotify                       0
+#define XDamageQueryExtension(dpy, ev, er)  (0)
+#define XDamageCreate(dpy, d, level)        ((Damage)0)
+#define XDamageDestroy(dpy, dmg)            ((void)0)
+#define XDamageSubtract(dpy, dmg, r1, r2)   ((void)0)
+#endif
 
 #define MAX_ERR      256
 /* Damage rectangles held between polls. Past this they merge into their

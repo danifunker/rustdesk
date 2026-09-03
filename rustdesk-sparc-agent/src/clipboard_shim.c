@@ -37,7 +37,17 @@
 
 #include <X11/Xlib.h>
 #include <X11/Xatom.h>
+#if RD_HAVE_XFIXES
 #include <X11/extensions/Xfixes.h>
+#else
+/* Solaris 9 has no XFIXES, so there is no selection-owner notification to
+ * subscribe to. g_have_xfixes stays 0 and the poll path below carries the
+ * clipboard on its own; these exist only to compile. */
+#define XFixesQueryExtension(dpy, ev, er)               (0)
+#define XFixesSelectSelectionInput(dpy, w, sel, mask)   ((void)0)
+#define XFixesSetSelectionOwnerNotifyMask               0
+#define XFixesSelectionNotify                           0
+#endif
 
 #define CLIP_WAIT_MS  200        /* how long an owner gets to answer */
 #define CLIP_MAX      (256 * 1024)

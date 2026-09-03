@@ -21,6 +21,13 @@ fn main() {
     let sfw_lib = std::env::var("X11_SFW_LIB_DIR")
         .unwrap_or_else(|_| "/usr/openwin/sfw/lib/sparcv9".to_owned());
 
+    // Solaris 9's Xsun advertises neither DAMAGE nor XFIXES, and neither client
+    // library exists there. The shims carry stubs for that case; both already
+    // probe at runtime, so only the compile and the link need to know.
+    let has = |h: &str| std::path::Path::new(&x11_inc).join("X11/extensions").join(h).exists();
+    let have_xdamage = has("Xdamage.h");
+    let have_xfixes = has("Xfixes.h");
+
     // One archive per shim, so a link error names the half it came from.
     for shim in &["capture_shim", "input_shim", "cursor_shim", "clipboard_shim",
                   "compat_shim"] {
@@ -28,6 +35,8 @@ fn main() {
         cc::Build::new()
             .file(format!("src/{}.c", shim))
             .include(&x11_inc)
+            .define("RD_HAVE_XDAMAGE", if have_xdamage { "1" } else { "0" })
+            .define("RD_HAVE_XFIXES", if have_xfixes { "1" } else { "0" })
             .opt_level(2)
             .compile(shim);
     }
@@ -80,8 +89,12 @@ fn main() {
     println!("cargo:rustc-link-search=native={}", x11_lib);
     println!("cargo:rustc-link-search=native={}", sfw_lib);
     println!("cargo:rustc-link-lib=Xext");      // MIT-SHM, for capture
-    println!("cargo:rustc-link-lib=Xdamage");   // change reporting
+    if have_xdamage {
+        println!("cargo:rustc-link-lib=Xdamage");   // change reporting
+    }
     println!("cargo:rustc-link-lib=Xtst");      // XTEST, for injection
-    println!("cargo:rustc-link-lib=Xfixes");    // the pointer's real shape
+    if have_xfixes {
+        println!("cargo:rustc-link-lib=Xfixes");    // the pointer's real shape
+    }
     println!("cargo:rustc-link-lib=X11");
 }
