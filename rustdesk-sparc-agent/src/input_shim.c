@@ -161,6 +161,73 @@ static KeySym mac_to_keysym(int mac)
     return NoSymbol;
 }
 
+/* --- Linux X11 keycodes --------------------------------------------------
+ *
+ * A client in Map mode sends a keycode already translated for the platform the
+ * agent reported, and this agent reports "Linux" -- deliberately, because
+ * clients match that string against a known set and Linux is the entry whose
+ * key handling is right for an X11 desktop. So what arrives is a keycode from
+ * the standard X11/evdev keymap, which is NOT what this machine uses: Xsun on a
+ * Sun keyboard numbers its keys differently, and 38 is `a` on Linux while being
+ * something else entirely here.
+ *
+ * Posting the number straight through would therefore type the wrong key, and
+ * feeding it to `mac_to_keysym` -- which is what happened before this table
+ * existed -- types nothing at all and logs "no keysym for Mac keycode 38".
+ * Mouse and Enter kept working throughout, because neither goes this way:
+ * `control_key` carries its own keycodes and the pointer has no keymap.
+ *
+ * So: decode to a keysym here, and let `press_keysym` find whatever keycode
+ * this server uses for it. The table is the US layout's base symbols; shifted
+ * characters arrive as modifiers alongside, which `rd_key_platform_with_flags`
+ * applies separately.
+ */
+static const struct { int code; KeySym sym; } LINUXKEY[] = {
+    {   9, XK_Escape },
+    {  10, XK_1 }, {  11, XK_2 }, {  12, XK_3 }, {  13, XK_4 }, {  14, XK_5 },
+    {  15, XK_6 }, {  16, XK_7 }, {  17, XK_8 }, {  18, XK_9 }, {  19, XK_0 },
+    {  20, XK_minus }, {  21, XK_equal }, {  22, XK_BackSpace }, {  23, XK_Tab },
+    {  24, XK_q }, {  25, XK_w }, {  26, XK_e }, {  27, XK_r }, {  28, XK_t },
+    {  29, XK_y }, {  30, XK_u }, {  31, XK_i }, {  32, XK_o }, {  33, XK_p },
+    {  34, XK_bracketleft }, {  35, XK_bracketright },
+    {  36, XK_Return }, {  37, XK_Control_L },
+    {  38, XK_a }, {  39, XK_s }, {  40, XK_d }, {  41, XK_f }, {  42, XK_g },
+    {  43, XK_h }, {  44, XK_j }, {  45, XK_k }, {  46, XK_l },
+    {  47, XK_semicolon }, {  48, XK_apostrophe }, {  49, XK_grave },
+    {  50, XK_Shift_L }, {  51, XK_backslash },
+    {  52, XK_z }, {  53, XK_x }, {  54, XK_c }, {  55, XK_v }, {  56, XK_b },
+    {  57, XK_n }, {  58, XK_m },
+    {  59, XK_comma }, {  60, XK_period }, {  61, XK_slash },
+    {  62, XK_Shift_R }, {  63, XK_KP_Multiply }, {  64, XK_Alt_L },
+    {  65, XK_space }, {  66, XK_Caps_Lock },
+    {  67, XK_F1 }, {  68, XK_F2 }, {  69, XK_F3 }, {  70, XK_F4 },
+    {  71, XK_F5 }, {  72, XK_F6 }, {  73, XK_F7 }, {  74, XK_F8 },
+    {  75, XK_F9 }, {  76, XK_F10 },
+    {  77, XK_Num_Lock }, {  78, XK_Scroll_Lock },
+    {  79, XK_KP_7 }, {  80, XK_KP_8 }, {  81, XK_KP_9 }, {  82, XK_KP_Subtract },
+    {  83, XK_KP_4 }, {  84, XK_KP_5 }, {  85, XK_KP_6 }, {  86, XK_KP_Add },
+    {  87, XK_KP_1 }, {  88, XK_KP_2 }, {  89, XK_KP_3 }, {  90, XK_KP_0 },
+    {  91, XK_KP_Decimal },
+    {  94, XK_less }, {  95, XK_F11 }, {  96, XK_F12 },
+    { 104, XK_KP_Enter }, { 105, XK_Control_R }, { 106, XK_KP_Divide },
+    { 107, XK_Print }, { 108, XK_Alt_R },
+    { 110, XK_Home }, { 111, XK_Up }, { 112, XK_Prior }, { 113, XK_Left },
+    { 114, XK_Right }, { 115, XK_End }, { 116, XK_Down }, { 117, XK_Next },
+    { 118, XK_Insert }, { 119, XK_Delete },
+    { 127, XK_Pause },
+    { 133, XK_Super_L }, { 134, XK_Super_R }, { 135, XK_Menu },
+};
+#define NLINUXKEY ((int)(sizeof LINUXKEY / sizeof LINUXKEY[0]))
+
+static KeySym linux_to_keysym(int code)
+{
+    int i;
+    for (i = 0; i < NLINUXKEY; i++)
+        if (LINUXKEY[i].code == code)
+            return LINUXKEY[i].sym;
+    return NoSymbol;
+}
+
 /* A Unicode code point as an X keysym. Latin-1 is its own keysym; everything
  * else uses the 0x01000000 encoding every modern X server understands. */
 static KeySym unicode_to_keysym(unsigned int cp)
@@ -372,6 +439,30 @@ void rd_key(int keycode, int down)
         return;
     }
     press_keysym(sym, down);
+}
+
+/* A keycode from the platform the agent told the peer it was -- Linux -- rather
+ * than a Mac virtual keycode. See LINUXKEY. */
+void rd_key_platform(int keycode, int down)
+{
+    KeySym sym = linux_to_keysym(keycode);
+    if (sym == NoSymbol) {
+        fprintf(stderr, "input: no keysym for X11 keycode %d\n", keycode);
+        return;
+    }
+    press_keysym(sym, down);
+}
+
+void rd_key_platform_with_flags(int keycode, int down, unsigned int flags)
+{
+    if (down) {
+        if (flags)
+            mods_down(flags);
+        rd_key_platform(keycode, 1);
+    } else {
+        rd_key_platform(keycode, 0);
+        mods_up();
+    }
 }
 
 void rd_key_with_flags(int keycode, int down, unsigned int flags)

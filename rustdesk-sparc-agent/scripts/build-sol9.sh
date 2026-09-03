@@ -83,6 +83,28 @@ for d in "$STDLIB" "$DEPS/lib" "$VENDOR" "$X11_INCLUDE_DIR"; do
     [ -d "$d" ] || { echo "missing: $d -- see the header of this script" >&2; exit 1; }
 done
 
+# minicargo caches a build script's output and does not honour
+# cargo:rerun-if-changed, so an edited .c file otherwise links against a stale
+# archive and the change simply does not appear -- silently, with a successful
+# build. build-sparc.sh has carried this guard since the Solaris 10 port; this
+# script was written without it, which is exactly the kind of omission that
+# costs an afternoon of "the fix did not work" on a fix that was never compiled.
+#
+# Removing only the directory is not enough: minicargo decides whether to re-run
+# the script from the .txt beside it, so that goes too, and with it everything
+# built from the old archive.
+BUILD_MARK="$OUT/host/build_rustdesk-sparc-agent-0_1_0"
+for shim in "$HERE"/src/*.c "$HERE"/src/*.h; do
+    [ -e "$shim" ] || continue
+    if [ ! -d "$BUILD_MARK" ] || [ -n "$(find "$shim" -newer "$BUILD_MARK" 2>/dev/null)" ]; then
+        echo "shim changed ($(basename "$shim")) -- rebuilding the C shims"
+        rm -rf "$BUILD_MARK" "$BUILD_MARK.txt" \
+               "$OUT"/librustdesk_ppc_agent-*.rlib* \
+               "$OUT"/rdeskvint "$OUT"/captest "$OUT"/testpeer
+        break
+    fi
+done
+
 mkdir -p "$OUT"
 exec "$MRUSTC_DIR/bin/minicargo" "$HERE" \
     --vendor-dir "$VENDOR" \

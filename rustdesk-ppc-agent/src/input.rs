@@ -43,6 +43,13 @@ extern "C" {
     fn rd_key(keycode: c_int, down: c_int);
     fn rd_key_unicode(cp: c_uint, down: c_int);
     fn rd_key_with_flags(keycode: c_int, down: c_int, flags: c_uint);
+    /// A keycode in the keyspace of the platform we *told the peer we are*,
+    /// which is not the same as a Mac virtual keycode anywhere but the Mac.
+    /// Only the Solaris shim has one; see `KeyAction::PlatformKeycode`.
+    #[cfg(target_os = "solaris")]
+    fn rd_key_platform(keycode: c_int, down: c_int);
+    #[cfg(target_os = "solaris")]
+    fn rd_key_platform_with_flags(keycode: c_int, down: c_int, flags: c_uint);
     fn rd_cursor_pos(x: *mut c_double, y: *mut c_double);
 }
 
@@ -241,6 +248,14 @@ pub enum KeyAction {
     Unicode { cp: u32, down: bool, then_up: bool },
     /// A whole string, each character pressed and released.
     Seq(String),
+    /// A keycode in the keyspace of the platform reported to the peer.
+    ///
+    /// Distinct from `Keycode` because the two overlap and mean different
+    /// things: `control_key` resolves to Mac virtual keycodes, while a client
+    /// in Map mode sends whatever the platform we *claimed* uses. Mac 36 is
+    /// Return; Linux 36 is also Return, but Mac 38 is `l` and Linux 38 is `a`.
+    /// One number, two answers, so they cannot share a path.
+    PlatformKeycode { code: i32, down: bool, flags: u32, then_up: bool },
     /// A control key with no keycode on this platform.
     Unmapped,
     /// No key field set at all.
@@ -449,9 +464,10 @@ impl Injector {
             KeyboardMode::Map | KeyboardMode::Translate
         );
         match &ev.union {
-            // Already a keycode for this platform; post it as one.
+            // Already a keycode -- but for the platform this agent claims to
+            // be, which is only the same thing as a Mac keycode on the Mac.
             Some(key_event::Union::chr(c)) if mapped => {
-                KeyAction::Keycode { code: *c as i32, down, flags, then_up }
+                KeyAction::PlatformKeycode { code: *c as i32, down, flags, then_up }
             }
             Some(key_event::Union::control_key(ck)) => {
                 match control_key_to_keycode(ck.enum_value_or_default()) {
@@ -548,6 +564,35 @@ impl Injector {
                     }
                     if then_up {
                         rd_key(code, 0);
+                    }
+                }
+                KeyAction::PlatformKeycode { code, down, flags, then_up } => {
+                    // Only Solaris translates: it reports "Linux" and runs on a
+                    // Sun keymap, so the two genuinely differ. On the Mac the
+                    // reported platform *is* the Mac, and IRIX has never had
+                    // this looked at on hardware -- so both keep the old path
+                    // rather than being changed blind.
+                    #[cfg(target_os = "solaris")]
+                    {
+                        if flags != 0 {
+                            rd_key_platform_with_flags(code, d(down), flags);
+                        } else {
+                            rd_key_platform(code, d(down));
+                        }
+                        if then_up {
+                            rd_key_platform(code, 0);
+                        }
+                    }
+                    #[cfg(not(target_os = "solaris"))]
+                    {
+                        if flags != 0 {
+                            rd_key_with_flags(code, d(down), flags);
+                        } else {
+                            rd_key(code, d(down));
+                        }
+                        if then_up {
+                            rd_key(code, 0);
+                        }
                     }
                 }
                 KeyAction::Char { cp, down, flags, then_up } => {
@@ -1063,8 +1108,8 @@ mod tests {
         ev.mode = protobuf::ProtobufEnumOrUnknown::new(KeyboardMode::Map);
         assert_eq!(
             inj.decide_key(&ev),
-            KeyAction::Keycode { code: 116, down: true, flags: 0, then_up: false },
-            "in Map the client has already translated to a Mac keycode"
+            KeyAction::PlatformKeycode { code: 116, down: true, flags: 0, then_up: false },
+            "in Map the client sends a keycode for the platform we reported, which is a Mac keycode only on the Mac"
         );
     }
 
@@ -1079,7 +1124,7 @@ mod tests {
         ev.mode = protobuf::ProtobufEnumOrUnknown::new(KeyboardMode::Translate);
         assert_eq!(
             inj.decide_key(&ev),
-            KeyAction::Keycode { code: 49, down: true, flags: 0, then_up: false }
+            KeyAction::PlatformKeycode { code: 49, down: true, flags: 0, then_up: false }
         );
     }
 
