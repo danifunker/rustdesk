@@ -102,13 +102,13 @@ name_suffix() {
 make_dmg() {
     _arch="$1"; _tar="$2"
     case "$_arch" in
-        universal) _vol="Agent for RustDesk PPC" ;;
+        universal) _vol="R-DeskVint" ;;
         *) case "$ARCHES" in
-               *\ *) _vol="Agent for RustDesk PPC $(echo "$_arch" | tr a-z A-Z)" ;;
-               *)    _vol="Agent for RustDesk PPC" ;;
+               *\ *) _vol="R-DeskVint $(echo "$_arch" | tr a-z A-Z)" ;;
+               *)    _vol="R-DeskVint" ;;
            esac ;;
     esac
-    _dmg="$REL/Agent-for-RustDesk-PPC-$VERSION$(name_suffix "$_arch").dmg"
+    _dmg="$REL/R-DeskVint-PPC-$VERSION$(name_suffix "$_arch").dmg"
     echo "  building the disk image ..."
     ./deploy/make-dmg.sh "$_tar" "$_dmg" "$_vol" | sed 's/^/    /'
 }

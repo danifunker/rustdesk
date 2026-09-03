@@ -3,8 +3,8 @@
 # Build a drag-to-Applications disk image from a bundled .app.
 #
 #   ./deploy/make-dmg.sh target/rustdesk-agent-universal.tar.gz \
-#                        target/release/0.1.0/Agent-for-RustDesk-PPC-0.1.0-universal.dmg \
-#                        "Agent for RustDesk PPC"
+#                        target/release/1.0.0/R-DeskVint-PPC-1.0.0-universal.dmg \
+#                        "R-DeskVint"
 #
 # The input is a tarball from deploy/bundle.sh; the output is a compressed
 # read-only image that opens on a window with the app on the left, an
@@ -24,7 +24,7 @@ set -euo pipefail
 
 TARBALL="${1:?usage: make-dmg.sh <bundle.tar.gz> <output.dmg> <volume name>}"
 OUTDMG="${2:?}"
-VOLNAME="${3:-Agent for RustDesk PPC}"
+VOLNAME="${3:-R-DeskVint}"
 HOST="${PPC_HOST:-ppctiger}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export SSH_AUTH_SOCK="${SSH_AUTH_SOCK:-/tmp/ssh-agent-ppc.sock}"

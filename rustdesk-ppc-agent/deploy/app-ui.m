@@ -1,5 +1,5 @@
 /*
- * "Agent for RustDesk PPC.app" -- a real window, built programmatically.
+ * "R-DeskVint.app" -- a real window, built programmatically.
  *
  * Compiled on the Mac by deploy/bundle.sh with Apple's gcc 4.0.1 (Xcode 3 on
  * 10.5). Everything that touches the system is a call into
@@ -28,7 +28,7 @@
  */
 #import <Cocoa/Cocoa.h>
 
-#define APP_NAME @"Agent for RustDesk PPC"
+#define APP_NAME @"R-DeskVint"
 
 /* Rows are laid out from the top down, which reads in the order the window is
  * used; Cocoa's origin is bottom-left, so this converts once rather than making
@@ -292,7 +292,7 @@
         @"Version %@   (%@)\n"
         @"Built %@\n"
         @"For PowerPC %@, Mac OS X 10.4 and 10.5\n\n"
-        @"A RustDesk agent - the controlled side - for PowerPC Macs, "
+        @"R-DeskVint, an unofficial RustDesk fork. The controlled side, for PowerPC Macs, "
         @"built with mrustc because RustDesk itself needs an async runtime this "
         @"hardware has no compiler for.\n\n"
         @"Source and issues:\n%@\n(branch ppc-agent)%@",

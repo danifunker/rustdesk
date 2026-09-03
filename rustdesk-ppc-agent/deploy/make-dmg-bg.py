@@ -39,7 +39,7 @@ def main():
     if os.path.exists(FONT_B):
         fb = ImageFont.truetype(FONT_B, 19)
         fr = ImageFont.truetype(FONT_R, 13)
-        title = "Install Agent for RustDesk PPC"
+        title = "Install R-DeskVint"
         sub = "Drag the app onto the Applications folder."
         for text, font, y, fill in ((title, fb, 42, (28, 54, 92)),
                                     (sub, fr, 74, (96, 110, 130))):

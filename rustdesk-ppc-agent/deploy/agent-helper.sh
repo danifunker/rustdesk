@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# The non-interactive half of "Agent for RustDesk PPC.app", in Contents/Resources.
+# The non-interactive half of "R-DeskVint.app", in Contents/Resources.
 #
 # The window is a small Cocoa app (deploy/app-ui.m) which shells out to each
 # command below. Nothing here displays anything, so all of it is testable from a

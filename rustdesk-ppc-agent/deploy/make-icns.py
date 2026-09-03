@@ -52,7 +52,7 @@ def draw(size):
 
     # Rounded-square body with a vertical wash. Two flat colours banded down the
     # square read as a gradient at every size we emit and cost nothing.
-    top, bottom = (38, 92, 160), (22, 48, 92)
+    top, bottom = (198, 86, 26), (120, 48, 14)   # rust gradient (R-DeskVint)
     r = int(S * 0.22)
     d.rounded_rectangle([0, 0, S - 1, S - 1], radius=r, fill=top)
     for i in range(S // 2, S):
@@ -70,7 +70,7 @@ def draw(size):
     d.rounded_rectangle([sx0, sy0, sx1, sy1], radius=int(S * 0.035),
                         fill=(238, 244, 250, 255))
     d.rounded_rectangle([sx0 + S * 0.03, sy0 + S * 0.03, sx1 - S * 0.03, sy1 - S * 0.03],
-                        radius=int(S * 0.02), fill=(30, 64, 110, 255))
+                        radius=int(S * 0.02), fill=(74, 40, 22, 255))
     # Stand.
     d.polygon([(S * 0.44, sy1), (S * 0.56, sy1), (S * 0.60, S * 0.72), (S * 0.40, S * 0.72)],
               fill=(238, 244, 250, 255))

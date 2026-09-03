@@ -136,7 +136,7 @@ rm -rf "$STAGE"
 # A shell script as CFBundleExecutable was tried first and is not viable:
 # LaunchServices refuses it with -10810. A real Mach-O has no such problem.
 mkdir -p "$STAGE/$NAME"
-APP="$STAGE/$NAME/Agent for RustDesk PPC.app"
+APP="$STAGE/$NAME/R-DeskVint.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/lib"
 D="$APP/Contents/Resources"
 
@@ -194,9 +194,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <dict>
     <key>CFBundleExecutable</key>       <string>AgentForRustDeskPPC</string>
     <key>CFBundleIdentifier</key>       <string>com.rustdesk.ppc-agent.settings</string>
-    <key>CFBundleName</key>             <string>Agent for RustDesk PPC</string>
+    <key>CFBundleName</key>             <string>R-DeskVint</string>
     <key>CFBundleIconFile</key>         <string>app.icns</string>
-    <key>CFBundleDisplayName</key>      <string>Agent for RustDesk PPC</string>
+    <key>CFBundleDisplayName</key>      <string>R-DeskVint</string>
     <key>CFBundlePackageType</key>      <string>APPL</string>
     <key>CFBundleSignature</key>        <string>????</string>
     <key>CFBundleInfoDictionaryVersion</key> <string>6.0</string>
@@ -376,10 +376,10 @@ cat <<EOM
 
 To install on a PowerPC Mac:
     scp $TARBALL user@mac:~/
-    then on the Mac: untar it, drag "Agent for RustDesk PPC" into
+    then on the Mac: untar it, drag "R-DeskVint" into
     /Applications (or anywhere), and double-click it. It offers to
     install the background service.
 
 Or headless, over ssh:
-    ssh user@mac "tar xzf $NAME.tar.gz && sh '$NAME/Agent for RustDesk PPC.app/Contents/Resources/install.sh' --yes --password <pw>"
+    ssh user@mac "tar xzf $NAME.tar.gz && sh '$NAME/R-DeskVint.app/Contents/Resources/install.sh' --yes --password <pw>"
 EOM
