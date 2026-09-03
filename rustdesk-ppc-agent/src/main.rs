@@ -10,9 +10,26 @@ use rustdesk_ppc_agent::{config::Config, session};
 
 const DEFAULT_PORT: u16 = 21118;
 
+/// The product this ships as. The binary, the config file and every path stay
+/// `rustdesk-agent`: the name is branding, and renaming the parts an existing
+/// install already refers to would buy nothing and break upgrades.
+const PRODUCT: &str = "R-DeskVint";
+
+/// Which machine this build serves. Four ports compile this same file, so the
+/// banner has to ask rather than assert -- before this it told an IRIX user and
+/// a Solaris user alike that they were running a PowerPC Mac.
+#[cfg(target_os = "macos")]
+const PLATFORM: &str = "PowerPC Mac OS X";
+#[cfg(target_os = "irix")]
+const PLATFORM: &str = "IRIX";
+#[cfg(target_os = "solaris")]
+const PLATFORM: &str = "SPARC Solaris";
+#[cfg(not(any(target_os = "macos", target_os = "irix", target_os = "solaris")))]
+const PLATFORM: &str = "this host";
+
 fn usage() -> ! {
     eprintln!(
-        "rustdesk-agent {} — RustDesk agent for PowerPC Mac OS X
+        "rustdesk-agent {} — {} agent for {}
 
 USAGE:
     rustdesk-agent [--listen ADDR] [--port N]
@@ -63,6 +80,8 @@ OPTIONS:
 Use --log trace to see every frame and message during a handshake; that is the
 fastest way to find where a client diverges.",
         env!("CARGO_PKG_VERSION"),
+        PRODUCT,
+        PLATFORM,
         DEFAULT_PORT
     );
     exit(2)
@@ -338,6 +357,7 @@ fn main() {
         secure,
     };
     let server = cfg.rendezvous_server();
+    println!("{} {} on {}", PRODUCT, env!("CARGO_PKG_VERSION"), PLATFORM);
     println!("agent id  : {}", ident.id);
     println!("public key: {}", rustdesk_ppc_agent::config::base64_encode(&pk.0));
     println!("display   : {}x{}", width, height);
