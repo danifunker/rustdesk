@@ -1,0 +1,110 @@
+#!/bin/sh
+#
+# /etc/init.d/rdeskvint -- R-DeskVint agent, standalone (boot) mode.
+#
+# Written by `rdeskvint-enable -m boot`; removed by rdeskvint-disable. Do not
+# edit this copy, it is regenerated from @BASEDIR@/lib/rdeskvint.init.
+#
+#   /etc/init.d/rdeskvint start | stop | status | restart
+#
+# This mode owns the console. It runs its own Xsun on the framebuffer, with dtwm
+# and one terminal so the desktop is worth connecting to, and the agent against
+# that. CDE's own login manager has to be off for it: dtgreet holds an X server
+# grab that hangs every client inside XOpenDisplay, so the two cannot share the
+# console. rdeskvint-enable turns dtlogin off, rdeskvint-disable turns it back
+# on.
+#
+# Bourne shell, and Solaris 9 at that: no $( ), no [[ ]], no `local`, and there
+# is no timeout(1) anywhere on this machine.
+
+BASEDIR=@BASEDIR@
+AGENT_USER=@AGENT_USER@
+DPY=@DISPLAY_NUM@
+FB=@FB@
+
+AGENT=$BASEDIR/bin/rustdesk-agent
+LOG=/var/log/rdeskvint.log
+XPID=/var/run/rdeskvint-x.pid
+OPENWIN=/usr/openwin/bin
+DTBIN=/usr/dt/bin
+
+PATH=$OPENWIN:$DTBIN:/usr/bin:/usr/sbin:$PATH
+export PATH
+
+running() { pgrep -x rustdesk-agent > /dev/null 2>&1; }
+
+case "$1" in
+
+start)
+	if running; then
+		echo "R-DeskVint is already running."
+		exit 0
+	fi
+
+	# The greeter would hang us inside XOpenDisplay rather than fail, so this
+	# is not belt-and-braces: if dtlogin came up anyway, nothing below works.
+	if pgrep -x dtlogin > /dev/null 2>&1; then
+		echo "Stopping dtlogin: its greeter grabs the X server."
+		/etc/init.d/dtlogin stop > /dev/null 2>&1
+		sleep 3
+	fi
+
+	echo "Starting R-DeskVint on $DPY."
+	$OPENWIN/Xsun $DPY -ac -nobanner -dev $FB defdepth 24 >> $LOG 2>&1 &
+	echo $! > $XPID
+	# Xsun needs a moment on this hardware, and there is no way to ask it
+	# whether it is ready that does not itself need a display.
+	sleep 8
+
+	# A window manager and one terminal, or the far end connects to an empty
+	# root window and can do nothing at all with it.
+	su - "$AGENT_USER" -c "DISPLAY=$DPY $DTBIN/dtwm" >> $LOG 2>&1 &
+	sleep 2
+	su - "$AGENT_USER" -c "DISPLAY=$DPY $DTBIN/dtterm -geometry 80x24+40+40" >> $LOG 2>&1 &
+	sleep 1
+
+	su - "$AGENT_USER" -c "DISPLAY=$DPY $AGENT --log info" >> $LOG 2>&1 &
+	sleep 2
+	if running; then
+		echo "R-DeskVint started as $AGENT_USER; log in $LOG."
+	else
+		echo "R-DeskVint did not start. See $LOG." >&2
+		exit 1
+	fi
+	;;
+
+stop)
+	echo "Stopping R-DeskVint."
+	# All by exact name: matching a command line would match this script.
+	pkill -x rustdesk-agent > /dev/null 2>&1
+	pkill -x dtterm        > /dev/null 2>&1
+	pkill -x dtwm          > /dev/null 2>&1
+	if [ -f $XPID ]; then
+		kill `cat $XPID` > /dev/null 2>&1
+		rm -f $XPID
+	fi
+	pkill -x Xsun > /dev/null 2>&1
+	;;
+
+status)
+	if running; then
+		echo "R-DeskVint is running."
+		$AGENT --show-id 2>/dev/null
+	else
+		echo "R-DeskVint is not running."
+		exit 1
+	fi
+	;;
+
+restart)
+	$0 stop
+	sleep 3
+	$0 start
+	;;
+
+*)
+	echo "usage: $0 {start|stop|status|restart}" >&2
+	exit 2
+	;;
+esac
+exit 0

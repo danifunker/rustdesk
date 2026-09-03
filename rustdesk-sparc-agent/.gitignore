@@ -9,3 +9,7 @@ ports/distfiles/
 
 # Scratch output from a probe run.
 .temp.txt
+
+# Built packages. scripts/package-sol9.sh reproduces one from the tree in a
+# couple of minutes; an 8 MB datastream per release does not belong in git.
+dist/

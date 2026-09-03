@@ -1,0 +1,8 @@
+#!/bin/sh
+# pkgadd creates BASEDIR implicitly and does not record it as a delivered
+# pathname, so pkgrm takes away everything inside /opt/rdeskvint and leaves the
+# empty directory. Remove it -- but only if it is empty. A log or a config
+# somebody put in there is theirs, and a package should not decide otherwise.
+B=${BASEDIR:-/opt/rdeskvint}
+rmdir "$B" 2>/dev/null || true
+exit 0

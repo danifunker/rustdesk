@@ -29,7 +29,14 @@ VENDOR="${VENDOR:-$PPC_DIR/vendor}"
 OUT="${OUT:-$HERE/target/$TARGET}"
 # Runpaths are the paths on the *target*, not in the sysroot: neither X prefix is
 # on Solaris' default 64-bit search path.
-SPARC_LDFLAGS="${SPARC_LDFLAGS:--R/usr/openwin/lib/sparcv9}"
+#
+# /opt/rdeskvint/lib is where the package puts its private libgcc_s.so.1, the
+# one library the agent needs that Solaris 9 does not ship. Naming it here costs
+# nothing when the binary is run straight out of this tree -- the runtime linker
+# tries each runpath and falls through to /usr/lib/sparcv9 -- and it is what
+# lets the package be self-contained rather than asking an installer to drop a
+# GCC runtime into a system directory.
+SPARC_LDFLAGS="${SPARC_LDFLAGS:--R/usr/openwin/lib/sparcv9 -R/opt/rdeskvint/lib}"
 
 export PATH="$TOOLCHAIN/opt/bin:$PATH"
 export MRUSTC_TARGET_VER="${MRUSTC_TARGET_VER:-1.74}"
@@ -46,7 +53,7 @@ cat > "$CCWRAP" <<WRAP
 for a in "\$@"; do
     [ "\$a" = "-c" ] && exec $TARGET-gcc "\$@"
 done
-exec $TARGET-gcc "\$@" ${SPARC_LDFLAGS:--R/usr/openwin/lib/sparcv9}
+exec $TARGET-gcc "\$@" ${SPARC_LDFLAGS}
 WRAP
 chmod +x "$CCWRAP"
 export CC_sparcv9_sun_solaris2_9="$CCWRAP"

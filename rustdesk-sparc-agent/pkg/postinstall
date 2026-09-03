@@ -1,0 +1,31 @@
+#!/bin/sh
+# Printed once, at the end of pkgadd. Everything here is also in
+# $BASEDIR/doc/README.txt, because a message that scrolls past is not
+# documentation.
+B=${BASEDIR:-/opt/rdeskvint}
+cat <<TEXT
+
+R-DeskVint is installed under $B and is not running.
+
+  1. Set a password, as the user who will be logged in at the console:
+
+         $B/bin/rustdesk-agent --password SECRET
+
+  2. Start it by hand once, from a desktop session on the console:
+
+         $B/bin/rustdesk-agent --log info
+
+     Or have it start on its own, at the next console login:
+
+         $B/bin/rdeskvint-enable
+
+  3. Connect a peer to this machine's address on port 21118.
+     $B/bin/rustdesk-agent --show-id prints the ID it answers to.
+
+  $B/bin/rdeskvint-disable undoes step 2. Full instructions,
+  including the standalone mode that needs nobody logged in:
+
+         $B/doc/README.txt
+
+TEXT
+exit 0

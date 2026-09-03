@@ -7,6 +7,37 @@ the agent is cross-compiled on Linux and only *run* on the Blade.
 
 This file is the short version: build it, install it, configure it, check it.
 
+**If you only want to install it**, you do not need any of section 1. Take
+`dist/RDVTagent-<version>-sparc.pkg`, copy it to the machine, and:
+
+```sh
+pkgadd -d RDVTagent-<version>-sparc.pkg RDVTagent
+```
+
+Everything lands under `/opt/rdeskvint`, nothing starts, and
+`/opt/rdeskvint/doc/README.txt` carries the same instructions on the machine
+itself. `pkgrm RDVTagent` takes it away again. Sections 3 and 4 below still
+apply; section 2 is only for a hand install.
+
+### One package, or one per Solaris release?
+
+One. The agent is linked against Solaris 9, and Solaris' binary compatibility
+runs forward — a binary built against 9 is supported on 10 and later, though
+that is Sun's documented guarantee rather than something tested here, there
+being no Solaris 10 machine left to test it on. The package declares
+`ARCH=sparc` and no release dependency, so `pkgadd` will not argue.
+
+What a Solaris 9 build gives up on Solaris 10 is DAMAGE and XFIXES. `build.rs`
+probes the sysroot it is built against, finds neither, and compiles both out —
+so on a Solaris 10 machine, which has both, the agent would still read the whole
+screen every frame and still draw its own cursor. That is a cost, not a
+malfunction.
+
+If that cost ever matters, the answer is not a second package. It is to load
+`libXdamage` and `libXfixes` with `dlopen` at run time instead of deciding at
+compile time, so that one binary uses them wherever they exist. The three shims
+already probe for the extensions at run time; only the linkage is static.
+
 ---
 
 ## 1. Build it
@@ -53,7 +84,36 @@ scp ~/sol9-toolchain/opt/sparcv9-sun-solaris2.9/lib/sparcv9/libgcc_s.so.1 HOST:/
 ssh HOST 'sudo cp /tmp/libgcc_s.so.1 /usr/lib/sparcv9/ && sudo chmod 755 /usr/lib/sparcv9/libgcc_s.so.1'
 ```
 
-## 2. Install it
+## 2. Package it
+
+```sh
+./scripts/package-sol9.sh
+```
+
+builds, stages, and leaves an SVR4 datastream in `dist/`. The build happens here
+on Linux and the packaging happens on a Solaris machine over ssh (`--host`, or
+`SOL9_HOST`), because `pkgmk` and `pkgtrans` exist nowhere else — the same split
+the IRIX port makes with `gendist`, for the same reason. The Solaris end needs
+no toolchain, only those two commands, so the machine you are going to install
+on will do.
+
+`--no-build` packages what is already built, `--install` also `pkgadd`s it on
+that host, and `--version` overrides the version string.
+
+Two things the package does deliberately:
+
+* **It is inert.** `pkgadd` drops files under `/opt/rdeskvint` and the machine
+  behaves exactly as it did before — no daemon, no rc script, nothing disabled.
+  Startup is wired up separately by `rdeskvint-enable` and taken back out by
+  `rdeskvint-disable`, so deciding against it costs one command. `pkgrm` runs
+  the disable itself, so removal cannot strand an rc link or leave the machine
+  with its login manager switched off.
+* **It carries its own `libgcc_s.so.1`,** in `/opt/rdeskvint/lib`, with the
+  binary carrying an rpath that names it. That is the one library the agent
+  needs and Solaris 9 does not ship; the alternative is dropping a GCC runtime
+  into `/usr/lib/sparcv9`, where something unrelated finds it in a year's time.
+
+Or install by hand, if you would rather see exactly what lands where:
 
 ```sh
 scp target/sparcv9-sun-solaris2.9/rustdesk-agent HOST:/tmp/
@@ -62,9 +122,28 @@ ssh HOST 'sudo mkdir -p /usr/local/bin \
        && sudo chmod 755 /usr/local/bin/rustdesk-agent'
 ```
 
-There is no service manifest, no init script and no packaging. Solaris 9 predates
-SMF, so if you want it started at boot it wants an `/etc/init.d` script and an
-`rc3.d` link, written by hand.
+in which case `libgcc_s.so.1` has to go somewhere the runtime linker looks —
+`/usr/lib/sparcv9` is the usual answer — because the package's copy is not there.
+
+## 2a. Make it permanent
+
+```sh
+/opt/rdeskvint/bin/rdeskvint-enable                  # console session mode
+/opt/rdeskvint/bin/rdeskvint-enable -m boot -u USER  # standalone mode
+/opt/rdeskvint/bin/rdeskvint-disable                 # undo either
+```
+
+**Session mode** (the default) drops a hook in `/etc/dt/config/Xsession.d`. The
+agent starts when somebody logs in on the console, runs as them, and exits with
+their session. CDE is untouched. The catch is in the name: no session, no agent.
+
+**Boot mode** makes the machine reachable with nobody logged in, and costs you
+CDE. It turns the login manager off with `dtconfig -d` and installs
+`/etc/init.d/rdeskvint` plus an `rc3.d` link, which brings up its own `Xsun` on
+the framebuffer — with `dtwm` and a terminal, so there is something at the other
+end worth connecting to — and runs the agent against it.
+
+That is not a preference. Section 4 explains why the two cannot share a console.
 
 ## 3. Configure it
 

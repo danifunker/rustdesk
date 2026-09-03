@@ -1,0 +1,35 @@
+#
+# SVR4 prototype for RDVTagent. Paths are relative to BASEDIR (/opt/rdeskvint),
+# so this package is relocatable with `pkgadd -a` or an admin file, and it owns
+# nothing outside its own directory.
+#
+# That is deliberate. Everything this package could put in /etc -- an rc script,
+# an rc link, a CDE session hook -- is installed by rdeskvint-enable instead and
+# taken away by rdeskvint-disable. So `pkgadd` is inert: it drops files on the
+# disk and the machine behaves exactly as it did before. Nothing starts, nothing
+# is disabled, and nothing has to be undone if you decide against it.
+#
+i pkginfo
+i postinstall
+i preremove
+i postremove
+#
+d none bin 0755 root bin
+f none bin/rustdesk-agent 0755 root bin
+f none bin/rdeskvint-enable 0755 root bin
+f none bin/rdeskvint-disable 0755 root bin
+f none bin/rdeskvint-console-test 0755 root bin
+#
+# The GCC runtime, which Solaris 9 does not ship and Rust's unwind crate asks
+# for by name -- which is why -static-libgcc cannot answer it. The agent carries
+# an rpath naming this directory, so a default install needs nothing on
+# LD_LIBRARY_PATH. It lives here rather than in /usr/lib/sparcv9 so that it is
+# this package's copy for this package's binary, and not a GCC runtime sitting
+# in a system directory for some unrelated program to find in a year's time.
+d none lib 0755 root bin
+f none lib/libgcc_s.so.1 0755 root bin
+f none lib/rdeskvint.init 0644 root bin
+f none lib/rdeskvint.xsession 0644 root bin
+#
+d none doc 0755 root bin
+f none doc/README.txt 0644 root bin

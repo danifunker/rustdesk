@@ -1,0 +1,11 @@
+#!/bin/sh
+# Take the machine back to how it was before rdeskvint-enable ran, while the
+# scripts that know how are still on disk. Without this, pkgrm would leave an rc
+# link and a CDE session hook pointing at a directory it had just deleted -- and
+# in boot mode it would leave dtlogin switched off, which is a machine with no
+# way in at all.
+B=${BASEDIR:-/opt/rdeskvint}
+if [ -x "$B/bin/rdeskvint-disable" ]; then
+	"$B/bin/rdeskvint-disable" || true
+fi
+exit 0

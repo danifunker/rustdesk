@@ -1,0 +1,135 @@
+#!/bin/sh
+#
+# rdeskvint-enable -- make R-DeskVint start by itself.
+#
+#   rdeskvint-enable                     console session mode (the default)
+#   rdeskvint-enable -m boot -u USER     standalone mode; this one costs you CDE
+#   rdeskvint-enable -h                  this text
+#
+# Installing the package changes nothing about how the machine behaves. This
+# script is what wires the agent into startup, and rdeskvint-disable is what
+# takes it back out. Both are safe to re-run.
+#
+# SESSION MODE (the default, and almost certainly what you want)
+#
+#   Drops a hook in /etc/dt/config/Xsession.d. The agent starts when somebody
+#   logs in on the console, runs as that person, sees exactly what they see, and
+#   goes away with their session. Nothing about CDE changes and the machine
+#   still shows its normal login screen.
+#
+#   The catch is in the name: no session, no agent. The machine is reachable
+#   only while somebody is logged in at the console.
+#
+# BOOT MODE (opt-in, and it takes the console away from CDE)
+#
+#   Turns the CDE login manager off with `dtconfig -d` and installs
+#   /etc/init.d/rdeskvint plus an rc link, which brings up its own Xsun on the
+#   framebuffer -- with dtwm and a terminal, so the desktop is usable from the
+#   other end -- and runs the agent against it as USER. The machine is then
+#   reachable with nobody logged in.
+#
+#   This is not a matter of taste. CDE's greeter holds an X server grab that
+#   hangs every X client *inside XOpenDisplay*, with no error and no timeout, so
+#   an agent running with nobody logged in cannot share the console with
+#   dtlogin. It is one or the other, and this picks the other.
+#
+# Bourne shell: /bin/sh here is not bash. No $( ), no [[ ]], no `local`.
+
+set -u
+
+here=`dirname "$0"`
+BASEDIR=`cd "$here/.." && pwd`
+
+MODE=session
+AGENT_USER=""
+DISPLAY_NUM=:0
+FB=/dev/fbs/jfb0
+
+XSESSION_DIR=/etc/dt/config/Xsession.d
+XSESSION_HOOK=$XSESSION_DIR/0100.rdeskvint
+INIT_SCRIPT=/etc/init.d/rdeskvint
+RC_LINK=/etc/rc3.d/S99rdeskvint
+
+usage() { sed -n '2,40p' "$0"; exit 0; }
+die()   { echo "rdeskvint-enable: $*" >&2; exit 1; }
+
+while [ $# -gt 0 ]; do
+	case "$1" in
+		-m) MODE="$2"; shift 2 ;;
+		-u) AGENT_USER="$2"; shift 2 ;;
+		-d) DISPLAY_NUM="$2"; shift 2 ;;
+		-f) FB="$2"; shift 2 ;;
+		-h|--help) usage ;;
+		*)  die "unknown option: $1" ;;
+	esac
+done
+
+id | grep 'uid=0(' > /dev/null 2>&1 || die "run this as root."
+[ -x "$BASEDIR/bin/rustdesk-agent" ] || die "no agent at $BASEDIR/bin/rustdesk-agent"
+
+# A password has to exist before any of this is worth switching on: without one
+# the agent starts and then refuses every peer, which looks like a broken
+# install rather than an unconfigured one.
+warn_if_unconfigured() {
+	_home=`getent passwd "$1" 2>/dev/null | cut -d: -f6`
+	[ -n "$_home" ] || _home=/home/$1
+	if [ ! -f "$_home/.rustdesk-ppc-agent.conf" ]; then
+		echo ""
+		echo "NOTE: $1 has no ~/.rustdesk-ppc-agent.conf yet, so no password is set."
+		echo "      Run this as $1 before expecting a peer to connect:"
+		echo ""
+		echo "          $BASEDIR/bin/rustdesk-agent --password SECRET"
+		echo ""
+	fi
+}
+
+case "$MODE" in
+session)
+	mkdir -p "$XSESSION_DIR" || die "could not create $XSESSION_DIR"
+	sed -e "s|@BASEDIR@|$BASEDIR|g" \
+	    "$BASEDIR/lib/rdeskvint.xsession" > "$XSESSION_HOOK" ||
+		die "could not write $XSESSION_HOOK"
+	chmod 755 "$XSESSION_HOOK"
+	echo "Session mode enabled: $XSESSION_HOOK"
+	echo "The agent will start at the next console login and stop with it."
+	echo "It does NOT start one now -- log out and back in, or just run it."
+	[ -n "$AGENT_USER" ] && warn_if_unconfigured "$AGENT_USER"
+	;;
+
+boot)
+	[ -n "$AGENT_USER" ] || die "boot mode needs -u USER: the agent runs as somebody."
+	getent passwd "$AGENT_USER" > /dev/null 2>&1 ||
+		die "no such user: $AGENT_USER"
+	[ -c "$FB" ] || [ -L "$FB" ] || die "no framebuffer at $FB (override with -f)"
+
+	sed -e "s|@BASEDIR@|$BASEDIR|g" \
+	    -e "s|@AGENT_USER@|$AGENT_USER|g" \
+	    -e "s|@DISPLAY_NUM@|$DISPLAY_NUM|g" \
+	    -e "s|@FB@|$FB|g" \
+	    "$BASEDIR/lib/rdeskvint.init" > "$INIT_SCRIPT" ||
+		die "could not write $INIT_SCRIPT"
+	chmod 744 "$INIT_SCRIPT"
+	chown root:sys "$INIT_SCRIPT" 2>/dev/null
+	rm -f "$RC_LINK"
+	ln -s ../init.d/rdeskvint "$RC_LINK"
+
+	echo "Turning off the CDE login manager (dtconfig -d)."
+	echo "rdeskvint-disable puts it back."
+	/usr/dt/bin/dtconfig -d > /dev/null 2>&1 ||
+		echo "  warning: dtconfig -d failed; dtlogin may still start at boot"
+
+	echo ""
+	echo "Boot mode enabled:"
+	echo "  $INIT_SCRIPT      (start | stop | status)"
+	echo "  $RC_LINK -> ../init.d/rdeskvint"
+	echo ""
+	echo "Nothing is running yet. Start it now with:"
+	echo "  $INIT_SCRIPT start"
+	echo "which stops dtlogin if it is up, so the console will go blank."
+	warn_if_unconfigured "$AGENT_USER"
+	;;
+
+*)
+	die "unknown mode: $MODE (want 'session' or 'boot')"
+	;;
+esac
