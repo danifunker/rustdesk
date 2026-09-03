@@ -73,6 +73,8 @@ pub struct Config {
     /// the agent can say so once rather than leaving somebody to wonder which
     /// of two files on the disk is the live one.
     migrated_from: Option<PathBuf>,
+    /// The configuration exists but this process cannot open it.
+    unreadable: bool,
 }
 
 impl Config {
@@ -127,6 +129,15 @@ impl Config {
             }
         }
 
+        // A file that is there and cannot be read is not the same as no file at
+        // all, and the difference matters more than anything else in here: an
+        // absent file means a new machine and an identity is generated for it,
+        // while an unreadable one means THIS machine, whose identity is right
+        // there on the disk. Treating the second as the first invents a new ID,
+        // uuid and keypair on every single run -- a different machine each
+        // time, and no error anywhere.
+        let unreadable = source.exists() && std::fs::File::open(&source).is_err();
+
         if let Ok(s) = std::fs::read_to_string(&source) {
             for line in s.lines() {
                 let line = line.trim();
@@ -151,7 +162,13 @@ impl Config {
             }
         }
 
-        Self { path, kv, migrated_from }
+        Self { path, kv, migrated_from, unreadable }
+    }
+
+    /// True when the configuration file exists but could not be opened. Nothing
+    /// in here is trustworthy in that case -- see `load`.
+    pub fn unreadable(&self) -> bool {
+        self.unreadable
     }
 
     /// The file these values came out of, and where a change will be written.
@@ -222,19 +239,51 @@ impl Config {
                 out.push('\n');
             }
         }
+        // Whatever the file is already, it stays. A shared configuration is
+        // deliberately group-readable so that every session on the machine can
+        // read it -- and rewriting it as 0600 root-owned, which is what this
+        // used to do unconditionally, locks out every account except the one
+        // that saved a setting. The agent then cannot read its own identity and
+        // generates a fresh one on each run, silently, which is the exact
+        // failure a shared file exists to prevent.
+        #[cfg(unix)]
+        let previous = {
+            use std::os::unix::fs::MetadataExt;
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::metadata(&self.path)
+                .ok()
+                .map(|m| (m.permissions().mode() & 0o7777, m.uid(), m.gid()))
+        };
+
         let tmp = self.path.with_extension("tmp");
         {
             let mut f = std::fs::File::create(&tmp)?;
             f.write_all(out.as_bytes())?;
             f.sync_all()?;
         }
-        std::fs::rename(&tmp, &self.path)?;
-        // The signing secret key lives in here.
+
+        // On the temporary file, before the rename, so the destination is never
+        // briefly readable by more people than it should be.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&self.path, std::fs::Permissions::from_mode(0o600));
+            // 0600 for a file that did not exist: the signing key is in here.
+            let (mode, uid, gid) = previous.unwrap_or((0o600, u32::MAX, u32::MAX));
+            let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode));
+            if uid != u32::MAX {
+                // std has no chown on this toolchain's libstd; libc is already a
+                // dependency. Failure is not fatal -- an unprivileged writer
+                // cannot chown, and for a per-user file there is nothing to
+                // restore anyway.
+                if let Some(s) = tmp.to_str() {
+                    if let Ok(c) = std::ffi::CString::new(s) {
+                        unsafe { libc::chown(c.as_ptr(), uid, gid) };
+                    }
+                }
+            }
         }
+
+        std::fs::rename(&tmp, &self.path)?;
         Ok(())
     }
 

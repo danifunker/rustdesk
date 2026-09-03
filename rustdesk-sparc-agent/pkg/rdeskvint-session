@@ -10,15 +10,25 @@
 #
 # The autostart hook does exactly this at login. This is the same thing on
 # demand -- for a session that was already running when the agent was installed,
-# or after stopping it to change something.
+# or after changing a setting.
 #
-# Run it as yourself, inside the session you want served: it needs that
-# session's DISPLAY and its X authority, which is precisely what an ssh
-# connection does not have.
+# Run inside the session you want served and it uses your DISPLAY. Over ssh
+# there is no session, so `start` looks for the one on the console instead:
+# dtlogin leaves its X authority in /var/dt/A:0-*, which only root can read, so
+# that path needs root and the agent then runs as root rather than as whoever is
+# sitting there. That is the difference worth knowing -- injected keystrokes and
+# clipboard traffic act as root.
+#
+# Use -d to name a display explicitly.
 #
 # Bourne shell: no $( ), no [[ ]], no `local`.
 
 set -u
+
+# -d DISPLAY, before the verb.
+if [ "${1:-}" = "-d" ]; then
+	DISPLAY="$2"; export DISPLAY; shift 2
+fi
 
 here=`dirname "$0"`
 AGENT="$here/rdeskvint"
@@ -26,6 +36,23 @@ AGENT="$here/rdeskvint"
 LOG="$HOME/.rdeskvint.log"
 
 running() { pgrep -x rdeskvint > /dev/null 2>&1; }
+
+# Find a console session to attach to when we have no display of our own.
+# dtlogin writes one X authority file per session and leaves the old ones
+# behind, so newest-first and actually TRY each: a stale file fails the same way
+# a missing one does, but much later and less clearly.
+adopt_console() {
+	[ -x /usr/openwin/bin/xdpyinfo ] || return 1
+	for a in `ls -t /var/dt/A:0-* 2>/dev/null`; do
+		if DISPLAY=:0 XAUTHORITY="$a" /usr/openwin/bin/xdpyinfo > /dev/null 2>&1; then
+			DISPLAY=:0
+			XAUTHORITY="$a"
+			export DISPLAY XAUTHORITY
+			return 0
+		fi
+	done
+	return 1
+}
 
 case "${1:-status}" in
 
@@ -36,10 +63,18 @@ start)
 		exit 0
 	fi
 	if [ -z "${DISPLAY:-}" ]; then
-		echo "rdeskvint-session: DISPLAY is not set." >&2
-		echo "  Run this from a terminal inside the desktop session you want" >&2
-		echo "  served -- over ssh there is no session to serve." >&2
-		exit 1
+		if id | grep 'uid=0(' > /dev/null 2>&1 && adopt_console; then
+			echo "No DISPLAY here, so attaching to the console session on :0"
+			echo "  (X authority $XAUTHORITY; the agent will run as root)"
+		else
+			echo "rdeskvint-session: DISPLAY is not set." >&2
+			echo "  Run this from a terminal inside the desktop session you want" >&2
+			echo "  served. Over ssh there is no session of your own -- but as" >&2
+			echo "  root this attaches to the console instead, so try:" >&2
+			echo "" >&2
+			echo "      sudo rdeskvint-session start" >&2
+			exit 1
+		fi
 	fi
 	echo "Starting against $DISPLAY, logging to $LOG"
 	"$AGENT" --log info >> "$LOG" 2>&1 &

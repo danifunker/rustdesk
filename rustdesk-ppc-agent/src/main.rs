@@ -289,6 +289,22 @@ fn main() {
     log::set_max_level(level);
 
     let mut cfg = Config::load(cfg_path);
+    // Stop here rather than carry on with an identity invented five lines from
+    // now. Carrying on is worse than failing: it registers a machine that does
+    // not exist, leaves a row in the console's device list that nobody can
+    // connect to, and does it again with a different ID on the next run.
+    if cfg.unreadable() {
+        eprintln!(
+            "error: {} exists but this account cannot read it.",
+            cfg.path().display()
+        );
+        eprintln!("       Running anyway would invent a new identity for this machine,");
+        eprintln!("       so it stops instead. Either run as an account that can read");
+        eprintln!("       it, or make it readable by this one:");
+        eprintln!("");
+        eprintln!("           ls -l {}", cfg.path().display());
+        exit(1);
+    }
     // Worth one line: there are now two plausible files on the disk and only
     // one of them is live. Saying nothing invites somebody to edit the old one
     // and conclude the setting does not work.
