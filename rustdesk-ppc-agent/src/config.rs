@@ -277,7 +277,11 @@ impl Config {
                 // restore anyway.
                 if let Some(s) = tmp.to_str() {
                     if let Ok(c) = std::ffi::CString::new(s) {
-                        unsafe { libc::chown(c.as_ptr(), uid, gid) };
+                        // IRIX's uid_t/gid_t are signed; u32 everywhere
+                        // else this builds.
+                        unsafe {
+                            libc::chown(c.as_ptr(), uid as libc::uid_t, gid as libc::gid_t)
+                        };
                     }
                 }
             }
