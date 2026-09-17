@@ -682,6 +682,33 @@ fn video_tune() -> crate::encode::Tune {
     t
 }
 
+/// The base bitrate a peer's `custom_image_quality` asks for, or `None` when it
+/// did not send one.
+///
+/// The client packs `bitrate << 8 | quantizer` (upstream `src/client.rs`), and
+/// upstream's own server reads the high byte back as a percentage which it then
+/// doubles (`video_service::convert_quality`). So a client slider at 50 means
+/// 100% -- the default -- and the useful range above that is what buys
+/// sharpness without touching the pixel count. Clamped because the value is
+/// whatever a peer chose to send.
+///
+/// The quantizer half maps to a `min_q` upstream and is not wired up here.
+///
+/// Deliberately not `cfg`-gated to the platforms that call it: it is arithmetic
+/// with no platform dependency, and leaving it compiled everywhere is what lets
+/// the packing be tested on a build host.
+#[cfg_attr(
+    not(all(any(target_os = "macos", target_os = "irix", target_os = "solaris"), not(no_vpx))),
+    allow(dead_code)
+)]
+fn bitrate_for_custom_quality(cq: i32) -> Option<u32> {
+    if cq <= 0 {
+        return None;
+    }
+    let pct = (((cq >> 8) & 0xFF) * 2).clamp(10, 400) as u32;
+    Some(DEFAULT_BITRATE_KBPS * pct / 100)
+}
+
 /// The downscale a peer's `image_quality` asks for.
 ///
 /// `custom_image_quality` is upstream's bitrate percentage and is left to the
@@ -866,6 +893,28 @@ impl Video {
             return None;
         }
         Some(self.served_size())
+    }
+
+    /// Change the base bitrate, rebuilding the encoder around it.
+    ///
+    /// Unlike `set_scale` this moves no geometry, so the peer needs no
+    /// `SwitchDisplay` -- the same picture is simply coded with more or fewer
+    /// bits. On this hardware that is the dial worth having: encode cost is
+    /// dominated by pixel count, so spending bits rather than pixels buys
+    /// sharpness at close to no extra time, where a scale change costs four
+    /// times the encode for each halving.
+    fn set_bitrate(&mut self, kbps: u32) -> bool {
+        if kbps == self.bitrate_kbps {
+            return false;
+        }
+        log::info!("video: base bitrate {} -> {} kbps", self.bitrate_kbps, kbps);
+        self.bitrate_kbps = kbps;
+        if let Err(e) = self.resize() {
+            log::error!("could not restart the encoder at {} kbps: {}", kbps, e);
+            self.broken = true;
+            return false;
+        }
+        true
     }
 
     /// Rebuild the conversion and encode buffers around the current geometry.
@@ -1492,6 +1541,9 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
     // The resolution the peer asked for, which until now was logged and ignored.
     #[cfg_attr(not(all(any(target_os = "macos", target_os = "irix"), not(no_vpx))), allow(unused_mut))]
     let mut quality_requested: Option<usize> = None;
+    // The base bitrate the peer asked for through `custom_image_quality`.
+    #[cfg_attr(not(all(any(target_os = "macos", target_os = "irix"), not(no_vpx))), allow(unused_mut))]
+    let mut bitrate_requested: Option<u32> = None;
     // The peer's screenshot button, carrying the `sid` that has to come back on
     // the response. Same reason as above for living out here.
     #[cfg_attr(not(all(any(target_os = "macos", target_os = "irix"), not(no_vpx))), allow(unused_mut))]
@@ -1525,6 +1577,7 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
                 &mut delay_outstanding,
                 &mut refresh_requested,
                 &mut quality_requested,
+                &mut bitrate_requested,
                 &mut screenshot_requested,
                 &mut clip_sync,
                 &mut clip_disabled,
@@ -1539,6 +1592,7 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
                 &mut delay_outstanding,
                 &mut refresh_requested,
                 &mut quality_requested,
+                &mut bitrate_requested,
                 &mut screenshot_requested,
                 &mut clip_sync,
                 &mut clip_disabled,
@@ -1654,6 +1708,12 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
                     m.set_misc(mi);
                     peer.send(&m)?;
                 }
+            }
+
+            // The peer asked for a different bitrate. No `SwitchDisplay`: the
+            // geometry has not moved, only how many bits go into it.
+            if let Some(want) = bitrate_requested.take() {
+                v.set_bitrate(want);
             }
 
             // The peer asked for a fresh frame; give it a real keyframe.
@@ -1812,6 +1872,9 @@ fn drain_input(
     // here rather than acted on in place for the same reason as
     // `refresh_requested`: the video state lives in the loop, not here.
     quality_requested: &mut Option<usize>,
+    // The base bitrate the peer's `custom_image_quality` asks for. Same reason
+    // as above for living out here rather than being acted on in place.
+    bitrate_requested: &mut Option<u32>,
     screenshot_requested: &mut Option<(String, i32)>,
     clip_sync: &mut crate::clipboard::Sync,
     clip_disabled: &mut bool,
@@ -1920,13 +1983,19 @@ fn drain_input(
                         o.disable_clipboard.enum_value_or_default(),
                         o.disable_audio.enum_value_or_default()
                     );
-                    // The resolution dial, which the peer has been asking for
-                    // and being ignored on. `custom_image_quality` is upstream's
-                    // bitrate percentage and is a separate question.
+                    // The resolution dial.
                     #[cfg(all(any(target_os = "macos", target_os = "irix", target_os = "solaris"), not(no_vpx)))]
                     {
                         *quality_requested =
                             scale_for_quality(o.image_quality.enum_value_or_default());
+                    }
+                    // And the bitrate dial; see `bitrate_for_custom_quality`.
+                    #[cfg(all(any(target_os = "macos", target_os = "irix", target_os = "solaris"), not(no_vpx)))]
+                    {
+                        if let Some(kbps) = bitrate_for_custom_quality(o.custom_image_quality) {
+                            log::info!("peer asked for a custom bitrate: {} kbps base", kbps);
+                            *bitrate_requested = Some(kbps);
+                        }
                     }
                     let was = *clip_disabled;
                     *clip_disabled =
@@ -2119,6 +2188,37 @@ mod version_tests {
 mod tests {
     use super::*;
     use sodiumoxide::crypto::{box_, secretbox, sign};
+
+    /// The bitrate dial has to mean the same thing here as it does to any other
+    /// RustDesk peer, and the packing is not self-evident, so it is pinned:
+    /// the client sends `bitrate << 8 | quantizer` and upstream's server takes
+    /// the high byte and doubles it as a percentage.
+    #[test]
+    fn custom_image_quality_is_upstreams_packing() {
+        let pack = |bitrate: i32, quantizer: i32| bitrate << 8 | quantizer;
+
+        // Nothing sent, and a negative, mean "no opinion".
+        assert_eq!(bitrate_for_custom_quality(0), None);
+        assert_eq!(bitrate_for_custom_quality(-1), None);
+
+        // 50 is upstream's midpoint: doubled it is 100%, which is the default,
+        // so a client at the middle of its slider changes nothing.
+        assert_eq!(bitrate_for_custom_quality(pack(50, 0)), Some(DEFAULT_BITRATE_KBPS));
+
+        // Above it buys bits, below it saves them.
+        assert_eq!(bitrate_for_custom_quality(pack(100, 0)), Some(DEFAULT_BITRATE_KBPS * 2));
+        assert_eq!(bitrate_for_custom_quality(pack(25, 0)), Some(DEFAULT_BITRATE_KBPS / 2));
+
+        // The quantizer half is in the low byte and must not leak into it.
+        assert_eq!(
+            bitrate_for_custom_quality(pack(50, 99)),
+            bitrate_for_custom_quality(pack(50, 0))
+        );
+
+        // Clamped, because the value is whatever a peer chose to send.
+        assert_eq!(bitrate_for_custom_quality(pack(255, 0)), Some(DEFAULT_BITRATE_KBPS * 4));
+        assert_eq!(bitrate_for_custom_quality(pack(1, 0)), Some(DEFAULT_BITRATE_KBPS / 10));
+    }
 
     /// Drive the agent's handshake from the peer side, exactly as client.rs does,
     /// and check a correct password is accepted and a wrong one refused.
