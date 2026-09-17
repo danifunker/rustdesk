@@ -42,7 +42,7 @@ so nothing here is out of family on size alone.
 ## 2. The blocker: mrustc and `async`
 
 RustDesk is tokio from top to bottom — **395 `async fn`**, **46 `async {}`
-blocks**, **73 `tokio::spawn`/`select!` sites** across `src/` + `libs/hbb_common`.
+blocks**, **73 `tokio::spawn`/`select!` sites** across `src/` + `libs/vintage_common`.
 So mrustc's async support is decisive. I measured it directly with a hand-rolled
 executor against the 1.74 host stdlib (`MRUSTC_TARGET_VER=1.74 --edition 2021`):
 
@@ -520,7 +520,7 @@ everything above, and it costs an afternoon.
 ### Fallback if the async tail doesn't converge
 A purpose-built blocking-IO PowerPC client: RustDesk's wire protocol is
 protobuf over TCP with NaCl encryption — endian-clean and needing no async at
-all. It reuses `libs/hbb_common/protos/` (the actual contract), the proven
+all. It reuses `libs/vintage_common/protos/` (the actual contract), the proven
 mrustc→C→gcc pipeline, and `rusty-backup`'s `ppc-tiger/` GUI scaffolding. Worth
 holding in reserve rather than starting with, now that libc and the `cli`
 feature have shrunk the direct port so much.

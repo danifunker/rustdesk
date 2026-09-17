@@ -21,7 +21,7 @@
 #   rustdesk-ppc/build-ppc.sh <stage>
 #   stages:
 #     vendor   re-resolve and re-vendor (reverts the git-dep patch around it)
-#     hbb      transpile libs/hbb_common only  (protocol core: tokio+protobuf+sodium)
+#     hbb      transpile libs/vintage_common only  (protocol core: tokio+protobuf+sodium)
 #     agent    transpile the whole `--features cli` agent
 #     clean    remove the output tree
 #
@@ -99,9 +99,9 @@ transpile() {
 }
 
 stage_hbb() {
-  banner "transpile libs/hbb_common for $PPC_TARGET ($PPC_CPU)"
+  banner "transpile libs/vintage_common for $PPC_TARGET ($PPC_CPU)"
   prepare
-  transpile "$REPO/libs/hbb_common" "$OUT-hbb"
+  transpile "$REPO/libs/vintage_common" "$OUT-hbb"
 }
 
 stage_agent() {

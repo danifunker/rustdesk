@@ -40,7 +40,7 @@ default = ["use_dasp"]
 [dependencies]
 whoami = "1.2"
 scrap = { path = "libs/scrap" }
-hbb_common = { path = "libs/hbb_common" }
+hbb_common = { path = "libs/vintage_common" }
 enigo = { path = "libs/enigo" }
 sys-locale = "0.1"
 serde_derive = "1.0"
@@ -114,7 +114,7 @@ psutil = { version = "3.2", features = [ "process" ], git = "https://github.com/
 android_logger = "0.10"
 
 [workspace]
-members = ["libs/scrap", "libs/hbb_common", "libs/enigo"]
+members = ["libs/scrap", "libs/vintage_common", "libs/enigo"]
 
 [package.metadata.winres]
 LegalCopyright = "Copyright © 2020"
@@ -127,7 +127,7 @@ winapi = { version = "0.3", features = [ "winnt" ] }
 
 [build-dependencies]
 cc = "1.0"
-hbb_common = { path = "libs/hbb_common" }
+hbb_common = { path = "libs/vintage_common" }
 
 [dev-dependencies]
 hound = "3.4"

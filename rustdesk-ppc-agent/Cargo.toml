@@ -34,7 +34,7 @@ name = "rustdesk_ppc_agent"
 path = "src/lib.rs"
 
 [dependencies]
-# Pinned to what libs/hbb_common uses, so generated protobuf code and wire
+# Pinned to what libs/vintage_common uses, so generated protobuf code and wire
 # behaviour match the peer we have to talk to.
 protobuf = "3.0.0-alpha.2"
 sodiumoxide = "0.2"

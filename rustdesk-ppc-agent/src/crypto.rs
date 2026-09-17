@@ -1,7 +1,7 @@
 //! The RustDesk secure channel and agent-side handshake.
 //!
 //! Reimplements, on blocking I/O:
-//!   * `libs/hbb_common/src/tcp.rs`      — the secretbox channel (send/next/get_nonce)
+//!   * `libs/vintage_common/src/tcp.rs`      — the secretbox channel (send/next/get_nonce)
 //!   * `src/server.rs:90-135`            — the agent side of the key exchange
 //!   * `src/server/connection.rs:596-600`— the password check
 //!

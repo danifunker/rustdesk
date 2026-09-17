@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Regenerate src/protos/*.rs from ../libs/hbb_common/protos/*.proto.
+# Regenerate src/protos/*.rs from ../libs/vintage_common/protos/*.proto.
 #
 # The generated files are CHECKED IN rather than produced by a build script, and
 # this script is why that is affordable.
@@ -21,7 +21,7 @@
 set -euo pipefail
 
 AGENT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROTOS="$AGENT/../libs/hbb_common/protos"
+PROTOS="$AGENT/../libs/vintage_common/protos"
 OUT="$AGENT/src/protos"
 
 [ -d "$PROTOS" ] || { echo "error: no protos at $PROTOS" >&2; exit 1; }

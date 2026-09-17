@@ -1,7 +1,7 @@
 //! RustDesk's length-prefixed framing, on blocking `std::io` instead of
 //! `tokio_util::codec`.
 //!
-//! Faithful reimplementation of `libs/hbb_common/src/bytes_codec.rs`. The header
+//! Faithful reimplementation of `libs/vintage_common/src/bytes_codec.rs`. The header
 //! is 1-4 bytes little-endian; its low two bits carry `header_len - 1`, and the
 //! payload length is the whole value `>> 2`:
 //!

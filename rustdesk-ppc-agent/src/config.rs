@@ -1,6 +1,6 @@
 //! Persistent agent identity and settings.
 //!
-//! Mirrors the pieces of `libs/hbb_common/src/config.rs` the agent actually
+//! Mirrors the pieces of `libs/vintage_common/src/config.rs` the agent actually
 //! needs: an ID, a permanent password, a persisted salt, and the long-term
 //! Ed25519 signing keypair whose public half peers use to authenticate us.
 //!

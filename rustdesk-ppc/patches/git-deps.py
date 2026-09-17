@@ -3,7 +3,7 @@
 
 minicargo cannot read `git = "..."` dependencies:
 
-    EXCEPTION: TODO: libs/hbb_common/Cargo.toml:28: Support git dependencies
+    EXCEPTION: TODO: libs/vintage_common/Cargo.toml:28: Support git dependencies
 
 `cargo vendor` has already flattened every git dep into rustdesk-ppc/vendor/,
 so the manifests just need to point there instead. This is applied before a
@@ -24,7 +24,7 @@ import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 VENDOR = os.path.join(REPO, "rustdesk-ppc", "vendor")
-MANIFESTS = ["Cargo.toml", "libs/hbb_common/Cargo.toml",
+MANIFESTS = ["Cargo.toml", "libs/vintage_common/Cargo.toml",
              "libs/scrap/Cargo.toml", "libs/enigo/Cargo.toml"]
 
 MARK = "  #PPCGIT:"
