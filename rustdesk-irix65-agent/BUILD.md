@@ -49,7 +49,7 @@ wrapper, the compat headers and the linker:
 `mogrix setup-cross` deploys the staging tree. The IRIX-specific fixes this
 agent needed are on the `danifunker-ports` branch.
 
-### Four C libraries, in the staging tree
+### Five C libraries, in the staging tree
 
 All statically linked into the agent, so nothing has to be installed on the
 target machine:
@@ -60,13 +60,20 @@ target machine:
 | **libvpx 1.13.1** | one patch; VP8 only, `--disable-webm-io --disable-libyuv` (both are C++ and drag in the host linker) |
 | **mbedTLS 3.6.2** | two patches |
 | **zstd 1.5.6** | no patches; `clipboard.rs` links it |
+| **zlib 1.3.2** | no patches; `png.rs` links it. `CC=irix-cc ./configure --static && make libz.a`, then copy `libz.a` into `$SGUG_STAGING/lib32`. **Do not** fall back to the machine's own zlib — see below |
+
+`zlib` is the newest of these and the only one that was ever linked
+dynamically. It is static now because IRIX 6.5 shipped more than one zlib and
+the older one predates `compressBound`, which made the agent die on a stock O2
+while working on the build image. `docs/PACKAGING.md` has the whole account; the
+short version is that a machine's own zlib cannot be relied on.
 
 **These are currently built by hand into `/opt/sgug-staging`, which is outside
 every git tree — a real reproducibility gap rather than a decision.** The exact
 invocations, recovered from each build tree's own `config.status` and
 `config.log`, are in `RESUME.md` under *Prerequisites*. mogrix has package
-rules for all four; building them through its pipeline instead needs `rpmbuild`,
-which is what makes the staging tree reproducible.
+rules for all of them; building them through its pipeline instead needs
+`rpmbuild`, which is what makes the staging tree reproducible.
 
 ### A Rust nightly, kept private
 

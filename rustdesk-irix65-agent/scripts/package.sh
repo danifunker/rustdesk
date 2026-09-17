@@ -99,7 +99,7 @@ RustDesk agent for IRIX -- $VERSION ($ABI)
 What lands where, and what it needs, is in the header of install.sh.
 
 The agent needs an X server on :0 and nothing else: libsodium, libvpx, mbedTLS
-and zstd are linked in, and the one library IRIX 6.5 does not ship --
+zstd and zlib are linked in, and the one library IRIX 6.5 does not ship --
 libgcc_s.so.1 -- is in lib/ and is installed beside the agent.
 
   rustdesk-agent --show-id         this machine's ID

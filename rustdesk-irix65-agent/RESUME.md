@@ -1,6 +1,8 @@
 # RESUME — RustDesk agent for IRIX (SGI MIPS)
 
-Pick-up point. Last updated 2026-08-24, end of the session that **pressed the
+Pick-up point. Last updated 2026-09-17, end of the session that **ran it on a
+real O2** — see §REAL HARDWARE, which supersedes a good deal of what the
+emulator taught us. Before that, 2026-08-24 **pressed the
 buttons and made a package**. The Motif panel's Start, Stop and Apply have now
 been clicked by injected input and do what they say; typing into a text field
 works, which is the first time a keystroke has ever gone through `rd_key_char`
@@ -33,11 +35,128 @@ Capture is built and verified on hardware, in C and in Rust. Rust std builds for
 `mips-sgi-irix6.5`, the whole agent compiles and links, and `rustdesk-agent`
 serves a real session at a rate a person could use.
 
-**What is not yet proven is a real login session.** Every measurement here was
-taken against a bare `Xsgi :0 -bs -c`. Starting xdm on the emulator still wedges
-the X server — CPU time frozen, IRIX's own `xdpyinfo` hanging — so a logged-in
-4Dwm desktop has never been captured. The authority question that worried us is
-answered and the answer is good; see §A REAL LOGIN SESSION.
+**A real login session is now proven, on hardware.** Every measurement in the
+emulator sections below was taken against a bare `Xsgi :0 -bs -c`, because
+starting xdm on the emulator wedges the X server. On a real O2 it simply does
+not: xdm, 4Dwm and the toolchest run, `xdpyinfo` answers before and after a full
+capture run, and the capture path works against that live desktop. See
+§REAL HARDWARE. The emulator wedge is an emulator bug, not ours —
+`docs/ISSUE-xdm-wedge.md` is still worth sending.
+
+---
+
+## REAL HARDWARE — an O2, and what it changed
+
+`sgio2`, 192.168.99.41, joined the network 2026-09-17 and is the first real SGI
+this port has ever run on. Everything before this was the emulated Indy.
+
+```
+IRIX sgio2 6.5 6.5.22m IP32     the SAME release as the dev image
+CPU      MIPS R10000 rev 2.6, 195 MHz, 1 MB L2
+memory   448 MB
+graphics CRM (O2), not the Indy's newport/REX3
+screen   1280x1024, depth 8 pseudocolour -- identical to the dev image
+root     blank password; reached over rexec (port 512). No key was installed.
+```
+
+**The display side carried over untouched.** `SGI-SCREEN-CAPTURE`,
+`READDISPLAY`, `MIT-SHM`, `XTEST` and `XKEYBOARD` are all present on CRM
+graphics, and ReadDisplay returns stride 5120 — 32 bpp despite the 8-bit
+screen, exactly as §Capture predicted, so the colormap path never engages.
+Nothing in the capture design needed changing for a different graphics family.
+
+**xdm does not wedge real hardware.** This was the number one open item. The O2
+runs xdm, `Xsgi`, 4Dwm and a toolchest, with the same argument list §A REAL
+LOGIN SESSION quotes and the same absent `-auth` — so the host-based
+`/etc/X0.hosts` finding holds on hardware too (`xhost` reports `LOCAL:`,
+`localhost.localdomain`, `sgio2`). `xdpyinfo` answered instantly before a full
+`--probe-display` run and again after it.
+
+### The package did not work, and the install test could not have told us
+
+A stock O2 has no `/usr/sgug`. The development guest does — SGUG-RSE is
+installed in it — and `iris-install-test.sh` installs into that guest. So the
+claim this repo has made since §THE PACKAGE, that the `.tardist` installs on a
+machine that has never had a cross toolchain or SGUG-RSE, was only ever tested
+against a machine that had exactly that. It was self-confirming.
+
+On the real thing the agent installed cleanly (`inst` rc=0, no conflicts, the
+hinv compatibility check proposed removing nothing) and then exited **1 with
+zero bytes of output** for every argument, `--help` included. The cause:
+
+```
+rld: Error: unresolvable symbol in /usr/sbin/rustdesk-agent: compressBound
+rld: Fatal Error: this executable has unresolvable symbols
+```
+
+`compressBound` arrived in zlib 1.2.0. IRIX 6.5 ships zlib, but shipped more
+than one across its life: the sysroot pulled from the 6.5.22m build image is
+1.2.1 and has it, a stock 6.5.22m O2's `/usr/lib32/libz.so` does not. `build.rs`
+linked `-lz` on the strength of a comment reading "which IRIX 6.5 ships itself".
+
+**Two things are worth carrying forward from this, beyond the fix.**
+
+The first is where rld says it. Those lines go to **`/var/adm/SYSLOG`, not
+stderr**, so the failure presents as a silent `exit 1` and every obvious
+diagnostic — run it again, redirect stderr, check the file is there, check it is
+n32 — says nothing at all. `par -s -SS` on the process is what found it: the
+trace ends `write(4, "<11>...rld[84748]", 123)` then `exit(1)`, and `<11>` is
+syslog user.err. **On IRIX, when a dynamic executable dies silently, read
+SYSLOG before anything else.**
+
+The second is that `build.sh`'s run-time dependency check could not have caught
+it. It lists `readelf -d` Shared library entries, and an unresolved symbol names
+no library — so it appears in that list nowhere. The check is necessary, not
+sufficient; there is now a note in `build.sh` saying so.
+
+**The fix is static linking**, `cargo:rustc-link-lib=static=z`, against a zlib
+**1.3.2** built for n32 in `ports/work/zlib-1.3.2` and staged to
+`$SGUG_STAGING/lib32/libz.a` — the same treatment libvpx and mbedTLS get.
+Shipping a `libz.so` beside the agent also works and was tried first, but it
+means carrying SGI's 2003-vintage 1.2.1, old enough to predate the fixes for
+CVE-2018-25032 (a `deflate` bug, and `png.rs` is a deflate caller) and
+CVE-2022-37434. Static linking takes the machine's zlib out of the question.
+After it, `readelf -d` on the agent names only `libXext`, `libX11`, `libc`,
+`libm`, `libpthread` and `libgcc_s.so.1` — all stock, plus the one shipped file.
+
+### Performance: better than the estimate, and the downscale disappears
+
+`--probe-display` at full 1280x1024 against the live 4Dwm desktop, against the
+emulator's table at half resolution:
+
+| | emulated Indy @ 640x512 | O2 @ 1280x1024 |
+|---|---|---|
+| pixels | 0.33 Mpx | 1.31 Mpx (4x) |
+| capture | 365 ms | 191 ms |
+| downscale | 301 ms | not in the chain |
+| convert to I420 | 308 ms | 260 ms |
+| VP8 encode | 1823 ms | 1256 ms |
+| **total** | **2796 ms** | **1707 ms** |
+| idle poll | 15 ms | **0 ms** |
+
+Four times the pixels in 61% of the time: about 5.8x per megapixel on encode,
+4.7x on convert, 6.5x on the chain as a whole. §The whole chain said "divide by
+roughly 3 for a real Indy and further for an O2" — the real figure is better
+than that, and it is measured at full resolution where the emulator needed to
+downscale. The **idle cost is 0 ms**, which matters more than the headline: a
+static desktop costs nothing to discover nothing happened.
+
+The tuning sweep says the config in use is not the best available here:
+`static_threshold: 30000` encodes in 1114 ms against 1256 ms for the 1000 in
+use, and `profile 2` (no loop filter) in 1129 ms. `screen_content` 1 or 2 is a
+clear loss on this hardware — slower (1468 ms) *and* double the bytes (19033
+against 9580). None of this is wired up; §PERFORMANCE's tuning is still the
+emulator's.
+
+### Still unproven, even now
+
+- **A peer session on hardware.** Everything here is `--show-id`, `--show-key`,
+  `agent-helper.sh status` and `--probe-display`. No client has connected to the
+  O2, because that needs the three values §Next steps item 0 asks for.
+- **The agent surviving the X server restart xdm does between logins.** The
+  desktop was live throughout and never restarted.
+- **Damage volume on a desktop in use.** The probe measures a mostly static
+  screen; §A REAL LOGIN SESSION's `MAX_RECTS` question is open.
 
 ---
 
@@ -1604,6 +1723,35 @@ the details. Working through it:
    either bake an rpath (`has-rpath` is true in the target spec) or ship it
    beside the binary — do not expect `LD_LIBRARYN32_PATH` to be set for a user.
 
+**Rebuilt from nothing on 2026-09-17, and the recipe in BUILD.md is accurate.**
+`ports/rust/{rustup,cargo}` are build artifacts and were lost; only the tracked
+sources survived. Recovering them took four steps and about two minutes of
+work: copy `~/.rustup`'s nightly into the private `RUSTUP_HOME` (1.6 GB),
+`patch-rust-sysroot.sh`, `cargo fetch` then `mogrix patch-crates`, and
+`build-compat.sh` for `librust_irix_compat.a` (a fresh tree has a dangling
+`agent-portable/compat` symlink until you run it). Two things made it painless
+and neither is guaranteed next time: `~/.rustup` still held the exact tested
+nightly, `1.99.0-nightly (1ed2df61a 2026-08-04)`, and every one of the sysroot
+patcher's patterns still matched — no "already patched or no match". A
+`rustup update` between sessions would have cost both.
+
+**The shared homes must be protected while doing it.** Both patchers rewrite
+state in place and neither is namespaced, so check `RUSTUP_HOME` and
+`CARGO_HOME` resolve inside `ports/rust/` *before* running either. Fingerprint
+`~/.rustup`'s std and `~/.cargo`'s registry first and compare after; both were
+verified byte-identical afterwards, which is the only way to know the o32
+effort was not damaged.
+
+**One compile error, and it was the shared-tree drift.** `rustdesk-ppc-agent`
+had gained a `libc::chown(c.as_ptr(), uid, gid)` in `config.rs` from the
+SPARC/Solaris work. `std`'s `MetadataExt::uid()` is `u32` on every platform, but
+IRIX's `uid_t`/`gid_t` are **signed** — the same fact item 2 above records for
+std's `UserId`/`GroupId`. Fixed portably at the call site with
+`uid as libc::uid_t, gid as libc::gid_t`, a no-op cast everywhere else the
+shared tree builds. This is exactly the breakage `RESUME-PROMPT-PIPELINE.md`
+predicted would come in through the shared tree, and nothing but compiling for
+IRIX would have found it.
+
 Two loose ends worth knowing: `std::env::consts::OS` comes back **empty** on this
 target, so anything switching on it will misbehave; and the release binaries
 carry one `R_MIPS_REL32` relocation, which runs fine despite `irix-ld`'s
@@ -1621,13 +1769,15 @@ Items 1 to 4 of the previous list are **done** — see §PERFORMANCE. What is le
    missing is three values that only Dani has: the **hbbs hostname**, the
    **server key**, and the **console URL** with its CA if it is private. With
    those it is three Applies in the panel, or three `agent-helper.sh set` calls.
+   **This is now the only thing between the O2 and a real session** — it is
+   installed there (id `vjlvjqcv5`) and has never had a peer connect.
 
-1. **Get a real login session working.** §A REAL LOGIN SESSION has the detail.
-   The authority question is answered and the answer is good; what blocks it is
-   that xdm's server wedges under IRIS, so this needs real hardware or a fixed
-   emulator. Three things ride on it: the agent surviving the server restart
-   between logins, keyboard injection with something focused, and damage volume
-   on a desktop rather than one xterm.
+1. **~~Get a real login session working.~~ Done on hardware.** The O2 runs xdm,
+   4Dwm and a toolchest, `xdpyinfo` answers throughout, and `--probe-display`
+   captures that live desktop — see §REAL HARDWARE. The wedge is an emulator
+   bug, not ours. What still rides on it and is still open: the agent surviving
+   the server restart between logins (item 2), keyboard injection into somebody
+   else's application, and damage volume on a desktop actually in use.
 
 2. **The agent must survive its X server dying.** Already the open item in §The
    agent can crash when the server dies underneath it, and under xdm it stops

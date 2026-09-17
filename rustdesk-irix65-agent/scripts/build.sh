@@ -101,11 +101,18 @@ cp "$REPO/gui/agent-helper.sh"     "$OUT/lib/agent-helper.sh"
 cp "$REPO/desktop/RustDesk.chest"  "$OUT/chest/RustDesk.chest"
 
 # libgcc_s.so.1 is the ONE library the agent needs that stock IRIX 6.5 does not
-# ship. Everything else it links -- libX11, libXext, libz, libpthread, libm,
-# libc -- is on the machine already, and libsodium, libvpx, mbedTLS and zstd are
+# ship. Everything else it links -- libX11, libXext, libpthread, libm, libc --
+# is on the machine already, and libsodium, libvpx, mbedTLS, zstd and zlib are
 # linked statically into the binary. Shipping this one file is what makes the
 # package installable on an IRIX that has never heard of SGUG-RSE, which is the
 # whole point of packaging it.
+#
+# zlib is in that static list for a reason found the hard way: IRIX 6.5 does
+# ship a zlib, but 6.5 shipped more than one over its life and the older one
+# predates compressBound (zlib 1.2.0). Linking it dynamically produced an agent
+# that ran on the build image and died on a stock O2 with "rld: unresolvable
+# symbol: compressBound" -- written to SYSLOG, not stderr, so it presented as a
+# silent exit 1 from every invocation. See docs/PACKAGING.md.
 [ -f "$SGUG/lib32/libgcc_s.so.1" ] || die "no $SGUG/lib32/libgcc_s.so.1"
 cp "$SGUG/lib32/libgcc_s.so.1"     "$OUT/lib/libgcc_s.so.1"
 
@@ -134,6 +141,10 @@ fi
 # What the agent will look for at run time. Anything here that is not on a stock
 # 6.5 machine and not in the package is a bug that only shows up on someone
 # else's computer, which is the worst place to find it.
+#
+# Note what this does NOT catch: a symbol left undefined because no library was
+# named for it at all prints nothing here. That is exactly how the compressBound
+# bug above reached a real machine, so read the list as necessary, not sufficient.
 if command -v readelf > /dev/null 2>&1; then
 	echo
 	echo ">>> run-time dependencies:"

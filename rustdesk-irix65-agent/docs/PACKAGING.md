@@ -157,9 +157,37 @@ every run.
 /usr/lib/X11/app-chests/RustDesk.chest      the Toolchest entry
 ```
 
-The agent links **libsodium, libvpx, mbedTLS and zstd statically**, so none of
-them are here. What is left is what IRIX 6.5 already has — `libX11`, `libXext`,
-`libz`, `libpthread`, `libm`, `libc` — and `libgcc_s.so.1`, which it does not.
+The agent links **libsodium, libvpx, mbedTLS, zstd and zlib statically**, so
+none of them are here. What is left is what IRIX 6.5 already has — `libX11`,
+`libXext`, `libpthread`, `libm`, `libc` — and `libgcc_s.so.1`, which it does not.
+
+**zlib is in that static list for a reason found the hard way.** IRIX 6.5 does
+ship zlib, so this list originally treated it as a system library and `build.rs`
+linked it with `-lz`. But 6.5 shipped more than one zlib across its life: the
+sysroot pulled from the 6.5.22m build image is 1.2.1 and has `compressBound`,
+while a stock 6.5.22m O2 carries an older one that does not. A build linked
+against the sysroot therefore started on the build image and died everywhere
+else with
+
+```
+rld: Error: unresolvable symbol in /usr/sbin/rustdesk-agent: compressBound
+rld: Fatal Error: this executable has unresolvable symbols
+```
+
+which `rld` writes to **SYSLOG and not stderr**, so what you actually see is a
+silent `exit 1` with no output at all — from `--show-id`, from `--help`, from
+everything. `par -s -SS` on the process is what finds it; `/var/adm/SYSLOG` is
+where it says so. Found on a real O2 on 2026-09-17, having passed every install
+test until then (see below).
+
+The fix is `cargo:rustc-link-lib=static=z` in `agent-portable/build.rs`, against
+a zlib 1.3.2 built for n32 by `ports/work/zlib-1.3.2` and staged into
+`$SGUG_STAGING/lib32/libz.a` — the same treatment libvpx and mbedTLS already
+get. Shipping a `libz.so` beside the agent would also have worked, but it would
+have meant carrying SGI's 2003-vintage 1.2.1, which is old enough to predate
+the fixes for CVE-2018-25032 (a `deflate` bug, and `png.rs` is a deflate caller)
+and CVE-2022-37434. Static linking removes the machine's zlib from the question
+entirely.
 
 `libgcc_s.so.1` is the interesting one. It is 117 KB, it comes from the cross
 toolchain, and without it the agent does not start. Three ways to deal with that
@@ -177,6 +205,14 @@ and only one of them is any good:
 `scripts/iris-install-test.sh` runs the installed agent with
 `LD_LIBRARYN32_PATH` explicitly **unset**, because every other script here sets
 it and an rpath that quietly did nothing would never show up.
+
+**What that test cannot tell you.** It installs into the development guest, and
+that image has `/usr/sgug` populated with SGUG-RSE — which supplies a modern
+zlib. So the test proved the package installs on a machine that already had the
+toolchain's libraries, which is the opposite of what it was written to prove. A
+genuinely stock machine has no `/usr/sgug` at all. Until one was available the
+claim in this file — that the package installs on an IRIX that has never heard
+of SGUG-RSE — was never actually tested.
 
 ### What the install test is for, when you do run it
 

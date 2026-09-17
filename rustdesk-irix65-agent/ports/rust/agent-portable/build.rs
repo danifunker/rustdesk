@@ -6,7 +6,11 @@
 //   tls_shim.c      the mbedTLS wrapper http.rs calls for HTTPS. It compiles
 //                   unmodified for IRIX; only the library search path differs.
 //
-// png.rs also calls zlib's compress2/uncompress, which IRIX 6.5 ships itself.
+// png.rs also calls zlib's compress2/uncompress. IRIX 6.5 does ship a zlib,
+// but 6.5 shipped more than one over its life and the older one predates
+// compressBound (zlib 1.2.0) -- so a dynamically linked agent starts on the
+// build image and dies on a stock machine. It is linked statically here, like
+// libvpx and mbedTLS, so the machine's own zlib is never consulted.
 fn main() {
     let ppc = "../../../../rustdesk-ppc-agent";
     let sgug = std::env::var("SGUG_LIB_DIR")
@@ -62,5 +66,5 @@ fn main() {
     println!("cargo:rustc-link-lib=static=mbedtls");
     println!("cargo:rustc-link-lib=static=mbedx509");
     println!("cargo:rustc-link-lib=static=mbedcrypto");
-    println!("cargo:rustc-link-lib=z");
+    println!("cargo:rustc-link-lib=static=z");
 }
