@@ -53,6 +53,18 @@ conf_get() {
     sed -n "s/^$1 *= *//p" "$CONF" | head -1
 }
 
+# Two settings have been renamed in the agent -- rendezvous_server -> id_server
+# and server_key -> key (config.rs RENAMED). It migrates on load and rewrites
+# under the new names, so reading only the old ones reports every configured
+# machine as unconfigured: the panel opened with ID server and Server key blank,
+# and Apply on a blank field is --no-server, which turns registration off. Read
+# the new name, fall back to the old for a file nothing has rewritten yet.
+conf_get_renamed() {
+    _v=`conf_get "$1"`
+    [ -n "$_v" ] || _v=`conf_get "$2"`
+    echo "$_v"
+}
+
 # Which processes are the agent. Two IRIX traps and one of our own making, all
 # of which produced a panel whose buttons looked broken:
 #
@@ -110,9 +122,9 @@ status)
     echo "running=`is_running && echo yes || echo no`"
     echo "id=`conf_get id`"
     echo "password=`conf_get password`"
-    echo "server=`conf_get rendezvous_server`"
+    echo "server=`conf_get_renamed id_server rendezvous_server`"
     echo "relay=`conf_get relay_server`"
-    echo "key=`conf_get server_key`"
+    echo "key=`conf_get_renamed key server_key`"
     echo "api=`conf_get api_server`"
     echo "ca=`conf_get ca_bundle`"
     echo "port=$PORT"
@@ -170,9 +182,104 @@ set)
     esac
     ;;
 
+# setup -- walk every setting, showing what each one is now.
+#
+# The panel is the other way to do this, and a machine being set up over telnet
+# or a serial console has no panel. Every answer goes back through `set` above
+# rather than calling the agent directly, so this cannot drift from what the
+# panel does, and each change is confirmed in the same words.
+#
+# Enter keeps a value, which means an unchanged setting is never written at all
+# -- no --flag runs for it. `-` is how you clear one, because Enter is already
+# spoken for; an empty answer cannot mean both "keep" and "erase".
+setup)
+    [ -x "$AGENT" ] || { echo "No agent at $AGENT."; exit 1; }
+
+    # Restore the terminal if this is interrupted while the password is being
+    # typed, or the shell is left with echo off and no prompt to say why.
+    trap 'stty echo 2>/dev/null; echo; echo "Cancelled; nothing further was changed."; exit 130' 1 2 3 15
+
+    echo "Configuring the RustDesk agent on `hostname`."
+    echo
+    echo "  Enter    keep the current value"
+    echo "  -        clear it"
+    echo
+
+    for _f in server key relay api ca; do
+        case "$_f" in
+        server) _label="ID server      "; _cur=`conf_get_renamed id_server rendezvous_server`
+                _hint="not set - reachable by IP only" ;;
+        key)    _label="Server key     "; _cur=`conf_get_renamed key server_key`
+                _hint="not set - only needed for an hbbs started with -k" ;;
+        relay)  _label="Relay override "; _cur=`conf_get relay_server`
+                _hint="not set - use whichever relay the ID server names" ;;
+        api)    _label="Console URL    "; _cur=`conf_get api_server`
+                _hint="not set - will not appear in a device list" ;;
+        ca)     _label="CA bundle      "; _cur=`conf_get ca_bundle`
+                _hint="not set - the usual places are searched" ;;
+        esac
+
+        if [ -n "$_cur" ]; then printf "%s [%s]: " "$_label" "$_cur"
+        else                    printf "%s (%s): " "$_label" "$_hint"; fi
+        read _ans
+
+        case "$_ans" in
+        "") continue ;;
+        -)  _ans="" ;;
+        esac
+        sh "$0" set "$_f" "$_ans" || echo "  (not changed)"
+    done
+
+    # The password is asked for differently and shown never: the value in the
+    # config is the live secret for every incoming connection, so it is not
+    # printed back even to whoever is setting it.
+    if [ -n "`conf_get password`" ]; then _state="set - Enter keeps it"
+    else                                  _state="NOT SET - no peer can connect"; fi
+    printf "Password       (%s): " "$_state"
+    stty -echo 2>/dev/null
+    read _ans
+    stty echo 2>/dev/null
+    echo
+    case "$_ans" in
+    "") : ;;
+    -)  sh "$0" set password "" ;;
+    *)  sh "$0" set password "$_ans" ;;
+    esac
+
+    trap - 1 2 3 15
+
+    echo
+    echo "Now:"
+    # egrep, not sed: IRIX sed is a BRE sed with no \| alternation, and a
+    # pattern using it matches nothing at all rather than failing.
+    sh "$0" status | egrep '^(id|server|relay|key|api|ca)=' | sed 's/^/  /'
+    echo
+
+    # Settings are read at start-up, so a running agent is still using the old
+    # ones. Saying so is the difference between this working and looking broken.
+    if is_running; then
+        printf "The agent is running with the OLD settings. Restart it now? [y/N]: "
+        read _ans
+        case "$_ans" in
+        y|Y|yes|YES) stop_agent; start_agent
+                     is_running && echo "Restarted." || echo "Could not start it. Try showlog." ;;
+        *)           echo "Left running. Restart it with: $0 restart" ;;
+        esac
+    else
+        printf "The agent is not running. Start it now? [y/N]: "
+        read _ans
+        case "$_ans" in
+        y|Y|yes|YES) start_agent
+                     is_running && echo "Started." || echo "Could not start it. Try showlog." ;;
+        *)           echo "Not started. Start it with: $0 start" ;;
+        esac
+    fi
+    ;;
+
 *)
     echo "usage: $0 status | showid | showkey | showlog | start | stop | restart"
     echo "       $0 set password|server|relay|key|api|ca VALUE"
+    echo "       $0 setup      ask for each setting in turn"
     exit 2
     ;;
 esac

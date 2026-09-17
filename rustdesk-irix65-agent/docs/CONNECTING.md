@@ -1,5 +1,11 @@
 # Connecting a real RustDesk client to the emulated Indy
 
+> Two different things are described here. **Pointing the agent at your own
+> rendezvous server** — an hbbs you host, reachable by ID from anywhere — is the
+> section at the bottom, *Your own server*. Everything before it is the
+> direct-IP loopback setup used to develop against the emulator.
+
+
 Everything in `RESUME.md` was measured with `testpeer`, which runs **on the
 guest** and talks to the agent over loopback. That proves the protocol and it
 measures the agent honestly, and it is not the same as looking at the desktop
@@ -112,3 +118,49 @@ emulated R5000 runs at about a third of a real Indy, so real hardware should be
 three times each of those — but that ratio is inferred from the emulator's cycle
 rate and **has never been checked against a real machine**, which is the single
 most useful measurement nobody has taken yet.
+
+---
+
+## Your own server
+
+Direct-IP above is for the emulator. To make a machine reachable by ID through
+an hbbs you host, there are three settings and one command:
+
+```sh
+/usr/lib/rustdesk-agent/agent-helper.sh setup
+```
+
+It asks for each one in turn, showing what it is now. **Enter** keeps a value,
+**`-`** clears it, and the password is not echoed and never printed back. At the
+end it offers to restart, which matters: settings are read at start-up, so a
+running agent is still using the old ones until it is.
+
+The same settings, non-interactively, or from the Motif panel's fields:
+
+```sh
+A=/usr/lib/rustdesk-agent/agent-helper.sh
+$A set server hbbs.example.com           # HOST or HOST:PORT, default 21116
+$A set key '<server key>'                # only for an hbbs started with -k
+$A set api https://console.example.com   # optional, and separate from `server`
+$A set password '<chosen password>'
+$A restart
+```
+
+`server` and `api` are independent: the first makes the machine **reachable** by
+ID, the second makes it **visible** in a console's device list. Either works
+alone.
+
+**What has to be open, outbound from the machine:** UDP 21116 to hbbs for
+registration and heartbeat, TCP 21117 to hbbr for the relay, and 443 to the
+console if `api` is set. A machine behind NAT never needs anything forwarded to
+it — peers arrive over the relay. Forwarding TCP 21118 to it only adds the
+direct path.
+
+**These sessions are encrypted** whichever way `--secure` is set: a peer that
+arrives through the server always takes part in the key exchange. `--secure`
+governs the direct-IP listener on 21118, where the client does not — so set it
+if the machine is reachable from outside and you do not want that unencrypted
+path available. See the comment above the registration block in `main.rs`.
+
+Afterwards, `agent-helper.sh status` reports every setting and whether it is
+running, and `showlog` is where a registration that is not working says why.
