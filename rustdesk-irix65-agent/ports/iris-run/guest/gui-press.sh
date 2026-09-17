@@ -26,7 +26,7 @@
 # paths a person actually gets -- the panel finding its helper, and the helper
 # finding the agent, neither of which is the same lookup as in /tmp:
 #
-#   RD_GUI=/usr/sbin/rustdesk-agent-gui RD_HELPER= sh /tmp/gui-press.sh
+#   RD_GUI=/usr/local/sbin/rustdesk-agent-gui RD_HELPER= sh /tmp/gui-press.sh
 #
 # An empty RD_HELPER means "let the panel search", which is the whole point
 # there.
@@ -41,7 +41,7 @@ else
 fi
 # Whichever helper the panel is going to use is the one this script should drive
 # too, or the "before" and "after" it prints describe a different machine.
-HELPER=${RD_HELPER:-/usr/lib/rustdesk-agent/agent-helper.sh}
+HELPER=${RD_HELPER:-/usr/local/lib/rustdesk-agent/agent-helper.sh}
 [ -x "$HELPER" ] || HELPER=/tmp/agent-helper.sh
 CONF=$HOME/.rustdesk-ppc-agent.conf
 cd /tmp
@@ -104,7 +104,7 @@ w() {
 # whitespace `wc -l` leaves, which `test -eq` will not.
 # Match the basename of argv[0] exactly, not the command line: `grep
 # rustdesk-agent` also matches the panel, and -- once the software is installed
-# -- the helper's own shell, because the helper lives in /usr/lib/rustdesk-agent.
+# -- the helper's own shell, because the helper lives in /usr/local/lib/rustdesk-agent.
 agent_count() {
     expr `ps -e -o pid,args | awk '{ c = $2; sub(/.*\//, "", c); if (c == "rustdesk-agent") print $1 }' | wc -l` + 0
 }

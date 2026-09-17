@@ -775,11 +775,18 @@ static void find_helper(const char *argv0)
 			return;
 	}
 	/* Where the package puts it. This has to be here: installed, the panel
-	 * is /usr/sbin/rustdesk-agent-gui, so "beside argv[0]" looks in /usr/sbin
+	 * is $PREFIX/sbin/rustdesk-agent-gui, so "beside argv[0]" looks in sbin
 	 * and finds nothing -- and the first install test duly fell through to
 	 * the /tmp copy, which existed only because that machine had been used
 	 * for development. On anyone else's machine the panel would have found
-	 * no helper at all and said so on its first refresh. */
+	 * no helper at all and said so on its first refresh.
+	 *
+	 * /usr/lib is still searched after /usr/local: the package installed
+	 * there until 2026-09-17, and a panel from a new build should still find
+	 * an older install rather than silently falling through to /tmp. */
+	strcpy(helper_path, "/usr/local/lib/rustdesk-agent/agent-helper.sh");
+	if (access(helper_path, X_OK) == 0)
+		return;
 	strcpy(helper_path, "/usr/lib/rustdesk-agent/agent-helper.sh");
 	if (access(helper_path, X_OK) == 0)
 		return;

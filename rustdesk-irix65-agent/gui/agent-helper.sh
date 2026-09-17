@@ -30,7 +30,8 @@ set -u
 HERE=`dirname "$0"`
 AGENT="${RD_AGENT:-}"
 if [ -z "$AGENT" ]; then
-    for _a in "$HERE/rustdesk-agent" /usr/sbin/rustdesk-agent \
+    for _a in "$HERE/rustdesk-agent" /usr/local/sbin/rustdesk-agent \
+              /usr/sbin/rustdesk-agent \
               /usr/sgug/bin/rustdesk-agent /tmp/rustdesk-agent; do
         if [ -x "$_a" ]; then AGENT="$_a"; break; fi
     done
@@ -45,6 +46,10 @@ PORT="${RD_PORT:-21118}"
 # is for the two cases that do not: a build run out of /tmp on a machine with
 # SGUG-RSE, and an install under a prefix the rpath does not name, where the
 # copy sits beside this script.
+#
+# /usr/sbin is still searched after /usr/local/sbin above: the package installed
+# there until 2026-09-17, and this helper should keep working on a machine that
+# has not been reinstalled since.
 LD_LIBRARYN32_PATH="${LD_LIBRARYN32_PATH:-$HERE:/usr/sgug/lib32}"
 export LD_LIBRARYN32_PATH
 

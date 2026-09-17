@@ -127,7 +127,7 @@ Direct-IP above is for the emulator. To make a machine reachable by ID through
 an hbbs you host, there are three settings and one command:
 
 ```sh
-/usr/lib/rustdesk-agent/agent-helper.sh setup
+/usr/local/lib/rustdesk-agent/agent-helper.sh setup
 ```
 
 It asks for each one in turn, showing what it is now. **Enter** keeps a value,
@@ -138,7 +138,7 @@ running agent is still using the old ones until it is.
 The same settings, non-interactively, or from the Motif panel's fields:
 
 ```sh
-A=/usr/lib/rustdesk-agent/agent-helper.sh
+A=/usr/local/lib/rustdesk-agent/agent-helper.sh
 $A set server hbbs.example.com           # HOST or HOST:PORT, default 21116
 $A set key '<server key>'                # only for an hbbs started with -k
 $A set api https://console.example.com   # optional, and separate from `server`

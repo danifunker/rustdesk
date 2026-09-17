@@ -125,22 +125,22 @@ cat > "$WORK/verify.sh" <<'GUEST'
 # here -- if the agent needs one, this is where that shows up.
 unset LD_LIBRARYN32_PATH
 echo "--- what landed ---"
-ls -l /usr/sbin/rustdesk-agent /usr/sbin/rustdesk-agent-gui 2>&1
-ls -l /usr/lib/rustdesk-agent 2>&1
+ls -l /usr/local/sbin/rustdesk-agent /usr/local/sbin/rustdesk-agent-gui 2>&1
+ls -l /usr/local/lib/rustdesk-agent 2>&1
 ls -l /usr/lib/X11/app-chests/RustDesk.chest 2>&1
 echo "--- inst's own inventory ---"
 versions -n rustdesk_agent 2>&1 | head -8
 echo "--- the installed agent runs ---"
-/usr/sbin/rustdesk-agent --show-id 2>&1 | head -3
+/usr/local/sbin/rustdesk-agent --show-id 2>&1 | head -3
 echo "--- the installed helper answers ---"
-/usr/lib/rustdesk-agent/agent-helper.sh status 2>&1 | head -6
+/usr/local/lib/rustdesk-agent/agent-helper.sh status 2>&1 | head -6
 echo "--- the panel finds the installed helper, not a stray one ---"
 # RD_HELPER unset on purpose: this is the search that a person double-clicking
-# the Toolchest entry gets. The panel is /usr/sbin/rustdesk-agent-gui, so
+# the Toolchest entry gets. The panel is /usr/local/sbin/rustdesk-agent-gui, so
 # "beside argv[0]" finds nothing and the packaged path is what has to answer.
 unset RD_HELPER
-/usr/sbin/rustdesk-agent-gui -help > /dev/null 2>&1
-ls -l /usr/lib/rustdesk-agent/agent-helper.sh > /dev/null 2>&1 && echo "helper is where the panel looks"
+/usr/local/sbin/rustdesk-agent-gui -help > /dev/null 2>&1
+ls -l /usr/local/lib/rustdesk-agent/agent-helper.sh > /dev/null 2>&1 && echo "helper is where the panel looks"
 echo VERIFY-DONE
 GUEST
 chmod 755 "$WORK"/*.sh
@@ -171,8 +171,8 @@ echo "$OUT" | sed 's/^/    /'
 echo "$OUT" | grep -q VERIFY-DONE || die "the verification did not finish (output above)"
 
 # Each of these is a way the package can be wrong that still leaves inst happy.
-echo "$OUT" | grep -q '/usr/sbin/rustdesk-agent$\|/usr/sbin/rustdesk-agent ' ||
-	die "the agent is not at /usr/sbin/rustdesk-agent"
+echo "$OUT" | grep -q '/usr/local/sbin/rustdesk-agent$\|/usr/local/sbin/rustdesk-agent ' ||
+	die "the agent is not at /usr/local/sbin/rustdesk-agent"
 # An `if`, not `grep ... && die`. The latter is safe under `set -e` -- a failing
 # non-last command of an AND-OR list does not abort -- but it reads exactly like
 # the bug it is not, and this file is meant to be read.
@@ -186,8 +186,8 @@ echo "$OUT" | grep -q 'agent id\|^[a-z0-9]\{9\}$' ||
 # path and fall back to /tmp, so on a development machine it reported the /tmp
 # copy after a successful install -- correct-looking output about the wrong
 # binary, and invisible anywhere but here.
-echo "$OUT" | grep -q 'agent=/usr/sbin/rustdesk-agent' ||
-	die "the installed helper is not using /usr/sbin/rustdesk-agent (see 'agent=' above)"
+echo "$OUT" | grep -q 'agent=/usr/local/sbin/rustdesk-agent' ||
+	die "the installed helper is not using /usr/local/sbin/rustdesk-agent (see 'agent=' above)"
 
 if [ "$DO_TARBALL" = 1 ]; then
 	TARBALL=$(ls -t "$REPO"/dist/*.tar.gz 2>/dev/null | head -1)
@@ -229,7 +229,7 @@ if [ "$DO_REMOVE" = 1 ]; then
 	echo
 	echo ">>> versions remove rustdesk_agent"
 	guest_run 600 'versions remove rustdesk_agent' 2>&1 | sed 's/^/    /'
-	guest_run 60 'ls /usr/sbin/rustdesk-agent 2>&1' | sed 's/^/    /'
+	guest_run 60 'ls /usr/local/sbin/rustdesk-agent 2>&1' | sed 's/^/    /'
 fi
 
 echo

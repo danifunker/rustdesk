@@ -148,6 +148,32 @@ clear loss on this hardware — slower (1468 ms) *and* double the bytes (19033
 against 9580). None of this is wired up; §PERFORMANCE's tuning is still the
 emulator's.
 
+### The install prefix moved to /usr/local, 2026-09-17
+
+It installed into `/usr` until then, which is SGI's own space. It is now
+`/usr/local/sbin/rustdesk-agent`, `/usr/local/lib/rustdesk-agent/` for the
+helper and libgcc_s, and `/usr/local` is the default `install.sh` prefix. Paths
+written `/usr/sbin/...` elsewhere in this file are the historical record of
+sessions that ran before the move; they have not been rewritten.
+
+**The Toolchest fragment did not move and cannot.** `/usr/lib/X11/system.chestrc`
+ends with `sinclude /usr/lib/X11/app-chests`, so the desktop reads exactly one
+directory. The fragment stays at `/usr/lib/X11/app-chests/RustDesk.chest`; only
+the path inside it, which names the panel, changed.
+
+**This needs a rebuild, not just a move.** The rpath is baked in at link time
+(`RD_RPATH` in `ports/rust/env.sh`), so a binary linked for `/usr` and copied to
+`/usr/local` cannot find its libgcc_s. `install.sh` writes a wrapper for any
+prefix that does not match `DEFAULT_PREFIX`, which is how `-p` has always
+worked; the point of matching the default is that no wrapper is needed and the
+installed file is the real ELF. Verified on the O2: `file` reports an N32
+executable rather than a shell script, and `--show-id` returns 0 with
+`LD_LIBRARYN32_PATH` unset.
+
+Both runtime lookups search the old location after the new one — the helper's
+agent search and the panel's `find_helper` — so a new build still works against
+a machine installed before the move.
+
 ### Still unproven, even now
 
 - **A peer session on hardware.** Everything here is `--show-id`, `--show-key`,

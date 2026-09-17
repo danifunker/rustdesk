@@ -150,10 +150,10 @@ every run.
 ## What the package contains, and why so little
 
 ```
-/usr/sbin/rustdesk-agent                    the agent
-/usr/sbin/rustdesk-agent-gui                the Motif settings panel
-/usr/lib/rustdesk-agent/agent-helper.sh     everything that decides anything
-/usr/lib/rustdesk-agent/libgcc_s.so.1       the one library IRIX does not ship
+/usr/local/sbin/rustdesk-agent                    the agent
+/usr/local/sbin/rustdesk-agent-gui                the Motif settings panel
+/usr/local/lib/rustdesk-agent/agent-helper.sh     everything that decides anything
+/usr/local/lib/rustdesk-agent/libgcc_s.so.1       the one library IRIX does not ship
 /usr/lib/X11/app-chests/RustDesk.chest      the Toolchest entry
 ```
 
@@ -170,7 +170,7 @@ against the sysroot therefore started on the build image and died everywhere
 else with
 
 ```
-rld: Error: unresolvable symbol in /usr/sbin/rustdesk-agent: compressBound
+rld: Error: unresolvable symbol in /usr/local/sbin/rustdesk-agent: compressBound
 rld: Fatal Error: this executable has unresolvable symbols
 ```
 
@@ -199,7 +199,7 @@ and only one of them is any good:
 - **`/usr/lib32/libgcc_s.so.1`.** Dropping a GCC runtime into a system directory
   where some unrelated program will find it in a year's time.
 - **An rpath.** The binary is linked with
-  `-Wl,-rpath,/usr/lib/rustdesk-agent`, the package puts a copy there, and it
+  `-Wl,-rpath,/usr/local/lib/rustdesk-agent`, the package puts a copy there, and it
   simply works with no environment and no wrapper. This is what it does.
 
 `scripts/iris-install-test.sh` runs the installed agent with
@@ -292,7 +292,7 @@ cd rustdesk-agent-VERSION-n32 && sh install.sh
 and `-u` removes what it put there.
 
 A non-default prefix breaks two lookups that are compiled in — the agent's rpath
-names `/usr/lib/rustdesk-agent`, and the panel searches beside `argv[0]` and
+names `/usr/local/lib/rustdesk-agent`, and the panel searches beside `argv[0]` and
 then that same directory for the helper. Both are bridged with a small wrapper
 that sets a variable, because nothing should quietly rewrite a linked path
 behind anyone's back. The helper needs no wrapper: it looks beside *itself*

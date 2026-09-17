@@ -143,7 +143,7 @@ libgcc_s.so.1                                                          ← NOT o
 `panic=abort`. It is in the staging tree at
 `/opt/sgug-staging/usr/sgug/lib32/libgcc_s.so.1`.
 
-**The binary carries an rpath of `/usr/lib/rustdesk-agent`**, which is where the
+**The binary carries an rpath of `/usr/local/lib/rustdesk-agent`**, which is where the
 package puts a copy — so an installed agent needs no environment variable and no
 wrapper. Running one straight out of `target/` on a development machine, where
 nothing is installed, still wants the old incantation:

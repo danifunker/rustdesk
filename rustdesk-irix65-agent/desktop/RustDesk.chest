@@ -16,5 +16,5 @@
 Menu ToolChest
 {
      no-label			f.separator
-    "RustDesk Agent"		f.checkexec.sh "/usr/sbin/rustdesk-agent-gui"
+    "RustDesk Agent"		f.checkexec.sh "/usr/local/sbin/rustdesk-agent-gui"
 }

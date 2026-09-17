@@ -16,17 +16,28 @@
 #   $PREFIX/sbin/rustdesk-agent-gui          the settings panel
 #   $PREFIX/lib/rustdesk-agent/agent-helper.sh
 #   $PREFIX/lib/rustdesk-agent/libgcc_s.so.1
-#   /usr/lib/X11/app-chests/RustDesk.chest   Toolchest entry (only for /usr)
+#   /usr/lib/X11/app-chests/RustDesk.chest   Toolchest entry (default prefix only)
+#
+# The Toolchest fragment is the one path that is not ours to choose: the desktop
+# picks it up through the `sinclude /usr/lib/X11/app-chests` at the end of
+# /usr/lib/X11/system.chestrc, so it goes there whatever $PREFIX is -- and
+# because it names the panel's absolute path, it is only written for a default
+# install, where that path is right.
 #
 # libgcc_s.so.1 is the one library the agent needs that IRIX 6.5 does not ship.
-# The binary carries an rpath of /usr/lib/rustdesk-agent, so a default install
-# needs no environment variable at all. Under a DIFFERENT prefix the rpath no
+# The binary carries an rpath of $DEFAULT_PREFIX/lib/rustdesk-agent, so a
+# default install needs no environment variable at all. Under a DIFFERENT prefix the rpath no
 # longer points at the copy, and the wrapper this script writes is what bridges
 # that -- which is the whole reason a non-default prefix is worth mentioning
 # rather than silently supported.
 set -u
 
-PREFIX=/usr
+# Where the build expects to end up: the agent's rpath names it (ports/rust/
+# env.sh, RD_RPATH) and the Toolchest fragment names it. Anywhere else works and
+# is bridged by the wrappers below, but this is the one that needs neither.
+DEFAULT_PREFIX=/usr/local
+
+PREFIX=$DEFAULT_PREFIX
 UNINSTALL=0
 SRC=`dirname "$0"`
 
@@ -86,7 +97,7 @@ chmod 755 "$BIN/rustdesk-agent" "$BIN/rustdesk-agent-gui" \
 # The Toolchest entry, only when installing where the desktop looks. A fragment
 # in app-chests edits no system file, and f.checkexec.sh means the entry hides
 # itself as soon as the program is gone -- so removing it needs no hook.
-if [ "$PREFIX" = /usr ] && [ -d /usr/lib/X11/app-chests ]; then
+if [ "$PREFIX" = "$DEFAULT_PREFIX" ] && [ -d /usr/lib/X11/app-chests ]; then
 	if [ -f "$SRC/chest/RustDesk.chest" ]; then
 		cp "$SRC/chest/RustDesk.chest" "$CHEST" && chmod 644 "$CHEST"
 		echo "Toolchest entry: $CHEST (log out and back in to see it)."
@@ -97,11 +108,11 @@ fi
 # bridged the same honest way -- with a wrapper that sets the variable -- rather
 # than by rewriting a linked path behind anyone's back:
 #
-#   the agent  carries an rpath of /usr/lib/rustdesk-agent, which is not where
-#              its libgcc_s.so.1 ended up
-#   the panel  searches beside argv[0] and then /usr/lib/rustdesk-agent for the
+#   the agent  carries an rpath of $DEFAULT_PREFIX/lib/rustdesk-agent, which is
+#              not where its libgcc_s.so.1 ended up
+#   the panel  searches beside argv[0] and then the default prefix for the
 #              helper, and finds neither. RD_HELPER overrides that search.
-if [ "$PREFIX" != /usr ]; then
+if [ "$PREFIX" != "$DEFAULT_PREFIX" ]; then
 	mv "$BIN/rustdesk-agent" "$LIB/rustdesk-agent" || exit 1
 	cat > "$BIN/rustdesk-agent" <<EOF
 #!/bin/sh

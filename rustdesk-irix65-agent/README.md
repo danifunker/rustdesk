@@ -135,9 +135,9 @@ rpath, with no environment variable and no wrapper. A machine that has never
 heard of SGUG-RSE or a cross toolchain runs it.
 
 ```
-/usr/sbin/rustdesk-agent                    the agent
-/usr/sbin/rustdesk-agent-gui                the Motif settings panel
-/usr/lib/rustdesk-agent/agent-helper.sh     start, stop, and every setting
+/usr/local/sbin/rustdesk-agent                    the agent
+/usr/local/sbin/rustdesk-agent-gui                the Motif settings panel
+/usr/local/lib/rustdesk-agent/agent-helper.sh     start, stop, and every setting
                                             (`agent-helper.sh setup` asks for each)
 /usr/lib/X11/app-chests/RustDesk.chest      a Toolchest entry
 ```

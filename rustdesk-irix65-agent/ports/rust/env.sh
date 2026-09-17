@@ -41,16 +41,18 @@ export PATH="$CARGO_HOME/bin:$MOGRIX_CROSS:$SGUG_STAGING/bin:$PATH"
 export IRIX_COMPAT_DIR="$RD_RUST/hello/compat"
 
 # -rpath, so an INSTALLED agent finds its libgcc_s.so.1 with no environment
-# variable and no wrapper script. libgcc_s is the one library the agent needs
+# variable and no wrapper script. It names the DEFAULT install prefix, so
+# changing where the package installs means rebuilding, not just moving files --
+# install.sh writes a wrapper for any prefix that does not match. libgcc_s is the one library the agent needs
 # that stock IRIX 6.5 does not have -- everything else it links (libX11, libz,
 # libpthread, libc, libm) ships with the OS, and libsodium, libvpx, mbedTLS and
-# zstd are linked statically. The package puts a copy in /usr/lib/rustdesk-agent
+# zstd are linked statically. The package puts a copy in /usr/local/lib/rustdesk-agent
 # rather than in /usr/lib32, because dropping a GCC runtime into a system
 # directory is the kind of thing that breaks an unrelated program a year later.
 #
 # Harmless in a development build: a directory that does not exist costs one
 # failed stat and the /tmp workflow keeps using LD_LIBRARYN32_PATH.
-export RD_RPATH="${RD_RPATH:-/usr/lib/rustdesk-agent}"
+export RD_RPATH="${RD_RPATH:-/usr/local/lib/rustdesk-agent}"
 export RUSTFLAGS="--cfg mio_unsupported_force_poll_poll --cfg mio_unsupported_force_waker_pipe -L $IRIX_COMPAT_DIR -C link-arg=-Wl,-rpath,$RD_RPATH"
 
 # libsodium-sys: SODIUM_LIB_DIR alone. SODIUM_STATIC now panics ("deprecated,
