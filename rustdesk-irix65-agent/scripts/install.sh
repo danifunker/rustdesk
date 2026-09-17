@@ -16,6 +16,7 @@
 #   $PREFIX/sbin/rustdesk-agent-gui          the settings panel
 #   $PREFIX/lib/rustdesk-agent/agent-helper.sh
 #   $PREFIX/lib/rustdesk-agent/libgcc_s.so.1
+#   $PREFIX/sbin/cacert.pem                  CA roots for an https console
 #   /usr/lib/X11/app-chests/RustDesk.chest   Toolchest entry (default prefix only)
 #
 # The Toolchest fragment is the one path that is not ours to choose: the desktop
@@ -71,6 +72,7 @@ if [ "$UNINSTALL" = 1 ]; then
 	# fails on a directory that still holds a 7 MB agent.
 	rm -f "$LIB/rustdesk-agent" "$LIB/rustdesk-agent-gui"
 	rm -f "$LIB/agent-helper.sh" "$LIB/libgcc_s.so.1"
+	rm -f "$BIN/cacert.pem"
 	rmdir "$LIB" 2>/dev/null
 	rm -f "$CHEST"
 	echo "Removed. The configuration in ~/.rustdesk-ppc-agent.conf is left alone;"
@@ -91,6 +93,16 @@ cp "$SRC/bin/rustdesk-agent"      "$BIN/rustdesk-agent"      || exit 1
 cp "$SRC/bin/rustdesk-agent-gui"  "$BIN/rustdesk-agent-gui"  || exit 1
 cp "$SRC/lib/agent-helper.sh"     "$LIB/agent-helper.sh"     || exit 1
 cp "$SRC/lib/libgcc_s.so.1"       "$LIB/libgcc_s.so.1"       || exit 1
+
+# Beside the binary, which is where the agent looks first. Optional, because a
+# build made on a host with no bundle still installs and runs -- it just cannot
+# verify an https console until --ca-bundle names one.
+if [ -f "$SRC/bin/cacert.pem" ]; then
+	cp "$SRC/bin/cacert.pem" "$BIN/cacert.pem" && chmod 644 "$BIN/cacert.pem"
+	echo "Certificates: $BIN/cacert.pem (`grep -c 'BEGIN CERTIFICATE' "$BIN/cacert.pem"` roots, for an https console)"
+else
+	echo "No cacert.pem in this build -- an https console will need --ca-bundle."
+fi
 chmod 755 "$BIN/rustdesk-agent" "$BIN/rustdesk-agent-gui" \
           "$LIB/agent-helper.sh" "$LIB/libgcc_s.so.1"
 

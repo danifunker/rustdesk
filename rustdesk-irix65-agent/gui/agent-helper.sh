@@ -209,17 +209,20 @@ setup)
     echo "  Enter    keep the current value"
     echo "  -        clear it"
     echo
+    echo "The ID server and console take a hostname or an IP; the ID server"
+    echo "defaults to port 21116 unless you write host:port."
+    echo
 
     for _f in server key relay api ca; do
         case "$_f" in
         server) _label="ID server      "; _cur=`conf_get_renamed id_server rendezvous_server`
-                _hint="not set - reachable by IP only" ;;
+                _hint="not set - THIS MACHINE is reachable by IP only" ;;
         key)    _label="Server key     "; _cur=`conf_get_renamed key server_key`
                 _hint="not set - only needed for an hbbs started with -k" ;;
         relay)  _label="Relay override "; _cur=`conf_get relay_server`
                 _hint="not set - use whichever relay the ID server names" ;;
         api)    _label="Console URL    "; _cur=`conf_get api_server`
-                _hint="not set - will not appear in a device list" ;;
+                _hint="not set - this machine will not appear in a device list" ;;
         ca)     _label="CA bundle      "; _cur=`conf_get ca_bundle`
                 _hint="not set - the usual places are searched" ;;
         esac

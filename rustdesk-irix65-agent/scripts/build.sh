@@ -23,10 +23,11 @@
 # The staged tree is laid out the way inst/rustdesk-agent.idb expects, which is
 # by SOURCE path under a gendist -sbase, not by destination:
 #
-#   bin/rustdesk-agent        -> /usr/sbin/rustdesk-agent
-#   bin/rustdesk-agent-gui    -> /usr/sbin/rustdesk-agent-gui
-#   lib/agent-helper.sh       -> /usr/lib/rustdesk-agent/agent-helper.sh
-#   lib/libgcc_s.so.1         -> /usr/lib/rustdesk-agent/libgcc_s.so.1
+#   bin/rustdesk-agent        -> /usr/local/sbin/rustdesk-agent
+#   bin/rustdesk-agent-gui    -> /usr/local/sbin/rustdesk-agent-gui
+#   bin/cacert.pem            -> /usr/local/sbin/cacert.pem
+#   lib/agent-helper.sh       -> /usr/local/lib/rustdesk-agent/agent-helper.sh
+#   lib/libgcc_s.so.1         -> /usr/local/lib/rustdesk-agent/libgcc_s.so.1
 #   chest/RustDesk.chest      -> /usr/lib/X11/app-chests/RustDesk.chest
 set -eu
 
@@ -116,8 +117,38 @@ cp "$REPO/desktop/RustDesk.chest"  "$OUT/chest/RustDesk.chest"
 [ -f "$SGUG/lib32/libgcc_s.so.1" ] || die "no $SGUG/lib32/libgcc_s.so.1"
 cp "$SGUG/lib32/libgcc_s.so.1"     "$OUT/lib/libgcc_s.so.1"
 
+# Certificate roots for an https console. IRIX 6.5 predates every root in use
+# today and ships no bundle at all, so without this the console is refused with
+# "no CA bundle found" and the machine never appears in a device list.
+# Registration is unaffected -- that is UDP to hbbs, not TLS.
+#
+# It goes BESIDE THE BINARY because that is where the agent looks first
+# (http.rs CaBundle::search_paths, the directory of current_exe), which is the
+# same place the Mac bundle puts it. A .pem in sbin is odd; one path that works
+# on every platform is worth more than tidiness.
+#
+# Taken from the build host, where a current bundle already lives, so there is
+# nothing to download and nothing to keep in git. Not fatal: a host without one
+# still produces a working agent for everything but an https console, and
+# --ca-bundle overrides it either way.
+CA_SRC="${RD_CA_BUNDLE:-}"
+if [ -z "$CA_SRC" ]; then
+	for _c in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt \
+	          /usr/share/ssl/certs/ca-bundle.crt /etc/ssl/cert.pem; do
+		[ -f "$_c" ] && { CA_SRC="$_c"; break; }
+	done
+fi
+if [ -n "$CA_SRC" ] && [ -f "$CA_SRC" ]; then
+	cp "$CA_SRC" "$OUT/bin/cacert.pem"
+	echo ">>> CA bundle: $CA_SRC (`grep -c 'BEGIN CERTIFICATE' "$CA_SRC"` roots)"
+else
+	echo ">>> WARNING: no CA bundle on this host -- an https console will need"
+	echo "    --ca-bundle. Set RD_CA_BUNDLE to one to include it."
+fi
+
 chmod 755 "$OUT/bin/"* "$OUT/lib/agent-helper.sh" "$OUT/lib/libgcc_s.so.1"
 chmod 644 "$OUT/chest/RustDesk.chest"
+if [ -f "$OUT/bin/cacert.pem" ]; then chmod 644 "$OUT/bin/cacert.pem"; fi
 
 # ---- 4. say what is in it, and check it ---------------------------------------
 echo
@@ -130,6 +161,7 @@ if command -v file > /dev/null 2>&1; then
 	echo
 	echo ">>> what the binaries actually are:"
 	for f in "$OUT/bin/rustdesk-agent" "$OUT/bin/rustdesk-agent-gui" "$OUT/lib/libgcc_s.so.1"; do
+		# cacert.pem is deliberately not in this list: it is text, not an object.
 		printf '    %-24s %s\n' "$(basename "$f")" "$(file -b "$f")"
 		case "$(file -b "$f")" in
 			*MIPS*N32*) ;;
