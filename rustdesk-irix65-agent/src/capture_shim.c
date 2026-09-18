@@ -255,6 +255,14 @@ static rd_capture *open_common(const char *display, int max_path)
         err_set(c, "XOpenDisplay(%s) failed", display ? display : "$DISPLAY");
         return c;   /* caller checks dpy; keeps the reason available */
     }
+
+    /* Everything below talks to the server, and a server that accepts the
+     * connection and then answers nothing raises the I/O error with no guard
+     * armed -- which exits the process. That is how the agent died at boot
+     * against a wedged greeter: it opened a connection and was gone before it
+     * logged a line. XOpenDisplay succeeding says only that something accepted
+     * a socket, not that anyone is home. */
+    WITH_X_GUARD(c, dead_open);
     c->screen = DefaultScreen(c->dpy);
     c->root   = RootWindow(c->dpy, c->screen);
     c->width  = DisplayWidth(c->dpy, c->screen);
@@ -325,6 +333,13 @@ static rd_capture *open_common(const char *display, int max_path)
         c->cursor_embedded = (hints & XRD_READ_POINTER) ? 1 : 0;
     }
 
+    END_X_GUARD();
+    return c;
+
+dead_open:
+    /* The guard set c->dead and the error string already. Returning the capture
+     * rather than NULL keeps the reason available, the same as a failed
+     * XOpenDisplay above; every caller checks. */
     return c;
 }
 

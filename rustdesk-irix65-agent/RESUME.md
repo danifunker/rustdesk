@@ -72,16 +72,22 @@ holds on hardware too (`xhost` reports `LOCAL:`, `localhost.localdomain`,
 `sgio2`). `xdpyinfo` answered instantly before a full `--probe-display` run and
 again after it, and capture against that live desktop worked throughout.
 
-**The logout path is untested, and was briefly and wrongly recorded here as a
-wedge.** After a logout `Xsgi` was seen with its CPU time unchanged across ten
-seconds while `xdpyinfo` failed to return, and this file said that was
-`docs/ISSUE-xdm-wedge.md` reproducing on hardware. It was not. A few minutes
-later there was no X process at all and `xdpyinfo` said *"X connection to :0.0
-broken (explicit kill or server shutdown)"*, and the machine turned out to be on
-its way to a reboot. An idle server and a server shutting down both show
-unchanged CPU time, and a connection to one that is going away stalls rather
-than refusing. Nothing here distinguished a wedge from a teardown. **The logout
-path remains untested on hardware, in either direction.**
+**At the xdm login screen the server does not serve outside clients, and that
+is normal.** Sitting at the greeter with nobody logged in, `xdpyinfo` from a
+telnet root shell blocks indefinitely and `Xsgi` shows almost no CPU. That is
+xdm holding the server for authentication, not a fault: log in and everything
+answers again. It was recorded here twice as `docs/ISSUE-xdm-wedge.md`
+reproducing on hardware, and it is not that. **A blocked client is not evidence
+of a broken server.** An idle greeter, a server shutting down, a machine
+rebooting and a genuinely wedged server all look identical from outside, and
+none of them can be told apart by CPU time and a stalled `xdpyinfo`.
+
+The consequence for this port is real and is not a bug to fix: **the agent
+cannot capture the login screen while xdm holds the server.** Whether the
+greeter can ever be captured is an open question about xdm's configuration, not
+about the agent. What the agent must do is survive it, which it now does.
+
+**The logout path remains untested on hardware.**
 
 **Anything that probes X must still bound its wait**, which is the one durable
 thing that came out of it: a server that is going away, wedged or not, leaves
@@ -2128,11 +2134,13 @@ left a pile of stuck xdpyinfo processes behind. Bound every X probe.
 `/root/tmo 25 xdpyinfo` is the guest's version of the same lesson, further up
 this file.
 
-**And do not diagnose a wedge from the outside.** Frozen CPU time plus a stalled
-client is equally consistent with an idle server, a shutdown, and a reboot. This
-file carried "the wedge reproduces on hardware" for about an hour on exactly
-that evidence, and the machine had been rebooting the whole time. `ps` for the
-server process before saying anything about its state.
+**Do not diagnose a server from a blocked client.** Frozen CPU time plus a
+stalled `xdpyinfo` is equally consistent with an idle greeter holding the
+server for authentication, a shutdown, a reboot, and a real wedge. This file
+carried "the wedge reproduces on hardware" twice on exactly that evidence; the
+first time the machine was rebooting, the second it was simply sitting at the
+login screen. The person at the console knew both times. Ask what the screen is
+showing before saying anything about the server's state.
 
 **`nohup` cannot see a shell function.** `nohup some_function &` silently does
 nothing -- no error, no process. A subshell inherits functions, so
