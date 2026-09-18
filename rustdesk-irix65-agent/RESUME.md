@@ -1,6 +1,11 @@
 # RESUME — RustDesk agent for IRIX (SGI MIPS)
 
-Pick-up point. Last updated 2026-09-17, end of the session that **ran it on a
+Pick-up point. Last updated 2026-09-18, end of the session that **built a
+hosted CI pipeline and ran the agent on MIPS III for the first time** -- see
+§A HOSTED BUILD PIPELINE, directly below. It is rehearsed locally and has never
+run on GitHub; the section says exactly what is and is not proven.
+
+Before that, 2026-09-17 **ran it on a
 real O2** — see §REAL HARDWARE, which supersedes a good deal of what the
 emulator taught us. Before that, 2026-08-24 **pressed the
 buttons and made a package**. The Motif panel's Start, Stop and Apply have now
@@ -42,6 +47,288 @@ real O2 a *logged-in* 4Dwm desktop is fine: xdm and the toolchest run,
 `xdpyinfo` answers before and after a full capture run, and capture works
 against it. What happens at **logout** is still unknown on hardware — see
 §REAL HARDWARE for an attempt that read a shutdown as a wedge.
+
+---
+
+## A HOSTED BUILD PIPELINE — 2026-09-18
+
+`RESUME-PROMPT-BUILD.md` asked for a build pipeline on a hosted
+`ubuntu-latest` runner, the way `../irixscsitb` does it: every push to
+`vintage-agents` cross-compiles, packages a `.tar.gz` and a `.tardist` made by
+`gendist` in an IRIX guest, and stops at artifacts. **Everything it needs now
+exists and has been rehearsed end to end on this machine, step for step. It
+has never run on GitHub** -- see *What is not proven* below, which is the
+honest state of it.
+
+### 1. The emulator: techomancer/iris, prebuilt
+
+`scripts/fetch-iris.sh` defaulted to `danifunker/iris`, whose releases API
+answers 404. It now defaults to **`techomancer/iris`** (latest seen
+`v2026-08-31-16-28`, one CLI archive per platform, every feature on, CPU a
+runtime option), accepts `--tag latest`, stamps and reuses a download only for
+the tag it was made for, and runs `--help` on what it fetched so a missing
+`libasound2` fails there.
+
+It also **skips a local iris built without `--features chd`** instead of using
+it. `~/repos/iris/target/release/iris` is exactly that build (another
+session's; untouched), and `fetch-iris.sh` used to pick it up through its
+`../../iris` candidate and hand it to a boot that then failed on the disk. The
+test: that build contains the string *"CHD image support not compiled in"*,
+which is compiled in only when the feature is off. `--prebuilt` ignores local
+builds entirely; CI passes it. `~/iris-upstream` no longer exists.
+
+The prebuilt boots `~/Indy-IRIX65_dev.chd` headless and the guest answers a
+command after 296-423 s (R5000; 381 s on R4400) on this host -- slower than
+the 110 s §And it brings its own guest recorded with the old private build.
+Timestamping one boot's console: the login prompt appeared only 18 s before the
+first command answered, so the time is IRIX's own startup under this emulator
+build, not the readiness poll. Not investigated further.
+
+### 2. gendist and the install test, end to end
+
+Against the prebuilt emulator: `iris-gendist.sh` builds the product in two
+minutes and pulls it back; `iris-install-test.sh --tarball --remove` installs
+it with `inst` (`r_deskvint_irix 2026091879`), runs the installed agent with
+`LD_LIBRARYN32_PATH` unset (`--show-id` answers), finds the helper where the
+panel looks, installs the `.tar.gz` under `/opt/rdtest` and removes it again.
+
+**`--remove` had never worked, and the test said it passed.** `iris-ci run`
+recognises the end of a command by `"\nIRIS-CI-RC="` at the start of a line.
+`versions remove` ends by ringing the terminal bell three times with no
+newline, so the marker arrived as `\a\a\aIRIS-CI-RC=0` and the run waited out
+its whole 600 s timeout; nekoware's `ls` does the same with a trailing
+`\033[m`. Both failures were piped through `sed`, so the script exited 0 and
+printed "install test finished." The removal is now a guest script that logs
+to a file, strips the bells and ends on a line of its own, and its result is
+checked: the agent must be gone and `versions` must not list the product.
+Verified in a fresh guest: `versions rc=0`, removed, nothing listed.
+
+The version stamp is now **the commit's date**, not the build's
+(`version_string` in `ci-lib.sh`): a commit rebuilt tomorrow no longer gets a
+different inst version that `inst` would treat as an upgrade.
+
+### 3. The first run on MIPS III
+
+The agent is built `-march=mips3`, and until today had only run on an R5000
+(emulator) and an R10000 (the O2) -- both MIPS IV. An `r4400` guest
+(`iris-guest.sh start --cpu r4400 --graphics`; `hinv`: *MIPS R4400 Processor
+Chip Revision: 4.0*) ran `ports/iris-run/guest/mips3-check.sh`:
+
+```
+--show-id              ff6izj02b, rc 0
+agent-helper status    agent=/tmp/r-deskvint-irix present=yes ..., rc 0
+--probe-display        1280x1024 stride 5120, rc 0
+  capture              344 ms
+  argb->i420           1083 ms  (C shim) vs 1071 ms Rust -- planes identical
+  argb->rgb (PNG)      344 ms   -- rows identical
+  VP8, config in use   4593 ms still, 4641 ms small change
+  static 30000         1230 ms  (the best row, as on the O2)
+  total                6020 ms for a full-screen change; idle 1 ms
+rld / SYSLOG           nothing
+```
+
+No SIGILL anywhere, including libvpx's encoder and zlib's deflate, and the two
+places the C shims are checked against their Rust references agree on this
+CPU. A static scan agrees: `llvm-objdump --mcpu=mips4` over the agent,
+`libgcc_s.so.1` and the panel finds no MIPS IV-only instruction in 1.65 million
+lines. (The 565 undecodable words are `0x04170001`, `sigrie 1` -- LLD's fill
+between functions, each one after a `jr $ra` and its delay slot.) The numbers
+are an emulated 66 MHz R4400 against a bare root window and say nothing about
+real R4400 speed; what they establish is that it runs.
+
+`--probe-display` first reported *"the display did not answer -- is anyone
+logged in?"*, and it was right: xdm starts at boot on this image and its
+greeter holds the server. `mips3-check.sh` had said "X on :0 answers" because
+`/root/tmo` **exits 0 whether the command finished or was killed** -- it only
+prints `[TMO: killed after Ns]`. The script now judges X by what `xdpyinfo`
+prints, and falls back to `/root/restart-x.sh`'s bare server, which every
+emulator number in this file was measured against.
+
+`iris-guest.sh` gained `--cpu r4400|r5000` (`IRIS_CPU`), and `--graphics` now
+means REX3 rendered **offscreen** -- `--ci` without `--headless`, per iris's
+own source -- so Xsgi runs with no host window and no host X display, which is
+what a runner has. `--window` is the old on-screen mode.
+
+### 4. The sysroot comes out of the image
+
+`RESUME-PROMPT-BUILD.md`'s hypothesis holds. `../irixscsitb/scripts/make-irix-sysroot.sh
+--direct --abi n32` against the image, diffed with `/opt/irix-sysroot`: every
+file it extracts is byte-identical and every symlink points the same way. It
+is short by two things this build needs, and **`scripts/make-sysroot.sh`**
+adds both:
+
+- `/usr/Motif-1.2`. The image's `/usr/include/Xm` and `Sgm` are *relative*
+  symlinks into it (which is why `/opt/irix-sysroot` got real copies by hand).
+  Extracted beside `/usr/include`, the links simply resolve.
+- `usr/lib32/mips3/fixed/{crt1,crtn}.o`, which `irix-ld` links every
+  executable with: SGI's crt objects with `.MIPS.events*` stripped.
+  `llvm-objcopy -R .MIPS.events.text -R .MIPS.events.init -R .MIPS.events`
+  reproduces mogrix's copies byte for byte -- for `crtn.o` as well, which
+  mogrix's setup guide wrongly says is a plain copy.
+
+It uses `rb-cli tar` (keeps symlinks as symlinks and case-only collisions
+apart) rather than `rb-cli get` plus symlink repair, and takes about fifteen
+seconds. **Built against it, the agent, the panel and the compat archive are
+byte-identical to builds against `/opt/irix-sysroot`.**
+
+### 5. The rest of the toolchain, from pinned sources
+
+`scripts/toolchain.sh` makes everything non-licensed in `build/toolchain`:
+mogrix at `1164e6c` (public; it **commits the patched `ld.lld-irix-18` as a
+binary**, so nothing has to build LLD, and `/opt/cross` here was only symlinks
+to apt's clang-18 anyway), mogrix's wrappers and headers, the runtime objects
+with the exact commands of `build-runtime-objects.sh`, the five static
+libraries from checksummed tarballs, and `nightly-2026-08-05` (= rustc
+`1ed2df61a 2026-08-04`) patched by mogrix's two patchers. Every Rust command
+runs with both homes inside `build/toolchain`; `~/.rustup` and `~/.cargo` were
+fingerprinted before and after and did not change.
+
+**Checked against the hand-built `/opt`, object by object:**
+
+| | |
+|---|---|
+| crt/runtime objects, `libgcc_s.so.1`, compat archive | identical |
+| zlib 15/15, libsodium 102/102, mbedTLS 86+18+9 | identical |
+| zstd | 32/33; `divsufsort.o` differs by the build path its `assert` records. `toolchain.sh` now maps that path to `/zstd-1.5.6`, so its own output no longer depends on where it runs |
+| libvpx | 83/83 once ELF `FILE` symbols are set aside -- the old archive has none, cause unknown |
+| **the agent** | identical in every loaded byte; `.symtab` differs by those 73 `FILE` symbols |
+| the panel | identical |
+
+From an empty directory, in one pass, `toolchain.sh` takes **74 seconds** on
+this host (network-bound; a runner will differ), and two runs in different
+directories produce identical trees -- the patched std source and the registry
+included -- once the zstd path above was mapped and the LLD symlink made
+relative. That is what makes it safe to restore from a cache anywhere.
+
+Two things came out of getting there:
+
+- **`patches/libvpx-vp8-active-map-early-out.patch` did not describe the libvpx
+  that shipped.** Its part (2) called `vp8_yv12_copy_frame()`; the `libvpx.a`
+  every agent was linked against -- every §PERFORMANCE number, the O2 -- copies
+  the three planes row by row with `memcpy` instead, with no border extension
+  and a guard that the two buffers' dimensions agree. That code was
+  reconstructed from the shipped object's disassembly and compiled to a
+  **byte-identical `encodeframe.c.o`**; the patch now contains it, with a note.
+  The `vp8_yv12_copy_frame()` version was never built into anything measured.
+  The untracked copy in `~/repos/mogrix/patches/packages/libvpx/` is now stale.
+- `compat/runtime/soft_float_stubs.c` is `.gitignore`'d in mogrix, so a clone
+  lacks it and every link needs `-lsoft_float_stubs`. It is vendored at
+  `ports/toolchain/soft_float_stubs.c`. (Neither binary takes a symbol from it:
+  Rust's `compiler_builtins` supplies the `__*tf3` routines first. The staged
+  archive here also holds a second, older build of the same stubs, `sfs.o`.)
+
+### 6. The binary no longer depends on where it was built
+
+`env.sh` adds `--remap-path-prefix` for `RUSTUP_HOME` and `CARGO_HOME`. Before,
+every agent carried 196 panic-location paths under
+`/home/dani/repos/rustdesk/rustdesk-irix65-agent/ports/rust/...` -- this
+machine's home directory, in every copy shipped -- and no other machine could
+build the same bytes. Now they read `/rustup/...` and `/cargo/...`, and there
+is no `/home/` string in the binary. This changes the agent against the one
+tested on the O2 in those strings (and hence layout), nothing else.
+
+`env.sh` also takes **`IRIX_TOOLCHAIN`**: set, everything comes from
+`scripts/toolchain.sh`'s directory; unset, this machine's `/opt` layout as
+before. `build.sh` honours `CARGO_TARGET_DIR`; `build-gui.sh` and
+`build-compat.sh` honour `IRIX_SYSROOT` / `SGUG_STAGING`.
+
+**Do not edit the target spec casually.** Removing the now-redundant
+`-L/opt/sgug-staging/usr/sgug/lib32` from `mips-sgi-irix6.5.json` changed
+`.text` by 14 KB: rustc hashes the spec into crate metadata, which moves the
+codegen-unit partitioning and with it inlining. Harmless, but it breaks every
+byte comparison, so the `-L` stays (irix-ld searches `$SGUG_STAGING/lib32`
+first anyway).
+
+### 7. The workflow
+
+`.github/workflows/irix-agent-build.yaml` -- ACTIVE since 2026-09-18, see below
+(renamed from `ci/workflows/irix-agent-release.yaml`,
+whose header said a hosted runner could not have the toolchain -- corrected):
+`push` to `vintage-agents` (paths-filtered) and `workflow_dispatch`; a
+`preflight` job that fails in seconds with an annotation naming the fix when
+there is no image source; one `build` job that fetches iris, rb-cli and the
+image, makes the sysroot, restores or builds the toolchain, cross-builds, and
+runs `release.sh --no-build --boot --require-gendist` (new: no inst product is
+a failure, not a tarball-only success); uploads the whole `dist/`, and the
+logs; stops the guest and deletes the sysroot and image whatever happened.
+**No publish step exists.**
+
+It is **one job** because the sysroot must not travel between jobs as an
+artifact, and gendist needs the image too.
+
+**Where licensed material may go -- decided.** This fork is public. GitHub's
+cache documentation: *"Anyone with read access can create a pull request on a
+repository and access the contents of a cache."* So `actions/cache` holds the
+toolchain only (compiled open source and mogrix's public files); the image is
+downloaded every run and never cached, and the sysroot is made per job. That
+is a deliberate difference from `../irixscsitb`, **which is also public and
+does cache its IRIX images** -- flagged, not changed; it is another repository.
+
+The rehearsal (`build/ci-rehearsal.sh`, the build job's steps in order, on this
+machine, toolchain from `build/toolchain` as on a cache hit): **passed, 18 minutes.**
+
+```
+sysroot from the image     14 s
+toolchain (cache hit)       0 s
+cross-build + stage        34 s   agent and panel, through IRIX_TOOLCHAIN
+guest answers             422 s
+gendist, package          ~2 min  .tardist + .tar.gz + SHA256SUMS
+install test              ~5 min  inst: r_deskvint_irix 2026091879;
+                                  the installed agent answers --show-id
+```
+
+That last line is the agent built entirely by `toolchain.sh`, against the
+sysroot taken from the image, running on IRIX after a real `inst`.
+
+### 8. What the Toolchest entry opens is called R-DeskVint too
+
+The Toolchest entry itself already read "R-DeskVint" in both install paths --
+`install.sh` copies the same `desktop/R-DeskVint.chest` the `.tardist`
+installs. The panel it opens did not: its title resource said "RustDesk Agent"
+and its About box "RustDesk agent for IRIX". Both now say R-DeskVint ("speaking
+the RustDesk protocol" stays, because it does). The X class stays
+`Rustdeskagentgui` -- it is an identifier nobody sees, and the title resource
+is matched through it.
+
+Checked under 4Dwm in a guest, by what the window manager is given rather than
+by a picture alone, and an `xwd` of the screen shows the title bar reading
+R-DeskVint. On the window 4Dwm manages (the one with a `WM_STATE`):
+`WM_NAME = "R-DeskVint"`, `WM_ICON_NAME = "R-DeskVint"`.
+
+**Read window properties by id.** The panel owns two windows named
+R-DeskVint: the 527x482 shell 4Dwm manages, and an unmapped 1x1 one (Motif's,
+by the look of it) whose `WM_ICON_NAME` is argv[0]. `xprop -name R-DeskVint`
+picked the 1x1 one, and on that evidence this session briefly "fixed" an icon
+name that had never been broken. `xwininfo -root -tree`, then `xprop -id` on
+the window with a `WM_STATE`, is the check.
+
+**`iris-ci screenshot` comes back black** in `--graphics` (offscreen) mode, with
+Xsgi, 4Dwm and the panel all running -- the emulated VRAM is fine (the agent
+captured it; `xwd` dumped it), the host-side image is not. Look from inside the
+guest: `xwd -root`, `iris-ci get`, `xwdtopnm` on the host.
+
+### What is not proven
+
+- **No run on GitHub yet.** The workflow was moved to
+  `.github/workflows/irix-agent-build.yaml` and committed on 2026-09-18, which
+  arms it for the next push to `vintage-agents` that touches either agent tree.
+  At that moment `danifunker/rustdesk` had **no Actions secrets**: the
+  `IRIX65_DISK_URL` Dani set is on `danifunker/irixscsitb`, and secrets are per
+  repository (`gh api repos/danifunker/rustdesk/actions/secrets` reported
+  `total_count: 0`). Until it is set here too, every run stops at preflight
+  with the fix in the message -- by design. The first real run will also be
+  the first toolchain cache miss (roughly five minutes more).
+- **The runner's tools are not this machine's.** rustup here is 1.26 (apt);
+  runners carry 1.28. `toolchain.sh` renames the dated nightly to `nightly`
+  so `cargo +nightly` works -- verified with 1.26 only. Ubuntu's clang-18 is
+  `1:18.1.3-1ubuntu1` here; if the runner's differs, binaries may too.
+- **Boot time on a runner** is unknown; `iris-guest.sh` allows 900 s.
+- The image must have `/usr/sbin/gendist` and `/usr/nekoware/bin/wget`; only
+  this project's image is known to. `techomancer/iris`'s release also
+  publishes an `Indy-IRIX65_dev.chd` -- whether it has either, and whether to
+  depend on a publicly posted IRIX install at all, is a decision for Dani, not
+  a default, and was not evaluated.
+- Why the shipped libvpx objects have no `FILE` symbols.
 
 ---
 
@@ -220,19 +507,29 @@ ABI             n32 first (mogrix). o32 (rust-irixlibstd) is the later compat bu
 toolchain       /opt/cross/bin           clang-18 + ld.lld-irix symlinks
                 /opt/irix-sysroot        pulled from the 6.5.22m image
                 /opt/sgug-staging/usr/sgug   staging; irix-cc lives in bin/
+                -- or, on any Linux host, from the image and pinned sources:
+                scripts/make-sysroot.sh  -> build/irix-sysroot   (licensed)
+                scripts/toolchain.sh     -> build/toolchain, used when
+                                            IRIX_TOOLCHAIN is set. Same binary.
 compiler        /opt/sgug-staging/usr/sgug/bin/irix-cc
 
 rust            ports/rust/rustup   PRIVATE RUSTUP_HOME (nightly 1.99.0, IRIX-patched)
                 ports/rust/cargo    PRIVATE CARGO_HOME  (IRIX-patched crate registry)
                 source ports/rust/env.sh before any cargo command
 
-emulator        ~/iris-upstream/target/release/{iris,iris-ci}   upstream at 02c4e155,
-                which has the hostr readback fix. --cpu is a RUNTIME option now
-                (--cpu r5000); the CPU is no longer a build feature, and there is
-                no private build any more. Do NOT go back to an older one.
-                ~/repos/iris has uncommitted work that is not ours: do not touch.
+emulator        build/iris/target/release/{iris,iris-ci}   the PREBUILT
+                techomancer/iris v2026-08-31-16-28, via scripts/fetch-iris.sh.
+                --cpu is a runtime option (r5000 | r4400). ~/iris-upstream is
+                GONE (checked 2026-09-18). ~/repos/iris is another session's and
+                was built WITHOUT the chd feature: it cannot open the image, and
+                fetch-iris.sh now skips it. Do not touch it.
 disk            ~/Indy-IRIX65_dev.chd            IRIX 6.5.22m, R5000, /usr/sgug populated
-backup          ~/Indy-IRIX65_dev.chd.bak-before-first-write   pristine, keep
+                md5 0604bd26d8f8c0801e5a8778c3834b78, unchanged by 2026-09-18
+backup          NONE. ~/Indy-IRIX65_dev.chd.bak-before-first-write, which this
+                line used to call "pristine, keep", no longer exists (found
+                2026-09-18). The two folded diffs from 2026-08-19 are still
+                beside the image. Nothing today wrote to it -- every guest ran
+                on a discarded overlay -- but there is no second copy.
 run config      ports/iris-run/iris.toml         ci_socket is now /tmp/iris-rdagent.sock
 nvram           ports/iris-run/nvram-irix65.bin  has console=d; do not lose it
 shells          ports/iris-run/irixsh.py         telnet driver (superseded, see gsh.py)
@@ -1526,8 +1823,16 @@ scripts/               the pipeline. build.sh -> iris-gendist.sh -> package.sh,
                        iris-install-test.sh proving the result installs.
                        ci-lib.sh is the shared half, including guest_run(),
                        which is how anything automated talks to the guest.
-ci/workflows/          a GitHub Actions workflow, kept OUT of .github because
-                       this tree lives inside a fork of upstream RustDesk
+../.github/workflows/irix-agent-build.yaml
+                       the hosted build workflow. It lived in ci/workflows/,
+                       inactive, until 2026-09-18; it is at the repository
+                       root now because that is the only place GitHub reads.
+scripts/make-sysroot.sh
+                       the n32 sysroot, out of the disk image, with rb-cli
+scripts/toolchain.sh   everything non-licensed, from pinned sources
+scripts/ensure-rbcli.sh
+                       rb-cli from PATH or a rusty-backup release
+ports/toolchain/       soft_float_stubs.c, vendored: mogrix .gitignores it
 ports/rust/env.sh      sets the private RUSTUP_HOME/CARGO_HOME and build vars
 ports/rust/hello/      minimal std smoke test for the target
 src/input_shim.c       keyboard and pointer injection over XTEST, presenting the
@@ -1580,6 +1885,8 @@ ports/iris-run/guest/  the guest-side harness, all fetched by fetch.sh:
                          xdm-check.sh      can the agent capture an xdm-owned display
                          xdm-stop.sh       put the bare server back afterwards
                          cleanpty.sh       reap stale telnet logins (see gsh.py)
+                         mips3-check.sh    the agent on whatever CPU the guest
+                                           has; written for the first R4400 run
 patches/               libvpx-vp8-active-map-early-out.patch, and why it exists
 ```
 
@@ -1602,6 +1909,11 @@ If the link fails on an unresolved `-lrust_irix_compat`, `env.sh` was not
 sourced.
 
 ### Prerequisites: the C libraries the agent links
+
+**Closed on 2026-09-18: `scripts/toolchain.sh` builds all of these from pinned,
+checksummed sources and reproduces the hand-built archives** (§A HOSTED BUILD
+PIPELINE has the object-by-object comparison, and the libvpx patch that had to
+be corrected to get there). The history below is how the recipes were found.
 
 **These are not reproducible from any repo, and that is a gap rather than a
 decision.** All four were built by hand into `/opt/sgug-staging/usr/sgug`, which
@@ -1891,6 +2203,12 @@ Items 1 to 4 of the previous list are **done** — see §PERFORMANCE. What is le
 
 ### Boot
 
+**2026-09-18: `~/iris-upstream` is gone.** Use the prebuilt that
+`scripts/fetch-iris.sh --prebuilt` puts in `build/iris/target/release/`, and
+prefer `scripts/iris-guest.sh start [--cpu r4400] [--graphics]`, which writes
+its own config, never writes to the image, and prints the socket to use. The
+by-hand procedure below is kept for the reasoning; substitute the path.
+
 Use **`~/iris-upstream/target/release/iris`**, upstream at `02c4e155` ("fix
 hostr readback issues"). Anything older wedges the X server within one frame of
 capture load. `--cpu` is a runtime option now — the CPU is no longer a build
@@ -2124,6 +2442,34 @@ libvpx that staging was built from, so deleting it means re-applying
 ---
 
 ## Mistakes not to repeat
+
+**`iris-ci run` needs its marker at the start of a line.** It waits for
+`"\nIRIS-CI-RC="`. A command whose output ends without a newline -- `versions`
+ends by ringing the bell three times, nekoware's `ls` with a `\033[m` colour
+reset -- makes the marker arrive mid-line, and the run waits out its whole
+timeout on a command that finished in seconds. Run anything chatty from a
+script that logs to a file and ends with a line of its own. (Worth reporting
+upstream: iris-ci could emit `echo; echo IRIS-CI-RC=$?`.)
+
+**`/root/tmo` exits 0 whether it finished the command or killed it.** It says
+which only in its output (`[TMO: killed after Ns]`). A check written as
+`tmo 25 xdpyinfo && echo answers` reported an xdm greeter as a working X server.
+Judge by what the command printed.
+
+**A pipeline to `sed` hides a failure from `set -e`.** `guest_run ... | sed`
+returns sed's status, which is how a removal step that timed out twice still
+ended "install test finished." with exit 0. Capture, check, then print.
+
+**A background command's "exit code 0" is its LAST command's.** A job ending in
+`echo "rc=$?"` reports success whatever came before. Read the rc it printed.
+
+**Editing the target spec changes the binary.** rustc hashes the JSON spec into
+crate metadata; a one-line removal moved 14 KB of `.text` through codegen-unit
+partitioning. Harmless, and fatal to every byte-for-byte comparison.
+
+**A new script needs its executable bit.** The workflow and `release.sh` call
+scripts directly; a file created without `+x` fails as "Permission denied" and
+git records the mode it was added with.
 
 **An X server that is going away stalls a client, it does not refuse it.**
 Wedged, shutting down, or halfway through a reboot all look the same from

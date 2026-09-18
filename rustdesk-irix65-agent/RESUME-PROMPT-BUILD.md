@@ -1,5 +1,32 @@
 # Resume prompt: a hosted build pipeline, the way ../irixscsitb does it
 
+## Status after 2026-09-18 -- read this first
+
+Priorities 1 to 3 below are **done**, and 4 is **built and rehearsed locally,
+never run on GitHub**. `RESUME.md` §A HOSTED BUILD PIPELINE is the account;
+this prompt is kept for its goal, pattern and boundaries, which still hold.
+
+What is left, in order:
+
+1. **Switched on, 2026-09-18** -- the workflow is committed at
+   `.github/workflows/irix-agent-build.yaml`, filtered to `vintage-agents` and
+   to the two agent trees. What it still needs is the `IRIX65_DISK_URL` secret
+   **on `danifunker/rustdesk`**: when this was written it existed only on
+   `danifunker/irixscsitb`, and secrets do not cross repositories. Check with
+   `gh api repos/danifunker/rustdesk/actions/secrets` (names only).
+2. **Watch the first run.** It is the first toolchain cache miss, the first
+   time rustup 1.28 renames a dated nightly to `nightly` (verified only with
+   1.26), and the first guest boot on a runner. If it goes red, the `logs`
+   artifact has the console, iris and toolchain logs.
+3. **Compare its artifact with a local build** of the same commit: with
+   `IRIX_TOOLCHAIN` set locally they should be byte-identical; against the
+   `/opt` toolchain, identical once `.symtab` is set aside.
+4. Carry the corrected libvpx patch into mogrix (its untracked copy is stale)
+   and track `compat/runtime/soft_float_stubs.c` there, so
+   `ports/toolchain/` can go.
+
+Everything below this section is the original prompt.
+
 Continue the IRIX agent — shipped as **R-DeskVint**, binary `r-deskvint-irix`,
 inst product `r_deskvint_irix`. Read `RESUME.md` first; it is the source of
 truth for state, environment and the mistakes not to repeat. Do not re-derive
