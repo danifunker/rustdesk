@@ -1984,10 +1984,18 @@ fn drain_input(
                         o.disable_audio.enum_value_or_default()
                     );
                     // The resolution dial.
+                    //
+                    // Only when the peer expressed a preference. `NotSet` means
+                    // "no opinion", not "back to the default", and a client
+                    // sends an OptionMessage per option it changes -- so a
+                    // quality change arrives as Best followed milliseconds later
+                    // by a NotSet carrying some other option. Assigning
+                    // unconditionally let that second message clobber the
+                    // pending request before the frame loop could read it, and
+                    // every quality change a peer made was silently dropped.
                     #[cfg(all(any(target_os = "macos", target_os = "irix", target_os = "solaris"), not(no_vpx)))]
-                    {
-                        *quality_requested =
-                            scale_for_quality(o.image_quality.enum_value_or_default());
+                    if let Some(s) = scale_for_quality(o.image_quality.enum_value_or_default()) {
+                        *quality_requested = Some(s);
                     }
                     // And the bitrate dial; see `bitrate_for_custom_quality`.
                     #[cfg(all(any(target_os = "macos", target_os = "irix", target_os = "solaris"), not(no_vpx)))]
