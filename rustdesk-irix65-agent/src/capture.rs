@@ -129,6 +129,10 @@ pub fn display_size() -> Option<(i32, i32)> {
     if w == 0 || h == 0 { None } else { Some((w, h)) }
 }
 
+// Opened and used from one thread at a time: the session's. `new` hands one
+// across a thread boundary once, from the probe thread that built it.
+unsafe impl Send for Capturer {}
+
 pub struct Capturer {
     inner: *mut RdCapture,
     pub width: usize,
@@ -150,11 +154,47 @@ impl Capturer {
     ///
     /// `&'static str` rather than `String` to match the PowerPC `Capturer`, so
     /// `session.rs`'s `?` works against either without a conversion.
+    /// Open the capture, on a thread, with a deadline.
+    ///
+    /// Opening talks to the X server, and at an xdm login screen the server
+    /// accepts the connection and then answers nobody until someone logs in.
+    /// The I/O guards in the shim catch a connection that *dies*; they cannot
+    /// do anything about one that simply never replies. Called directly, the
+    /// open blocks for ever and the peer sits on "waiting for image" with
+    /// nothing in the log, because the session never got far enough to report a
+    /// failure.
+    ///
+    /// **One probe at a time.** A blocked open does not return, and `session`
+    /// retries every VIDEO_RETRY -- five seconds -- so without this each retry
+    /// would leak another thread and another X connection, twelve a minute, for
+    /// as long as nobody logs in. While one is outstanding every caller gets a
+    /// cheap error instead.
+    ///
+    /// The blocked thread is not wasted: the requests it queued are answered
+    /// the moment the server starts serving, so it finishes on its own at
+    /// login, finds nobody waiting for the result, drops it, and clears the way
+    /// for the next retry to succeed.
     pub fn new() -> Result<Self, &'static str> {
-        Self::open(None, PATH_DAMAGE).map_err(|e| {
-            log::error!("capture: {}", e);
-            "capture: could not open the display"
-        })
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static PROBING: AtomicBool = AtomicBool::new(false);
+
+        if PROBING.swap(true, Ordering::SeqCst) {
+            return Err("capture: an earlier open is still waiting on the display");
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let r = Self::open(None, PATH_DAMAGE);
+            let _ = tx.send(r);
+            PROBING.store(false, Ordering::SeqCst);
+        });
+        match rx.recv_timeout(std::time::Duration::from_secs(8)) {
+            Ok(Ok(c)) => Ok(c),
+            Ok(Err(e)) => {
+                log::error!("capture: {}", e);
+                Err("capture: could not open the display")
+            }
+            Err(_) => Err("capture: the display did not answer -- is anyone logged in?"),
+        }
     }
 
     /// Build one on a named display, refusing any path better than `max_path`.
