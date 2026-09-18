@@ -365,17 +365,30 @@ int rd_capture_display_size(rd_capture *c, int *w, int *h)
     Window root;
     int x, y;
     unsigned int ww, hh, bw, depth;
+    int rc = -1;
 
     if (w) *w = 0;
     if (h) *h = 0;
-    if (!c || !c->dpy)
+    if (!c || !c->dpy || c->dead)
         return -1;
+
+    /* Guarded like every other call that touches the wire. This one runs every
+     * five seconds for the life of a session, so it is the call most likely to
+     * be in flight when xdm takes the server down at logout -- and Xlib's
+     * default I/O error handler exits the process. Without the guard the agent
+     * died at logout with "X connection lost with no handler armed". */
+    WITH_X_GUARD(c, dead_out);
     root = RootWindow(c->dpy, DefaultScreen(c->dpy));
-    if (!XGetGeometry(c->dpy, root, &root, &x, &y, &ww, &hh, &bw, &depth))
-        return -1;
-    if (w) *w = (int)ww;
-    if (h) *h = (int)hh;
-    return 0;
+    if (XGetGeometry(c->dpy, root, &root, &x, &y, &ww, &hh, &bw, &depth)) {
+        if (w) *w = (int)ww;
+        if (h) *h = (int)hh;
+        rc = 0;
+    }
+    END_X_GUARD();
+    return rc;
+
+dead_out:
+    return -1;
 }
 
 rd_capture *rd_capture_open(const char *display)

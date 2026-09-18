@@ -940,6 +940,21 @@ impl Video {
     /// reads past the end of the mapping. Returns the new size when it changed,
     /// so the caller can tell the peer *before* sending a frame in it.
     fn poll_geometry(&mut self) -> Option<(i32, i32)> {
+        // A dead X connection is the other thing this poll can discover, and it
+        // is not a resolution change. On IRIX it is routine rather than
+        // exceptional: xdm takes the server down at every logout. Marking the
+        // video broken is what puts it into the retry below, which builds a
+        // fresh Capturer -- and so a fresh X connection -- against whatever
+        // server comes up next, instead of serving input for ever with no
+        // picture.
+        #[cfg(target_os = "irix")]
+        if self.cap.is_dead() {
+            if !self.broken {
+                log::warn!("capture: the X connection is gone; waiting for a server to come back");
+                self.broken = true;
+            }
+            return None;
+        }
         if !self.cap.refresh() {
             return None;
         }
