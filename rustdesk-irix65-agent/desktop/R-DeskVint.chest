@@ -1,5 +1,5 @@
 ################################################################################
-# R-DeskVint.chest -- installed by the RustDesk agent Software Manager package
+# R-DeskVint.chest -- installed by the R-DeskVint Software Manager package
 # (r_deskvint_irix.sw.*). scripts/install.sh writes an equivalent fragment when
 # installing by hand; keep the menu text in both places in sync.
 #

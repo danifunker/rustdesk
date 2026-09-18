@@ -1,5 +1,5 @@
 /*
- * r-deskvint-irix-gui -- the IRIX settings panel for the RustDesk agent.
+ * r-deskvint-irix-gui -- the IRIX settings panel for R-DeskVint, the RustDesk agent.
  *
  * IRIS IM (OSF/Motif) front end, built as a SECOND binary beside the agent
  * itself. The agent is a headless daemon and stays one: everything here can be
@@ -85,7 +85,7 @@ static String fallback_resources[] = {
 	"*sgiMode: true",
 	/* The first component must be the application NAME (argv[0]) or its
 	 * CLASS, or the WM silently falls back to the bare binary name. */
-	"Rustdeskagentgui.title: RustDesk Agent",
+	"Rustdeskagentgui.title: R-DeskVint",
 	"*logText.fontList: fixed",
 	"*logText.columns: 74",
 	"*logText.rows: 8",
@@ -546,7 +546,7 @@ static void about_cb(Widget w, XtPointer client, XtPointer call)
 {
 	(void)w; (void)client; (void)call;
 	show_msg("About",
-		 "RustDesk agent for IRIX\n\n"
+		 "R-DeskVint for IRIX\n\n"
 		 "Screen sharing and remote control for SGI workstations,\n"
 		 "speaking the RustDesk protocol.\n\n"
 		 "This panel only sets what the agent's own command line sets;\n"
@@ -575,7 +575,7 @@ static void set_window_icon(Widget shell)
 				   (char *)icon_bits, ICON_WIDTH, ICON_HEIGHT);
 	if (pm == None)
 		return;
-	XtVaSetValues(shell, XtNiconPixmap, pm, XtNiconName, "RustDesk", NULL);
+	XtVaSetValues(shell, XtNiconPixmap, pm, XtNiconName, "R-DeskVint", NULL);
 }
 
 static Widget menu_item(Widget menu, const char *name, XtCallbackProc cb, XtPointer data)
