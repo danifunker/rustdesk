@@ -143,7 +143,16 @@ showkey)  "$AGENT" --show-key 2>/dev/null || echo "(no key yet)" ;;
 showid)   "$AGENT" --show-id  2>/dev/null || echo "(no id yet)"  ;;
 showlog)  tail -30 "$LOG" 2>/dev/null || echo "No log yet - the agent has not run." ;;
 
-start)    start_agent; is_running && echo "Started." || echo "Could not start it. Try Show the log." ;;
+# Refuses to start a second one. Two agents both bind :21118, both register the
+# same id, and the one that answers a peer is a coin toss -- and `stop` then
+# kills both, so it looks like the first start never worked. Found by running
+# the init script by hand on a machine where boot had already started one.
+start)    if is_running; then
+              echo "Already running."
+          else
+              start_agent
+              is_running && echo "Started." || echo "Could not start it. Try Show the log."
+          fi ;;
 stop)     stop_agent;  is_running && echo "It is still running." || echo "Stopped." ;;
 restart)  stop_agent; start_agent
           is_running && echo "Restarted." || echo "Could not start it. Try Show the log." ;;

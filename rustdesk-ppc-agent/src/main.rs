@@ -563,11 +563,46 @@ fn main() {
 }
 
 #[cfg(any(target_os = "macos", target_os = "irix", target_os = "solaris"))]
+/// The framebuffer size, for the banner -- on a thread, with a deadline.
+///
+/// This is only ever used to print one line and to seed `PeerInfo`, which
+/// re-reads the size when a peer actually arrives. It is not worth blocking
+/// start-up for, and on IRIX it *did*: at the xdm login screen the server
+/// accepts the connection and then answers nothing, so the X calls inside
+/// `Capturer::new` never return. The agent sat at 0:00 CPU for seven hours,
+/// having never reached the listener or the rendezvous registration -- alive,
+/// reachable by nothing, and silent, because it had not even printed its
+/// banner yet.
+///
+/// Registering with the server is the job that matters when nobody is logged
+/// in. It must not wait on a display.
+///
+/// The thread is deliberately not joined. If the server never answers it stays
+/// blocked for the life of the process, holding one X connection: once, at
+/// start-up, which is a fair price for not hanging. `Capturer`'s own drop path
+/// does not run, and that is the same leak `rd_display_size` already takes.
 fn display_size() -> (i32, i32) {
-    match rustdesk_ppc_agent::capture::Capturer::new() {
-        Ok(c) => (c.width as i32, c.height as i32),
-        Err(e) => {
+    use std::sync::mpsc;
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let r = match rustdesk_ppc_agent::capture::Capturer::new() {
+            Ok(c) => Ok((c.width as i32, c.height as i32)),
+            Err(e) => Err(e.to_string()),
+        };
+        let _ = tx.send(r);
+    });
+    match rx.recv_timeout(std::time::Duration::from_secs(5)) {
+        Ok(Ok(wh)) => wh,
+        Ok(Err(e)) => {
             eprintln!("warning: could not read the display ({}); reporting 0x0", e);
+            (0, 0)
+        }
+        Err(_) => {
+            eprintln!(
+                "warning: the display did not answer in 5s -- reporting 0x0 and \
+                 carrying on. At a login screen this is expected: the X server \
+                 accepts a connection and serves nobody until someone logs in."
+            );
             (0, 0)
         }
     }
