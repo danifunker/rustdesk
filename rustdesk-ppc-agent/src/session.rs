@@ -679,6 +679,10 @@ fn video_tune() -> crate::encode::Tune {
     let t = crate::encode::Tune::default();
     #[cfg(any(target_os = "irix", target_os = "solaris"))]
     let t = crate::encode::Tune { profile: 3, screen_content: 2, ..t };
+    // IRIX alone for now: measured there, and the session's own backstop and
+    // rolling refresh are what stand in for them. See `Tune::auto_keyframes`.
+    #[cfg(target_os = "irix")]
+    let t = crate::encode::Tune { auto_keyframes: false, ..t };
     t
 }
 

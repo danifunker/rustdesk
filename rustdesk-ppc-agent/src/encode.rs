@@ -30,6 +30,7 @@ extern "C" {
         profile: c_int,
         min_q: c_int,
         screen_content: c_int,
+        auto_keyframes: c_int,
     ) -> *mut VpxEnc;
     fn vpxenc_encode(
         e: *mut VpxEnc,
@@ -114,6 +115,15 @@ pub struct Tune {
     /// bias tuned for natural video — and, at 2, keeps a golden frame updated
     /// for the static parts.
     pub screen_content: u32,
+    /// Let libvpx put in key frames of its own: every 128 frames (its
+    /// `kf_max_dist` default) and wherever it decides the picture has cut.
+    /// The session already sends one when a peer arrives, asks, or changes
+    /// scale, and schedules its own backstop (`session::KEYFRAME_FRAMES`), so
+    /// these are extra -- and they are the most expensive frame there is. On an
+    /// O2 a 1280x1024 key frame costs 2.3 s against 46 ms for a pointer move,
+    /// a stall every 128 frames of real use. Upstream RustDesk turns them off
+    /// (`VPX_KF_DISABLED`, "reduce bandwidth a lot"); nothing is lost over TCP.
+    pub auto_keyframes: bool,
 }
 
 impl Default for Tune {
@@ -140,6 +150,7 @@ impl Default for Tune {
             profile: 0,
             min_q: 8,
             screen_content: 0,
+            auto_keyframes: true,
         }
     }
 }
@@ -194,6 +205,7 @@ impl Encoder {
                 tune.profile as c_int,
                 tune.min_q as c_int,
                 tune.screen_content as c_int,
+                tune.auto_keyframes as c_int,
             )
         };
         if inner.is_null() {

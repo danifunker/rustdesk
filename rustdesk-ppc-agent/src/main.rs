@@ -836,6 +836,7 @@ fn encode_sweep(img: &mut rustdesk_ppc_agent::convert::I420) -> u128 {
         profile: 0,
         min_q: 8,
         screen_content: 0,
+        auto_keyframes: true,
     };
     let sweep: &[(&str, Tune)] = &[
         ("static 1000", plain),

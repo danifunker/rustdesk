@@ -50,7 +50,7 @@ struct vpxenc {
  */
 struct vpxenc *vpxenc_new(int width, int height, int bitrate_kbps, int cpu_used, int threads,
                           int static_thresh, int last_ref_only, int error_resilient,
-                          int profile, int min_q, int screen_content)
+                          int profile, int min_q, int screen_content, int auto_keyframes)
 {
     struct vpxenc *e;
     vpx_codec_enc_cfg_t cfg;
@@ -105,7 +105,9 @@ struct vpxenc *vpxenc_new(int width, int height, int bitrate_kbps, int cpu_used,
         threads = 4;
     cfg.g_threads = threads;
     cfg.rc_end_usage = VPX_CBR;
-    cfg.kf_mode = VPX_KF_AUTO;
+    /* Key frames only when asked for, unless the caller wants libvpx's own as
+     * well -- see `Tune::auto_keyframes`. */
+    cfg.kf_mode = auto_keyframes ? VPX_KF_AUTO : VPX_KF_DISABLED;
     /* The floor on quality, and so a floor on how many coefficients there are
      * to transform, quantise and tokenise. 8 is near-lossless and was chosen on
      * a machine where the encoder was not the bottleneck. */
