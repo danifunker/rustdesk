@@ -303,8 +303,13 @@ rm -f "$STAGE/probe.conf" "$STAGE/err"
 # `--help` exits 2 (it is the usage path), and this script runs under
 # `set -o pipefail`, so piping it straight into grep reports failure whatever
 # grep found. Capture once, then match.
+#
+# Matched under the names --help documents. The helper still sends the older
+# --server/--no-server, which the agent accepts in the same match arms as
+# --id-server/--no-id-server -- but --help no longer lists --no-server, so
+# checking that spelling rejected every agent built since the rename.
 AGENT_HELP="$("$D/rustdesk-agent" --help 2>&1 || true)"
-for flag in --password --server --no-server --key --relay-server --show-id --show-key; do
+for flag in --password --id-server --no-id-server --key --relay-server --show-id --show-key; do
     echo "$AGENT_HELP" | grep -q -- "$flag" || {
         echo "error: the agent being packaged does not support $flag." >&2
         echo "       It is older than this app -- rebuild it before bundling:" >&2
