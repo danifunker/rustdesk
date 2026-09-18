@@ -20,6 +20,42 @@ x86-64 host:
 
 Everything below is about getting to the point where those commands work.
 
+## The short way: any Linux host and the disk image
+
+Since 2026-09-18 everything the build needs can be made from the IRIX disk
+image plus pinned open-source inputs, with no `/opt` and nothing copied from
+another machine. This is what CI does, and it works the same locally:
+
+```sh
+sudo apt-get install clang-18 llvm-18 python3-yaml    # Ubuntu 24.04
+export IRIX65_IMAGE=~/Indy-IRIX65_dev.chd              # or IRIX65_DISK_URL
+scripts/make-sysroot.sh     # SGI's headers and libraries, out of the image: ~15 s
+scripts/toolchain.sh        # everything else, from source, into build/toolchain
+export IRIX_TOOLCHAIN=$PWD/build/toolchain IRIX_SYSROOT=$PWD/build/irix-sysroot
+scripts/build.sh            # the agent and the panel, staged for packaging
+```
+
+`make-sysroot.sh` extracts the n32 sysroot with `rb-cli` and adds the two things
+a bare extraction misses (the Motif headers `/usr/include/Xm` links to, and
+mogrix's stripped `crt1.o`/`crtn.o`). `toolchain.sh` fetches mogrix at a pinned
+commit (which carries the patched `ld.lld-irix-18` as a binary), builds its
+runtime objects and the five static libraries below from checksummed tarballs,
+and installs and patches the pinned nightly -- all inside `build/toolchain`,
+never touching `~/.rustup` or `~/.cargo`.
+
+**It was checked against this machine's hand-built `/opt`,** object by object:
+every runtime object, `libgcc_s`, zlib, libsodium and all three mbedTLS
+archives came out byte-identical; zstd differs in one object, by the build path
+an `assert` records; libvpx is identical in all 83 objects apart from ELF
+`FILE` symbols the original archive lacks. The agent built through either
+toolchain is identical in everything that loads -- only `.symtab` differs, by
+those symbols -- and the panel is identical outright. Getting libvpx to match
+found that `patches/libvpx-vp8-active-map-early-out.patch` did not describe the
+libvpx that had actually shipped; the patch now does. See `RESUME.md`.
+
+The sysroot is licensed material. It lives in `build/`, is never committed or
+cached, and takes fifteen seconds to remake.
+
 ---
 
 ## The build needs no emulator
@@ -29,9 +65,11 @@ This is a cross-compile: clang-18 plus `ld.lld-irix` targeting
 all. `iris` is only needed to *run* what comes out, and on current evidence a
 real SGI would be a better place to run it — see the blocker in the README.
 
-What the build *does* need from an IRIX machine is `/opt/irix-sysroot`: headers
-and shared libraries pulled off a 6.5.22m installation. That extraction is a
-one-time job and is not part of a normal build.
+What the build *does* need from an IRIX machine is a sysroot: headers and
+shared libraries from a 6.5.22m installation. On this machine that is
+`/opt/irix-sysroot`, pulled off the guest by hand; anywhere else,
+`scripts/make-sysroot.sh` takes the same files out of the disk image, and the
+two produce identical binaries.
 
 ## Prerequisites
 
@@ -68,12 +106,12 @@ the older one predates `compressBound`, which made the agent die on a stock O2
 while working on the build image. `docs/PACKAGING.md` has the whole account; the
 short version is that a machine's own zlib cannot be relied on.
 
-**These are currently built by hand into `/opt/sgug-staging`, which is outside
-every git tree — a real reproducibility gap rather than a decision.** The exact
-invocations, recovered from each build tree's own `config.status` and
-`config.log`, are in `RESUME.md` under *Prerequisites*. mogrix has package
-rules for all of them; building them through its pipeline instead needs
-`rpmbuild`, which is what makes the staging tree reproducible.
+**On this machine they were built by hand into `/opt/sgug-staging`, outside
+every git tree.** `scripts/toolchain.sh` now builds all five from pinned,
+checksummed sources with the same flags, and reproduces those hand-built
+archives (see *The short way*, above) -- so the recipes are in git at last, as a
+script rather than as notes. mogrix also has package rules for all of them;
+building through its pipeline needs `rpmbuild`.
 
 ### A Rust nightly, kept private
 

@@ -15,7 +15,12 @@
 #
 # Usage:
 #   scripts/release.sh [--boot] [--version V] [--no-inst] [--no-build]
-#                      [--outdir DIR] [--install-test]
+#                      [--outdir DIR] [--install-test] [--require-gendist]
+#
+# --require-gendist: the run FAILS unless the Software Manager product was
+# built. What CI uses -- the same switch as ../irixscsitb's, for the same
+# reason: a guest that cannot package should be a red run, not a quiet
+# tarball-only result that looks like success.
 #
 # --install-test is OPT-IN and is not part of a release. See the note beside it
 # below.
@@ -35,6 +40,7 @@ DO_BUILD=1
 DO_INST=1
 DO_TEST=0
 BOOT=""
+REQUIRE=""
 
 die() { echo "release: $*" >&2; exit 1; }
 
@@ -46,7 +52,8 @@ while [ $# -gt 0 ]; do
 		--no-inst)  DO_INST=0; shift ;;
 		--boot)     BOOT="--boot"; shift ;;
 		--install-test) DO_TEST=1; shift ;;
-		-h|--help)  sed -n '2,19p' "$0"; exit 0 ;;
+		--require-gendist) REQUIRE="--require-tardist"; shift ;;
+		-h|--help)  sed -n '2,/^set -eu$/{/^set -eu$/!p;}' "$0"; exit 0 ;;
 		*)          die "unknown option: $1" ;;
 	esac
 done
@@ -84,7 +91,8 @@ if [ "$DO_INST" = 1 ]; then
 	echo
 fi
 
-sh "$REPO/scripts/package.sh" --version "$VERSION" --outdir "$OUTDIR"
+[ -z "$REQUIRE" ] || [ "$DO_INST" = 1 ] || die "--require-gendist and --no-inst contradict each other"
+sh "$REPO/scripts/package.sh" --version "$VERSION" --outdir "$OUTDIR" $REQUIRE
 
 # NOT part of a release, and off everywhere by default.
 #

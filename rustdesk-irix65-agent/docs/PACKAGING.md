@@ -83,13 +83,31 @@ wins:
 
 Those are `../irixscsitb`'s names, deliberately: the same image and the same
 secret serve both repositories, and someone who has configured one has
-configured the other. `--cache-key` prints a stable hash of the URL for
-`actions/cache`, or the literal `local` so a caller can skip caching; a fetch
-into an existing `--dest` is a no-op, which is what makes the cache a
-transparent win.
+configured the other. `--cache-key` prints a stable hash of the URL, or the
+literal `local`; a fetch into an existing `--dest` is a no-op.
+
+**The image is also where the sysroot comes from.** `scripts/make-sysroot.sh`
+takes SGI's headers and libraries out of it with `rb-cli` in about fifteen
+seconds, and the agent built against that is identical to one built against the
+sysroot this project had always used. So the image is the only licensed input
+anywhere in the pipeline, and a hosted runner needs nothing else private.
+
+**Neither the image nor the sysroot is cached in CI**, and that is a decision,
+not an oversight. This fork is public, and GitHub's documentation says of
+`actions/cache`: *"Anyone with read access can create a pull request on a
+repository and access the contents of a cache."* On a public repository that is
+everyone. `../irixscsitb` caches its images; this workflow downloads the image
+every run instead and caches only the toolchain, which holds nothing of SGI's
+(`scripts/toolchain.sh`'s header says why). `--cache-key` is still used -- to key
+the toolchain cache on the image its libraries were compiled against.
 
 `scripts/fetch-iris.sh` does the same for the emulator: a local build wins,
-otherwise the prebuilt CLI from an iris release. Building iris from source is a
+otherwise the prebuilt CLI from an iris release -- **`techomancer/iris`**, the
+upstream emulator, since 2026-09-18. The old default, `danifunker/iris`,
+publishes no releases any more (its API answers 404). A local build that was
+compiled without the `chd` feature is skipped with a message rather than used:
+it would boot, read its config, and then refuse the disk. `--prebuilt` ignores
+local builds altogether, which is what CI passes. Building iris from source is a
 Rust toolchain plus clang and libclang for the chd feature, which turns a job
 that should be seconds into minutes.
 
@@ -113,8 +131,11 @@ attach to it. Three properties, each of which was a decision:
   control socket is per-run for the same reason: iris **deletes and rebinds**
   whatever socket path it is given.
 - **Headless by default.** `gendist` and `inst` never touch the framebuffer,
-  and REX3 is where the emulator's remaining X wedges live. `--graphics` maps
-  it for anything that drives the panel.
+  and REX3 is where the emulator's remaining X wedges live. `--graphics` gives
+  the guest its REX3, rendered into an offscreen buffer -- Xsgi runs and the
+  agent can capture, with no host window and no host X display, so it works on
+  a CI runner. `--window` also shows it on `$DISPLAY`. `--cpu r4400` boots a
+  MIPS III machine instead of the default R5000 (MIPS IV).
 
 **A full build host panics the guest.** Everything the guest writes goes to a
 copy-on-write overlay on the host; a write that cannot be satisfied is a fatal
@@ -316,9 +337,12 @@ Three things are shaped for it and not done:
   take it already; what is missing is an o32 build of the agent, which is the
   other effort in `~/repos/rust-irixlibstd`, and a 5.3 image. `../irixscsitb`
   runs exactly this as a two-flavor matrix and is the thing to copy.
-- **Publishing.** There is no `publish-release.sh` here. irixscsitb's takes the
-  artifact set and makes a GitHub release out of it; nothing about this
-  pipeline's output would make that hard.
+- **Publishing.** There is no `publish-release.sh` here, deliberately:
+  `.github/workflows/irix-agent-build.yaml` (at the repository root) builds and
+  packages on every push and
+  stops at artifacts. irixscsitb's takes the artifact set and makes a GitHub
+  release out of it; nothing about this pipeline's output would make that
+  hard, and it should be its own decision.
 
 ## What is deliberately not in the package
 

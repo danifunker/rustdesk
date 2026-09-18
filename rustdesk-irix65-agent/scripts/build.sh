@@ -54,10 +54,11 @@ while [ $# -gt 0 ]; do
 done
 
 load_local_conf
+toolchain_env || die "the toolchain named by IRIX_TOOLCHAIN is not usable"
 [ -n "$OUT" ] || OUT="$REPO/build/stage"
 
 SGUG="${SGUG_STAGING:-/opt/sgug-staging/usr/sgug}"
-REL="$REPO/ports/rust/agent-portable/target/mips-sgi-irix6.5/release"
+REL="${CARGO_TARGET_DIR:-$REPO/ports/rust/agent-portable/target}/mips-sgi-irix6.5/release"
 
 # The portable modules are included from the PowerPC tree by #[path], so the two
 # trees have to stay siblings. Say so here rather than letting cargo fail on a

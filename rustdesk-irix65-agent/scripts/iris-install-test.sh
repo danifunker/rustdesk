@@ -226,10 +226,42 @@ GUEST
 fi
 
 if [ "$DO_REMOVE" = 1 ]; then
+	# A script, and its output to a FILE, for a reason that cost a ten-minute
+	# timeout to find. `iris-ci run` recognises the end of a command by
+	# "\nIRIS-CI-RC=" -- the marker at the start of a line. `versions` ends by
+	# ringing the terminal bell three times with no newline after it, so the
+	# marker arrives as "\a\a\aIRIS-CI-RC=0", is never matched, and the run
+	# waits out its whole timeout on a command that finished in seconds.
+	# nekoware's `ls` does the same with a trailing "\033[m" colour reset. Both
+	# printed fine on the console; neither returned. So nothing chatty runs on
+	# the console directly: it writes a log, the bells are stripped, and the
+	# last thing printed is a line of our own.
+	cat > "$WORK/remove-run.sh" <<'GUEST'
+#!/bin/sh
+# Runs INSIDE the guest.
+versions remove r_deskvint_irix > /tmp/vremove.log 2>&1
+echo "versions rc=$?"
+tr -d '\007' < /tmp/vremove.log | tail -4
+if [ -f /usr/local/sbin/r-deskvint-irix ]; then
+	echo "STILL-THERE: /usr/local/sbin/r-deskvint-irix"
+fi
+versions -n r_deskvint_irix 2>&1 | tr -d '\007' | grep r_deskvint_irix
+echo REMOVE-DONE
+GUEST
+	chmod 755 "$WORK/remove-run.sh"
+
 	echo
 	echo ">>> versions remove r_deskvint_irix"
-	guest_run 600 'versions remove r_deskvint_irix' 2>&1 | sed 's/^/    /'
-	guest_run 60 'ls /usr/local/sbin/r-deskvint-irix 2>&1' | sed 's/^/    /'
+	guest_run 120 "$WGET -q $BASE/remove-run.sh -O /tmp/remove-run.sh" > /dev/null
+	OUT=$(guest_run 900 'sh /tmp/remove-run.sh' 2>&1)
+	echo "$OUT" | sed 's/^/    /'
+	echo "$OUT" | grep -q REMOVE-DONE || die "the removal did not finish (output above)"
+	if echo "$OUT" | grep -q STILL-THERE; then
+		die "versions remove left the agent installed"
+	fi
+	if echo "$OUT" | grep -q '^I  *r_deskvint_irix'; then
+		die "inst still lists r_deskvint_irix as installed"
+	fi
 fi
 
 echo

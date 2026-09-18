@@ -1,7 +1,7 @@
 # scripts/ — the build and packaging pipeline
 
 Thin on purpose. Every step is a script that runs the same way on a developer
-machine and on a CI runner, and `ci/workflows/irix-agent-release.yaml` is one
+machine and on a CI runner, and `../.github/workflows/irix-agent-build.yaml` is one
 line per step — the only things in that YAML are the things only Actions can do.
 The shape is `../irixscsitb`'s, including the variable names, so one licensed
 image and one repository secret serve both projects.
@@ -19,6 +19,7 @@ image and one repository secret serve both projects.
 scripts/release.sh --boot        # cold: boots a guest, disposes of it
 scripts/release.sh               # warm: attaches to a running one
 scripts/release.sh --no-inst     # no guest at all: binaries + tarball
+scripts/release.sh --boot --require-gendist   # what CI runs: no .tardist is a failure
 ```
 
 `iris-install-test.sh` installs the package in a guest and runs what came out.
@@ -35,8 +36,16 @@ scripts/iris-install-test.sh --boot [--tarball] [--remove]
 | | |
 |---|---|
 | `fetch-image.sh` | resolve the IRIX boot image: `$IRIX65_IMAGE`, `ci/local.conf`, or `$IRIX65_DISK_URL` — a private URL, a secret in CI. `--check-only` preflights it; `--cache-key` gives `actions/cache` a key that moves with the image rather than with the commit. |
-| `fetch-iris.sh` | the emulator: a local build wins, otherwise the prebuilt CLI from an iris release. |
-| `iris-guest.sh` | boot one and dispose of it. Never writes to the image; takes no port forwards; headless unless `--graphics`. |
+| `fetch-iris.sh` | the emulator: a local build with the `chd` feature wins, otherwise the prebuilt CLI from a `techomancer/iris` release. `--prebuilt` skips local builds. |
+| `iris-guest.sh` | boot one and dispose of it. Never writes to the image; takes no port forwards; headless unless `--graphics` (offscreen REX3, no host display) or `--window`; `--cpu r4400` for MIPS III. |
+
+## Building anywhere, from the image
+
+| | |
+|---|---|
+| `ensure-rbcli.sh` | `rb-cli`, from PATH or a `danifunker/rusty-backup` release. Reads the image's XFS root with no emulator. |
+| `make-sysroot.sh` | the n32 sysroot, out of the image, into `build/irix-sysroot`, in about fifteen seconds. **Licensed** -- never cached, uploaded or committed. |
+| `toolchain.sh` | everything else the cross build needs, from pinned sources, into `build/toolchain`: mogrix, clang/LLD, the runtime objects, five static libraries, the patched nightly and registry. `--key` is its cache key; `IRIX_TOOLCHAIN` points a build at it. Reproduces the development machine's `/opt` toolchain (see `BUILD.md`). |
 
 ## The rest
 

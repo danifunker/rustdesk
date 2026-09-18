@@ -27,11 +27,25 @@
 #    iris DELETES and rebinds whatever socket path it is given.)
 #
 # 3. HEADLESS BY DEFAULT. gendist and inst never touch the framebuffer, and
-#    REX3 is where the emulator's remaining X wedges live. `--graphics` maps it
-#    for anything that drives the panel.
+#    REX3 is where the emulator's remaining X wedges live. `--graphics` gives
+#    the guest its REX3 -- so Xsgi can start and anything that captures or
+#    drives the screen has one -- rendered into an OFFSCREEN buffer: no host
+#    window and no host X display, which is what a CI runner has. (That is
+#    `--ci` without `--headless`.) `iris-ci screenshot` comes back BLACK in
+#    this mode although the guest's framebuffer is fine: to see the screen,
+#    `xwd -root` in the guest, `iris-ci get` it, `xwdtopnm` on the host.
+#    `--window` also shows it on $DISPLAY, for watching by hand.
+#
+# THE CPU is a runtime choice in iris: `--cpu r5000` (MIPS IV, the default here
+# because it is what every emulator result in RESUME.md was measured on) or
+# `--cpu r4400` (MIPS III). The agent is built for MIPS III, and the only real
+# hardware it has run on is an R10000 -- MIPS IV -- so r4400 is the one place
+# that proves the binary does not lean on an instruction MIPS III lacks.
+# $IRIS_CPU sets it too.
 #
 # Usage:
-#   eval "$(scripts/iris-guest.sh start)"     # exports IRIS_SOCKET, IRIS_GUEST_DIR
+#   eval "$(scripts/iris-guest.sh start [--cpu r4400|r5000] [--graphics|--window])"
+#                                             # exports IRIS_SOCKET, IRIS_GUEST_DIR
 #   scripts/iris-guest.sh stop
 #   scripts/iris-guest.sh status
 #
@@ -51,6 +65,7 @@ WORKDIR=""
 GRAPHICS=0
 BOOT_TIMEOUT=900
 SOCK=""
+CPU="${IRIS_CPU:-r5000}"
 
 die() { echo "iris-guest: $*" >&2; exit 1; }
 
@@ -66,7 +81,9 @@ while [ $# -gt 0 ]; do
 		# minutes -- see the note above.)
 		--timeout)  BOOT_TIMEOUT="$2"; shift 2 ;;
 		--graphics) GRAPHICS=1; shift ;;
-		-h|--help)  sed -n '2,42p' "$0"; exit 0 ;;
+		--window)   GRAPHICS=2; shift ;;
+		--cpu)      CPU="$2"; shift 2 ;;
+		-h|--help)  sed -n '2,/^set -eu$/{/^set -eu$/!p;}' "$0"; exit 0 ;;
 		*)          die "unknown option: $1" ;;
 	esac
 done
@@ -77,6 +94,11 @@ mkdir -p "$WORKDIR"
 WORKDIR=$(cd "$WORKDIR" && pwd)
 PIDFILE="$WORKDIR/iris.pid"
 [ -n "$SOCK" ] || SOCK="$WORKDIR/ci.sock"
+
+case "$CPU" in
+	r4400|r5000) ;;
+	*) die "--cpu must be r4400 or r5000, not '$CPU'" ;;
+esac
 
 case "$CMD" in
 status)
@@ -177,13 +199,16 @@ size_mb = 64
 # No port forwards, deliberately -- see the header.
 EOF
 
-	echo ">>> booting a guest from $(basename "$IMAGE")" >&2
-	if [ "$GRAPHICS" = 1 ]; then
+	echo ">>> booting a guest from $(basename "$IMAGE") on an emulated $CPU" >&2
+	if [ "$GRAPHICS" = 2 ]; then
 		( cd "$WORKDIR" && nohup "$IRIS" --config iris.toml --ci --ci-display \
-			--cpu r5000 > iris.log 2>&1 & echo $! > "$PIDFILE" )
+			--cpu "$CPU" > iris.log 2>&1 & echo $! > "$PIDFILE" )
+	elif [ "$GRAPHICS" = 1 ]; then
+		( cd "$WORKDIR" && nohup "$IRIS" --config iris.toml --ci \
+			--cpu "$CPU" > iris.log 2>&1 & echo $! > "$PIDFILE" )
 	else
 		( cd "$WORKDIR" && nohup "$IRIS" --config iris.toml --ci --headless \
-			--cpu r5000 > iris.log 2>&1 & echo $! > "$PIDFILE" )
+			--cpu "$CPU" > iris.log 2>&1 & echo $! > "$PIDFILE" )
 	fi
 	sleep 3
 	kill -0 "$(cat "$PIDFILE")" 2>/dev/null || {

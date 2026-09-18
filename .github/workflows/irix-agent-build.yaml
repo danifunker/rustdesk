@@ -1,0 +1,232 @@
+# Build and package R-DeskVint for IRIX (r-deskvint-irix, inst product
+# r_deskvint_irix) on a HOSTED runner, on every push to vintage-agents.
+#
+# A BUILD, NOT A RELEASE. Every push cross-compiles the agent, packages it -- a
+# .tar.gz, and a .tardist made by gendist inside an IRIX 6.5 guest under iris --
+# and leaves the result as this run's artifacts. Nothing is published: there is
+# no GitHub release and no step that could create one. A broken commit shows up
+# as a red run on that commit. Publishing, when it is wanted, is a separate
+# decision and a separate workflow.
+#
+# WHEN IT RUNS. On a push to vintage-agents that touches the IRIX tree -- or
+# the PowerPC tree, whose portable modules the agent includes by #[path], so a
+# change there can break this build without touching a file here -- and by
+# hand from the Actions tab (workflow_dispatch). Nothing else: upstream
+# RustDesk's ci.yml beside this file runs on pushes to master and on pull
+# requests, and this one never fires on an upstream-tracking branch, even if
+# the file travels there in a merge.
+#
+# RELEASING stays a person's job. Take the r-deskvint-irix-n32 artifact from a
+# green run -- the .tardist, the .tar.gz and SHA256SUMS -- and attach those
+# files to a GitHub release by hand.
+#
+# Lives here, at the repository root, because that is the only place GitHub
+# reads workflows from. The scripts it calls are in rustdesk-irix65-agent/.
+#
+# THIN YAML, the shape of ../irixscsitb's release.yml: every step body is one
+# call into scripts/, and those are the scripts a person runs locally --
+# scripts/release.sh is the local equivalent of this whole file. What lives
+# here is only what Actions alone can do: the runner, its apt packages,
+# secrets into the environment, the toolchain cache, and artifacts.
+#
+# EVERYTHING LICENSED COMES FROM ONE PRIVATE FILE, which is what makes a hosted
+# runner possible at all:
+#
+#   the boot image     downloaded from the IRIX65_DISK_URL secret, every run
+#   the sysroot        scripts/make-sysroot.sh takes it OUT OF that image with
+#                      rb-cli, in about fifteen seconds -- SGI's headers and
+#                      libraries, the only licensed part of the cross build.
+#                      Checked against the development machine's sysroot: the
+#                      agent and the panel built against either are identical.
+#   the guest          boots that same image, for gendist
+#
+# The rest of the cross toolchain -- clang-18 (apt), mogrix's patched LLD, its
+# wrappers and runtime objects, the five static C libraries, the patched Rust
+# nightly and crate registry -- is open source, built from pinned sources by
+# scripts/toolchain.sh, and CACHED.
+#
+# WHERE LICENSED MATERIAL MAY GO -- decided, not defaulted. This fork is
+# PUBLIC. GitHub's own documentation: "Anyone with read access can create a
+# pull request on a repository and access the contents of a cache." On a
+# public repository that is anyone. So:
+#
+#   actions/cache     the toolchain only. It holds nothing of SGI's: compiled
+#                     open-source code, mogrix's public wrappers and headers.
+#                     NOT the image and NOT the sysroot -- which is why this
+#                     workflow downloads the image every run where
+#                     ../irixscsitb caches it. (That repository is public too.)
+#   artifacts         dist/ -- the product, which is what this project ships
+#                     -- and the guest's console and emulator logs.
+#   neither           build/irix-sysroot, build/guest-disk.chd, the guest's
+#                     overlay. Deleted at the end of the job, although the
+#                     runner is thrown away anyway.
+#
+# The image must be an IRIX 6.5 DEVELOPMENT install: the sysroot needs IDO's
+# headers and Motif's, and the guest needs /usr/sbin/gendist (inst_dev.sw) and
+# /usr/nekoware/bin/wget (files go in over HTTP). Root with an empty password.
+# The image this was developed against, Indy-IRIX65_dev.chd, has all of it.
+#
+# REQUIRED: secret IRIX65_DISK_URL ON THIS REPOSITORY -- a PRIVATE download URL
+# for that image, a bare .chd or a .zip holding one. The same name and the same
+# image as ../irixscsitb, but secrets are per repository: the one set there is
+# not visible here. Without it the preflight job fails in seconds and says so.
+# OPTIONAL: variable IRIS_TAG pins the prebuilt emulator (default: latest
+# techomancer/iris release).
+
+name: IRIX agent (build)
+
+on:
+  push:
+    branches:
+      - vintage-agents
+    paths:
+      - "rustdesk-irix65-agent/**"
+      # the agent's portable modules are included from here by #[path]
+      - "rustdesk-ppc-agent/**"
+      - ".github/workflows/irix-agent-build.yaml"
+  workflow_dispatch:
+    inputs:
+      runner_label:
+        description: "Runner label (blank = ubuntu-latest)"
+        required: false
+        default: ""
+      irix65_image:
+        description: "Absolute path of an IRIX 6.5 .chd ON THE RUNNER (self-hosted only; blank = download from the IRIX65_DISK_URL secret)"
+        required: false
+        default: ""
+      iris_tag:
+        description: "iris release tag (blank = IRIS_TAG variable, else latest)"
+        required: false
+        default: ""
+      install_test:
+        description: "Also install the .tardist in the guest and run it (about ten more minutes, nearly all inside inst)"
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+# A newer push cancels a build still running for an older one; a dispatched run
+# is never cancelled.
+concurrency:
+  group: irix-agent-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
+
+# The names the scripts read, whether they come from here, ci/local.conf or a
+# developer's shell.
+env:
+  IRIX65_DISK_URL: ${{ secrets.IRIX65_DISK_URL }}
+  IRIX65_IMAGE: ${{ github.event.inputs.irix65_image }}
+  IRIS_TAG: ${{ github.event.inputs.iris_tag || vars.IRIS_TAG }}
+  # gh, for fetch-iris.sh and ensure-rbcli.sh's release lookups
+  GH_TOKEN: ${{ github.token }}
+
+defaults:
+  run:
+    working-directory: rustdesk-irix65-agent
+
+jobs:
+  # Seconds, not the twenty minutes a build takes to reach the guest: no image
+  # source is the one failure a configuration change causes, and the message
+  # names the fix.
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Is there a boot image?
+        run: scripts/fetch-image.sh --check-only
+
+  build:
+    needs: preflight
+    runs-on: ${{ github.event.inputs.runner_label || 'ubuntu-latest' }}
+    timeout-minutes: 120
+    env:
+      # Where the scripts put things, named once so every step agrees.
+      IRIX_TOOLCHAIN: ${{ github.workspace }}/rustdesk-irix65-agent/build/toolchain
+      IRIX_SYSROOT: ${{ github.workspace }}/rustdesk-irix65-agent/build/irix-sysroot
+    steps:
+      - uses: actions/checkout@v4
+
+      # clang/llvm 18 are Ubuntu 24.04's own, the version every build of this
+      # agent has used. libasound2t64: the prebuilt iris links ALSA.
+      # python3-yaml: mogrix's crate patcher.
+      - name: Runner packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-18 llvm-18 libasound2t64 python3-yaml unzip
+
+      - name: Emulator (prebuilt iris)
+        run: scripts/fetch-iris.sh --prebuilt
+
+      - name: rb-cli
+        run: scripts/ensure-rbcli.sh
+
+      # Every run, deliberately uncached: see WHERE LICENSED MATERIAL MAY GO.
+      - name: Boot image
+        run: scripts/fetch-image.sh > /dev/null
+
+      - name: Sysroot, from the image
+        run: scripts/make-sysroot.sh > /dev/null
+
+      # Keyed on every pin in toolchain.sh, the files it builds from, and the
+      # image the libraries are compiled against.
+      - name: Toolchain cache key
+        id: tckey
+        run: echo "key=$(scripts/toolchain.sh --key --image-key "$(scripts/fetch-image.sh --cache-key)")" >> "$GITHUB_OUTPUT"
+
+      - name: Toolchain cache
+        uses: actions/cache@v4
+        with:
+          path: rustdesk-irix65-agent/build/toolchain
+          key: irix-toolchain-${{ steps.tckey.outputs.key }}
+
+      # A no-op on a cache hit; about five minutes from nothing.
+      - name: Toolchain
+        run: scripts/toolchain.sh
+
+      - name: Cross-build and stage
+        run: scripts/build.sh
+
+      # One guest for gendist (and the install test, when asked), started and
+      # stopped by the script. --require-gendist: a guest that cannot build
+      # the product FAILS the run rather than leaving a tarball on its own.
+      - name: Package (gendist in an IRIX guest)
+        run: >
+          scripts/release.sh --no-build --boot --require-gendist
+          ${{ github.event.inputs.install_test == 'true' && '--install-test' || '' }}
+
+      # The whole of dist/: the .tardist, the .tar.gz and SHA256SUMS together.
+      # (irixscsitb once shipped releases with no .tardist by uploading only
+      # the binaries.)
+      - name: Upload the product
+        uses: actions/upload-artifact@v4
+        with:
+          name: r-deskvint-irix-n32
+          path: rustdesk-irix65-agent/dist/
+          if-no-files-found: error
+
+      # What every question about a failed run turns out to need.
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs
+          path: |
+            rustdesk-irix65-agent/build/guest/console.log
+            rustdesk-irix65-agent/build/guest/iris.log
+            rustdesk-irix65-agent/build/toolchain-logs/
+          if-no-files-found: ignore
+
+      - name: Stop the guest
+        if: always()
+        run: scripts/iris-guest.sh stop || true
+
+      # Belt and braces: a hosted runner is discarded anyway, a self-hosted one
+      # is not, and nothing licensed should outlive the job either way. (The
+      # image is only removed when it was downloaded -- irix65_image names a
+      # runner's own copy, which is not this job's to delete.)
+      - name: Remove licensed material
+        if: always()
+        run: rm -rf build/irix-sysroot build/guest-disk.chd build/guest-disk.chd.* build/guest

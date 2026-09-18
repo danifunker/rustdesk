@@ -9,7 +9,7 @@
 #
 # TWO THINGS THE STOCK CROSS ENVIRONMENT DOES NOT GIVE YOU:
 #
-# 1. The Motif headers are not in /opt/irix-sysroot. The libraries are
+# 1. The Motif headers were not in /opt/irix-sysroot. The libraries are
 #    (libXm.so, libXt.so, libSgm.so -- all SHARED, which is what makes this
 #    possible at all: LLD cannot read the static archives SGI ships, which is
 #    why input_shim.c issues XTEST protocol requests by hand). The headers live
@@ -24,6 +24,10 @@
 #
 #    That is Motif 1.2.4, which is what 6.5 ships and 5.3 carries.
 #
+#    A sysroot made by scripts/make-sysroot.sh needs none of that: it takes
+#    /usr/Motif-1.2 out of the image beside /usr/include, which is exactly
+#    where the image's own Xm and Sgm symlinks point.
+#
 # 2. -D_XmConst= . Xm/XmStrDefs.h declares `externalref _XmConst char ...` for
 #    SGI's keypad virtual keys inside a branch that never defines _XmConst.
 #    MIPSpro lets it through; clang reports "unknown type name '_XmConst'" and
@@ -32,12 +36,15 @@
 set -e
 
 SGUG=${SGUG:-/opt/sgug-staging/usr/sgug}
+# irix-cc reads IRIX_SYSROOT itself; this is only so the check below looks in
+# the same place the compiler will.
+SYSROOT=${IRIX_SYSROOT:-/opt/irix-sysroot}
 CC=${CC:-$SGUG/bin/irix-cc}
 OUT=${OUT:-$(cd "$(dirname "$0")" && pwd)/r-deskvint-irix-gui}
 SRC=$(cd "$(dirname "$0")" && pwd)/gui_motif.c
 
-if [ ! -f /opt/irix-sysroot/usr/include/Xm/Xm.h ]; then
-    echo "build-gui.sh: no Motif headers in the sysroot -- see the note at the top" >&2
+if [ ! -f "$SYSROOT/usr/include/Xm/Xm.h" ]; then
+    echo "build-gui.sh: no Motif headers in $SYSROOT -- see the note at the top" >&2
     exit 1
 fi
 

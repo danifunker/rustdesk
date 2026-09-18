@@ -22,9 +22,9 @@ conf_get() {
 # a real environment variable always beats the file. Call once, after argument
 # parsing.
 load_local_conf() {
-	for _k in IRIX_SYSROOT SGUG_STAGING PPC_AGENT_DIR \
+	for _k in IRIX_SYSROOT IRIX_TOOLCHAIN SGUG_STAGING PPC_AGENT_DIR \
 	          IRIX65_IMAGE IRIX65_DISK_URL \
-	          IRIS_DIR IRIS_SOCKET IRIS_RELEASE_REPO IRIS_TAG; do
+	          IRIS_DIR IRIS_SOCKET IRIS_RELEASE_REPO IRIS_TAG IRIS_CPU RB_CLI; do
 		_cur=$(eval "printf %s \"\${$_k:-}\"")
 		[ -n "$_cur" ] && continue
 		_v=$(conf_get "$_k")
@@ -32,6 +32,20 @@ load_local_conf() {
 		eval "$_k=\$_v"
 		export "$_k"
 	done
+}
+
+# toolchain_env -- when IRIX_TOOLCHAIN names a directory scripts/toolchain.sh
+# built, export what irix-cc and irix-ld read, so every compile in this run --
+# the agent's C shims, the panel, anything else -- uses that toolchain rather
+# than /opt. ports/rust/env.sh does the same for cargo. A no-op without it.
+toolchain_env() {
+	[ -n "${IRIX_TOOLCHAIN:-}" ] || return 0
+	[ -x "$IRIX_TOOLCHAIN/sgug/bin/irix-cc" ] ||
+		{ echo "IRIX_TOOLCHAIN=$IRIX_TOOLCHAIN has no sgug/bin/irix-cc -- run scripts/toolchain.sh" >&2; return 1; }
+	SGUG_STAGING="$IRIX_TOOLCHAIN/sgug"
+	IRIX_CLANG="$IRIX_TOOLCHAIN/cross/bin/clang"
+	IRIX_LLD="$IRIX_TOOLCHAIN/cross/bin/ld.lld-irix"
+	export SGUG_STAGING IRIX_CLANG IRIX_LLD
 }
 
 # The image and emulator keys are spelled exactly as ../irixscsitb spells them,
@@ -59,13 +73,19 @@ resolve_local_image() {
 # and the revision is what a bug report needs. A dirty tree says so, because a
 # binary built from uncommitted work corresponds to no commit and that is
 # exactly the thing you want to know when it misbehaves.
+#
+# The date is the COMMIT's, in UTC, not the clock's. With the build date, one
+# commit built today and rebuilt tomorrow -- a re-run CI job, a developer
+# reproducing it -- carried two different inst versions, and inst would call
+# the second an upgrade of the first. Now a commit has one version wherever and
+# whenever it is built. (A shallow CI checkout still has HEAD's commit date.)
 version_string() {
 	_rev=$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null)
-	_date=$(date -u '+%Y%m%d' 2>/dev/null)
 	if [ -z "$_rev" ]; then
-		printf '%s-nogit' "$_date"
+		printf '%s-nogit' "$(date -u '+%Y%m%d')"
 		return 0
 	fi
+	_date=$(TZ=UTC git -C "$REPO" log -1 --format=%cd --date=format-local:%Y%m%d HEAD)
 	if [ -n "$(git -C "$REPO" status --porcelain 2>/dev/null)" ]; then
 		printf '%s-%s-dirty' "$_date" "$_rev"
 	else

@@ -12,8 +12,11 @@
 set -e
 
 MOGRIX="${MOGRIX_ROOT:-$HOME/repos/mogrix}"
-CC="${IRIX_CC:-/opt/sgug-staging/usr/sgug/bin/irix-cc}"
-OUT="$(cd "$(dirname "$0")" && pwd)/hello/compat"
+STAGING="${SGUG_STAGING:-/opt/sgug-staging/usr/sgug}"
+CC="${IRIX_CC:-$STAGING/bin/irix-cc}"
+# RD_COMPAT_OUT puts the archive somewhere else -- scripts/toolchain.sh keeps it
+# with the rest of a provisioned toolchain -- and leaves this tree alone.
+OUT="${RD_COMPAT_OUT:-$(cd "$(dirname "$0")" && pwd)/hello/compat}"
 
 if [ ! -d "$MOGRIX/compat" ]; then
     echo "no mogrix compat sources at $MOGRIX/compat" >&2
@@ -26,7 +29,7 @@ for src in rust/rust_compat.c rust/errno_location.c dicl/openat-compat.c \
            string/strnlen.c stdlib/setenv.c error/strerror_r.c; do
     obj="$OUT/$(basename "$src" .c).o"
     "$CC" -c "$MOGRIX/compat/$src" -o "$obj" \
-        -I/opt/sgug-staging/usr/sgug/include \
+        -I"$STAGING/include" \
         -I"$MOGRIX/compat/include"
 done
 ar rcs "$OUT/librust_irix_compat.a" "$OUT"/*.o
@@ -34,4 +37,5 @@ echo "built $OUT/librust_irix_compat.a"
 
 # agent-portable links the same archive through a symlink rather than a second
 # copy. A fresh clone has the symlink but not its target until now.
-ln -sfn ../hello/compat "$(dirname "$OUT")/agent-portable/compat" 2>/dev/null || true
+[ -n "${RD_COMPAT_OUT:-}" ] ||
+    ln -sfn ../hello/compat "$(dirname "$OUT")/agent-portable/compat" 2>/dev/null || true

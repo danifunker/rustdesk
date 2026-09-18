@@ -18,13 +18,16 @@
 #IRIX65_DISK_URL=https://example.invalid/private/indy-irix65.chd
 
 # ---- the emulator -------------------------------------------------------------
-# A local build wins. Otherwise scripts/fetch-iris.sh downloads the prebuilt
-# CLI from a release. Anything older than upstream 02c4e155 wedges the X server
+# A local build with the chd feature wins. Otherwise scripts/fetch-iris.sh
+# downloads the prebuilt CLI from a release (techomancer/iris by default). Anything older than upstream 02c4e155 wedges the X server
 # under capture load -- it does not matter for packaging, which runs headless,
 # and it matters a great deal for anything driving the panel.
 #IRIS_DIR=/home/you/iris-upstream
-#IRIS_RELEASE_REPO=danifunker/iris
+#IRIS_RELEASE_REPO=techomancer/iris
 #IRIS_TAG=
+# The emulated CPU for pipeline guests: r5000 (MIPS IV, the default) or r4400
+# (MIPS III).
+#IRIS_CPU=r5000
 
 # Only needed to attach to a guest somebody else started. The pipeline's own
 # guest (scripts/iris-guest.sh) picks its own per-run socket so it cannot steal
@@ -32,9 +35,16 @@
 #IRIS_SOCKET=/tmp/iris-rdagent.sock
 
 # ---- the cross toolchain ------------------------------------------------------
-# As mogrix's `setup-cross` deploys it.
+# Either the one scripts/toolchain.sh builds from pinned sources (what CI uses;
+# works on any Linux host) ...
+#IRIX_TOOLCHAIN=/home/you/repos/rustdesk/rustdesk-irix65-agent/build/toolchain
+#IRIX_SYSROOT=/home/you/repos/rustdesk/rustdesk-irix65-agent/build/irix-sysroot
+# ... or the one mogrix's `setup-cross` deploys into /opt, the development
+# machine's layout, used when IRIX_TOOLCHAIN is unset.
 #SGUG_STAGING=/opt/sgug-staging/usr/sgug
 #IRIX_SYSROOT=/opt/irix-sysroot
+# rb-cli, for scripts/make-sysroot.sh, if it is not on PATH.
+#RB_CLI=/home/you/.local/bin/rb-cli
 
 # ---- the PowerPC agent tree ---------------------------------------------------
 # The portable modules are included from it by #[path], so the two trees must

@@ -10,15 +10,33 @@
 #
 # Resolution, first match wins:
 #   1. $IRIS_DIR                  a checkout that has been built
-#   2. ~/iris-upstream            where this project keeps one
-#   3. a release download         $IRIS_RELEASE_REPO, default danifunker/iris,
+#   2. ~/iris-upstream, ../../iris  where a developer machine may keep one
+#   3. a release download         $IRIS_RELEASE_REPO, default techomancer/iris,
 #                                 at $IRIS_TAG or latest
 #
+# A LOCAL BUILD WITHOUT THE chd FEATURE IS SKIPPED, not used. The boot image is
+# a .chd, and an iris built without `--features chd` starts, reads its config,
+# and then refuses the disk with "CHD image support not compiled in" -- which is
+# a failure three steps into a guest boot about a binary that was chosen here.
+# The message is compiled in only when the feature is OFF, so its presence in
+# the binary is the test. (2026-09-18: ~/repos/iris was exactly that build.)
+#
+# THE UPSTREAM EMULATOR, techomancer/iris. The old default, danifunker/iris,
+# publishes no releases any more -- its releases API answers 404 (checked
+# 2026-09-18) -- and ../irixscsitb moved to techomancer for the same reason.
+# Since v2026-08-31-16-28 upstream ships ONE CLI build per platform,
+# IRIS-cli-<os>-<arch>-<ver>.tar.gz, holding iris and iris-ci flat, with every
+# build feature on (chd included) and the CPU a runtime option (--cpu).
+#
 # Usage:
-#   scripts/fetch-iris.sh [--dir DIR] [--repo OWNER/NAME] [--tag TAG]
+#   scripts/fetch-iris.sh [--dir DIR] [--repo OWNER/NAME] [--tag TAG|latest]
+#                         [--prebuilt]
+#
+#   --prebuilt  ignore local builds and use (or download) a release. What CI
+#               wants, and what a developer wants to reproduce a CI run.
 #
 # Needs `gh` (authenticated) or `curl` for the download path. Nothing at all
-# when a local build is present, which is the usual case.
+# when a local build is present.
 #
 # NOTE ON VERSION. Anything older than upstream 02c4e155 ("fix hostr readback
 # issues") wedges the X server within one frame of capture load. The packaging
@@ -33,6 +51,7 @@ REPO=$(cd "$(dirname "$0")/.." && pwd)
 DIR=""
 GH_REPO=""
 TAG=""
+PREBUILT=0
 
 die() { echo "fetch-iris: $*" >&2; exit 1; }
 
@@ -41,33 +60,48 @@ while [ $# -gt 0 ]; do
 		--dir)     DIR="$2"; shift 2 ;;
 		--repo)    GH_REPO="$2"; shift 2 ;;
 		--tag)     TAG="$2"; shift 2 ;;
-		-h|--help) sed -n '2,27p' "$0"; exit 0 ;;
+		--prebuilt) PREBUILT=1; shift ;;
+		-h|--help) sed -n '2,/^set -eu$/{/^set -eu$/!p;}' "$0"; exit 0 ;;
 		*)         die "unknown option: $1" ;;
 	esac
 done
 
 load_local_conf
-[ -n "$GH_REPO" ] || GH_REPO="${IRIS_RELEASE_REPO:-danifunker/iris}"
+[ -n "$GH_REPO" ] || GH_REPO="${IRIS_RELEASE_REPO:-techomancer/iris}"
 [ -n "$TAG" ]     || TAG="${IRIS_TAG:-}"
+# "latest" is what irixscsitb's workflow passes; here it means the same as blank.
+[ "$TAG" = latest ] && TAG=""
 
 have_both() { [ -x "$1/target/release/iris" ] && [ -x "$1/target/release/iris-ci" ]; }
+# See the header: the refusal text exists in the binary only without the feature.
+has_chd() { ! grep -q 'CHD image support not compiled in' "$1/target/release/iris"; }
 
 # ---- 1 and 2: a local build ----------------------------------------------------
-for _d in "${IRIS_DIR:-}" "$HOME/iris-upstream" "$REPO/../../iris"; do
-	[ -n "$_d" ] || continue
-	[ -d "$_d" ] || continue
-	if have_both "$_d"; then
+if [ "$PREBUILT" = 0 ]; then
+	for _d in "${IRIS_DIR:-}" "$HOME/iris-upstream" "$REPO/../../iris"; do
+		[ -n "$_d" ] || continue
+		[ -d "$_d" ] || continue
+		have_both "$_d" || continue
+		if ! has_chd "$_d"; then
+			echo "fetch-iris: skipping $_d -- built without the chd feature, so it cannot open the boot image" >&2
+			continue
+		fi
 		echo "fetch-iris: using the local build in $_d" >&2
 		( cd "$_d" && pwd )
 		exit 0
-	fi
-done
+	done
+fi
 
 # ---- 3: a release download -----------------------------------------------------
 [ -n "$DIR" ] || DIR="$REPO/build/iris"
 mkdir -p "$DIR/target/release"
-if have_both "$DIR"; then
-	echo "fetch-iris: reusing $DIR" >&2
+# A download is reused only for the tag it was made for. `latest` is a moving
+# target, so a download made as latest is reused as latest -- pin IRIS_TAG for
+# a run that must not change underneath you.
+STAMP="$DIR/target/release/.iris-release"
+WANT="$GH_REPO@${TAG:-latest}"
+if have_both "$DIR" && [ "$(cat "$STAMP" 2>/dev/null)" = "$WANT" ]; then
+	echo "fetch-iris: reusing $DIR ($WANT)" >&2
 	( cd "$DIR" && pwd )
 	exit 0
 fi
@@ -125,5 +159,14 @@ for b in iris iris-ci; do
 	chmod 755 "$DIR/target/release/$b"
 done
 
-echo "fetch-iris: $DIR/target/release/{iris,iris-ci}" >&2
+# --help exercises argument parsing and dynamic linking; iris has no --version.
+# The prebuilt Linux CLI links ALSA, so on a bare runner this is where a missing
+# libasound2 shows up -- here, not three steps into a boot.
+"$DIR/target/release/iris" --help > /dev/null 2>&1 ||
+	die "the downloaded iris does not run here (missing libasound2? try: ldd $DIR/target/release/iris)"
+"$DIR/target/release/iris-ci" --help > /dev/null 2>&1 ||
+	die "the downloaded iris-ci does not run here"
+printf '%s\n' "$WANT" > "$STAMP"
+
+echo "fetch-iris: $DIR/target/release/{iris,iris-ci} from $WANT" >&2
 ( cd "$DIR" && pwd )

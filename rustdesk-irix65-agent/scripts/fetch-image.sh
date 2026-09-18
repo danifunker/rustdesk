@@ -54,6 +54,10 @@ URL=$(resolve_disk_url)
 [ -n "$DEST" ] || DEST="$REPO/build/guest-disk.chd"
 
 no_source() {
+	# In Actions, also an annotation, so the reason is on the run's summary
+	# page and not only in a step log.
+	[ "${GITHUB_ACTIONS:-}" = true ] &&
+		echo "::error title=No IRIX boot image::Set the repository secret IRIX65_DISK_URL to a PRIVATE download URL for an IRIX 6.5 development .chd (or a .zip holding one), or dispatch with irix65_image on a self-hosted runner."
 	die "no boot image: set IRIX65_IMAGE to a local .chd (or the irix65_image
 dispatch input), or IRIX65_DISK_URL to a private download URL. ci/local.conf is
 the per-machine place for either -- copy ci/local.conf.example."

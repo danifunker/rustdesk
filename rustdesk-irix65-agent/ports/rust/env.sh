@@ -25,10 +25,33 @@ else
 	RD_RUST=$(cd "$(dirname "$0")" && pwd)
 fi
 
-export RUSTUP_HOME="$RD_RUST/rustup"
-export CARGO_HOME="$RD_RUST/cargo"
-export SGUG_STAGING="${SGUG_STAGING:-/opt/sgug-staging/usr/sgug}"
-export MOGRIX_CROSS="${MOGRIX_CROSS:-$HOME/repos/mogrix/cross/bin}"
+# Two layouts, one set of names.
+#
+#   IRIX_TOOLCHAIN set   everything non-licensed comes from the directory
+#                        scripts/toolchain.sh built -- what CI uses, and what
+#                        any machine without this one's /opt can use.
+#   unset                the development machine as it has always been: the
+#                        private homes beside this file, /opt/sgug-staging,
+#                        /opt/cross and ~/repos/mogrix.
+#
+# The sysroot is not in either: it is licensed, comes from the boot image
+# (scripts/make-sysroot.sh), and is named by IRIX_SYSROOT, which irix-cc and
+# irix-ld read themselves (default /opt/irix-sysroot).
+if [ -n "${IRIX_TOOLCHAIN:-}" ]; then
+	export RUSTUP_HOME="$IRIX_TOOLCHAIN/rust/rustup"
+	export CARGO_HOME="$IRIX_TOOLCHAIN/rust/cargo"
+	export SGUG_STAGING="$IRIX_TOOLCHAIN/sgug"
+	export MOGRIX_CROSS="$IRIX_TOOLCHAIN/mogrix/cross/bin"
+	export IRIX_CLANG="$IRIX_TOOLCHAIN/cross/bin/clang"
+	export IRIX_LLD="$IRIX_TOOLCHAIN/cross/bin/ld.lld-irix"
+	export IRIX_COMPAT_DIR="$IRIX_TOOLCHAIN/rust/compat"
+else
+	export RUSTUP_HOME="$RD_RUST/rustup"
+	export CARGO_HOME="$RD_RUST/cargo"
+	export SGUG_STAGING="${SGUG_STAGING:-/opt/sgug-staging/usr/sgug}"
+	export MOGRIX_CROSS="${MOGRIX_CROSS:-$HOME/repos/mogrix/cross/bin}"
+	export IRIX_COMPAT_DIR="$RD_RUST/hello/compat"
+fi
 export PATH="$CARGO_HOME/bin:$MOGRIX_CROSS:$SGUG_STAGING/bin:$PATH"
 
 # mio has no epoll or eventfd here; -L points the linker at the compat archive
@@ -38,7 +61,6 @@ export PATH="$CARGO_HOME/bin:$MOGRIX_CROSS:$SGUG_STAGING/bin:$PATH"
 # this happened to be sourced from, and the link then fails somewhere else with
 # an unresolved -lrust_irix_compat rather than anything that names the cause.
 # agent-portable's compat/ is a symlink to hello's, so one archive serves both.
-export IRIX_COMPAT_DIR="$RD_RUST/hello/compat"
 
 # -rpath, so an INSTALLED agent finds its libgcc_s.so.1 with no environment
 # variable and no wrapper script. It names the DEFAULT install prefix, so
@@ -53,12 +75,25 @@ export IRIX_COMPAT_DIR="$RD_RUST/hello/compat"
 # Harmless in a development build: a directory that does not exist costs one
 # failed stat and the /tmp workflow keeps using LD_LIBRARYN32_PATH.
 export RD_RPATH="${RD_RPATH:-/usr/local/lib/r-deskvint-irix}"
-export RUSTFLAGS="--cfg mio_unsupported_force_poll_poll --cfg mio_unsupported_force_waker_pipe -L $IRIX_COMPAT_DIR -C link-arg=-Wl,-rpath,$RD_RPATH"
+#
+# --remap-path-prefix, so the binary does not depend on where it was built.
+# Panic locations embed the source path of every std and crate file they come
+# from -- about two hundred strings, all under RUSTUP_HOME or CARGO_HOME -- so
+# without it a build carried the builder's home directory (/home/<someone>/...)
+# into every copy shipped, and no two machines could produce the same bytes.
+# With it they read /rustup/... and /cargo/..., which is what lets a CI build be
+# compared with a local one byte for byte.
+export RUSTFLAGS="--cfg mio_unsupported_force_poll_poll --cfg mio_unsupported_force_waker_pipe -L $IRIX_COMPAT_DIR -C link-arg=-Wl,-rpath,$RD_RPATH --remap-path-prefix=$RUSTUP_HOME=/rustup --remap-path-prefix=$CARGO_HOME=/cargo"
 
 # libsodium-sys: SODIUM_LIB_DIR alone. SODIUM_STATIC now panics ("deprecated,
 # use SODIUM_SHARED"), and leaving SODIUM_SHARED unset already means static.
 export SODIUM_LIB_DIR="$SGUG_STAGING/lib32"
 export SODIUM_INCLUDE_DIR="$SGUG_STAGING/include"
+
+# build.rs's search path for the other static libraries and their headers. It
+# defaults to /opt/sgug-staging, which is right only on the development machine.
+export SGUG_LIB_DIR="$SGUG_STAGING/lib32"
+export SGUG_INCLUDE_DIR="$SGUG_STAGING/include"
 
 # The cc crate needs the cross compiler named per-target.
 export CC_mips_sgi_irix6_5="$SGUG_STAGING/bin/irix-cc"

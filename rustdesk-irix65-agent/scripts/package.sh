@@ -17,7 +17,11 @@
 #
 # Usage:
 #   scripts/package.sh [--stage DIR] [--inst DIR] [--version V] [--outdir DIR]
-#                      [--abi n32|o32] [--no-tardist] [--no-tar]
+#                      [--abi n32|o32] [--no-tardist] [--no-tar] [--require-tardist]
+#
+# --require-tardist turns a missing inst product from a note into a failure.
+# CI passes it (through release.sh --require-gendist): a pipeline whose guest
+# could not package should go red, not quietly publish a tarball on its own.
 set -eu
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
@@ -30,6 +34,7 @@ VERSION=""
 ABI="n32"
 DO_TARDIST=1
 DO_TAR=1
+REQUIRE_TARDIST=0
 
 die() { echo "package: $*" >&2; exit 1; }
 
@@ -42,6 +47,7 @@ while [ $# -gt 0 ]; do
 		--abi)         ABI="$2"; shift 2 ;;
 		--no-tardist)  DO_TARDIST=0; shift ;;
 		--no-tar)      DO_TAR=0; shift ;;
+		--require-tardist) REQUIRE_TARDIST=1; shift ;;
 		-h|--help)     sed -n '2,22p' "$0"; exit 0 ;;
 		*)             die "unknown option: $1" ;;
 	esac
@@ -66,9 +72,12 @@ if [ "$DO_TARDIST" = 1 ]; then
 		( cd "$INST" && tar cf "$OUTDIR/$BASE.tardist" \
 			r_deskvint_irix r_deskvint_irix.idb r_deskvint_irix.sw )
 	else
-		# Not fatal. The cross-build works on any machine; the inst product
-		# needs a running IRIX guest, so a host without one still gets a
-		# usable tarball rather than a failed build.
+		[ "$REQUIRE_TARDIST" = 0 ] || die "no inst product in $INST, and --require-tardist was given.
+The guest step (scripts/iris-gendist.sh) did not leave r_deskvint_irix,
+r_deskvint_irix.idb and r_deskvint_irix.sw there."
+		# Not fatal otherwise. The cross-build works on any machine; the inst
+		# product needs a running IRIX guest, so a host without one still gets
+		# a usable tarball rather than a failed build.
 		echo ">>> no inst product in $INST -- skipping the tardist."
 		echo "    Run scripts/iris-gendist.sh against a running guest to make one."
 	fi
@@ -90,9 +99,9 @@ if [ "$DO_TAR" = 1 ]; then
 	cp "$REPO/scripts/install.sh" "$TOP/install.sh"
 	chmod 755 "$TOP/install.sh"
 	cat > "$TOP/README.txt" <<EOF
-RustDesk agent for IRIX -- $VERSION ($ABI)
+R-DeskVint for IRIX -- $VERSION ($ABI)
 
-  sh install.sh              install into /usr (as root)
+  sh install.sh              install into /usr/local (as root)
   sh install.sh -p /opt/rd   install somewhere else
   sh install.sh -u           remove it again
 
