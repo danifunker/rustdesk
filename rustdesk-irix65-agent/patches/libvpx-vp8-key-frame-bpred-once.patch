@@ -1,0 +1,58 @@
+Code a B_PRED macroblock once, not twice, on a key frame.
+
+Applied after libvpx-vp8-copy-only-what-changed.patch.
+
+In realtime mode vp8_pick_intra_mode() tries B_PRED last, and its 4x4 search
+has to code every subblock with the mode it picks before picking the next:
+the next subblock predicts from those reconstructed pixels. It does that with
+vp8_encode_intra4x4block(), and when B_PRED wins, vp8cx_encode_intra_macroblock()
+then calls vp8_encode_intra4x4mby() -- the same sixteen calls on the same
+inputs in the same order -- and throws the first result away. Nothing touches
+the luma state in between, and B_PRED can only win once all sixteen are coded
+(the search gives up early only by returning INT_MAX). So the second pass is
+skipped. Not with the RD picker, which tries modes in another order, nor with
+SSIM tuning, which moves the quantizer between picking and coding.
+
+A key frame is what every session starts with and what every refresh and
+scale change costs: 2.3 s at 1280x1024 on an O2. Sampled under IRIS (the key
+frame is arithmetic, so the emulator's proportions hold), the transform and
+the quantizer were a third of it, and on text, where B_PRED wins nearly
+everywhere, sixteen of every forty transforms were this repeat.
+
+THE BITSTREAM IS UNCHANGED: `encfloor verify` hashes identically with and
+without it; see the commit that added this file for the numbers.
+
+--- a/vp8/encoder/encodeframe.c
++++ b/vp8/encoder/encodeframe.c
+@@ -1203,7 +1203,30 @@
+   }
+ 
+   if (x->e_mbd.mode_info_context->mbmi.mode == B_PRED) {
+-    vp8_encode_intra4x4mby(x);
++    /* Already done, when the realtime picker chose it.
++     *
++     * vp8_pick_intra_mode() tries B_PRED last, and pick_intra4x4mby_modes()
++     * has to code each subblock with the mode it picks before it can pick the
++     * next one -- the next subblock predicts from those reconstructed pixels.
++     * It does that through vp8_encode_intra4x4block(), the very function
++     * vp8_encode_intra4x4mby() would call, on the same inputs in the same
++     * order, and nothing touches the luma state in between: so when B_PRED
++     * wins, the quantized coefficients, the eobs and the reconstruction are
++     * already exactly what coding the macroblock again would produce. (It
++     * can only win after coding all sixteen: the search gives up early only
++     * by returning INT_MAX, which never beats the 16x16 result.)
++     *
++     * Coding it again was sixteen more predict, subtract, transform, quantize
++     * and reconstruct passes per macroblock -- on text, where B_PRED wins
++     * nearly everywhere, a large share of a key frame, which is what every
++     * session starts with and every refresh costs. Not with the RD picker,
++     * which tries modes in another order, nor with SSIM tuning, which moves
++     * the quantizer between picking and coding. */
++    const int picked_realtime =
++        !(cpi->sf.RD && cpi->compressor_speed != 2);
++    if (!picked_realtime || cpi->oxcf.tuning == VP8_TUNE_SSIM) {
++      vp8_encode_intra4x4mby(x);
++    }
+   } else {
+     vp8_encode_intra16x16mby(x);
+   }

@@ -314,14 +314,16 @@ static_libs() {	# SUFFIX: "" for MIPS III, "-mips4"
 	fi
 
 	if ! done_ vpx$_sfx; then
-		say "libvpx 1.13.1, VP8 only, with three patches${_sfx:+ ($_sfx)}"
+		say "libvpx 1.13.1, VP8 only, with four patches${_sfx:+ ($_sfx)}"
 		d=$(unpack "$(fetch "$VPX_URL" "$VPX_SHA")")
 		# A name collision with an IRIX header (mogrix); the active-map early exit
-		# that halves the cost of an unchanged frame; and copying only what changed,
-		# which quarters what is left (patches/, and why -- in that order).
+		# that halves the cost of an unchanged frame; copying only what changed,
+		# which quarters what is left; and coding a key frame's B_PRED
+		# macroblocks once (patches/, and why -- in that order).
 		( cd "$d" && patch -p1 -s < "$MOGRIX/patches/packages/libvpx/libvpx-irix-sync-name-collision.patch" &&
 		  patch -p1 -s < "$REPO/patches/libvpx-vp8-active-map-early-out.patch" &&
-		  patch -p1 -s < "$REPO/patches/libvpx-vp8-copy-only-what-changed.patch" ) || die "a libvpx patch did not apply"
+		  patch -p1 -s < "$REPO/patches/libvpx-vp8-copy-only-what-changed.patch" &&
+		  patch -p1 -s < "$REPO/patches/libvpx-vp8-key-frame-bpred-once.patch" ) || die "a libvpx patch did not apply"
 		# LD as well as CC: configure's link test otherwise uses the host's gcc and
 		# fails on "relocations in generic ELF (EM: 8)".
 		# --prefix is only RECORDED -- nothing here runs `make install` -- but

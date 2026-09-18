@@ -167,6 +167,20 @@ arrives, asks, or changes scale, and has its own backstop, and upstream RustDesk
 disables these outright. `Tune::auto_keyframes` (default true -- the Mac and
 SPARC are unchanged) is false on IRIX.
 
+### 3a. A key frame coded its text twice
+
+pcsample on a key frame (in an R5000 guest -- a key frame is arithmetic, so the
+emulator's proportions hold): the 4x4 transform and quantizer were a third of
+it. In realtime mode the 4x4 intra search has to code each subblock with its
+chosen mode before choosing the next, and when B_PRED won,
+`vp8cx_encode_intra_macroblock` coded all sixteen again with identical inputs.
+`patches/libvpx-vp8-key-frame-bpred-once.patch` skips the repeat -- sixteen of
+the forty transforms per B_PRED macroblock, and on text B_PRED wins nearly
+everywhere. Bitstream unchanged (`encfloor verify`, 640x512, 300 frames:
+`af72aae3` with and without). Its speed on the O2 is NOT YET MEASURED: the
+emulator's key frame times ran 13-31 s for the same binary on a loaded host,
+too noisy to read; `encfloor 1280 1024 1` on the O2 says it.
+
 ### 4. MIPS IV, beside MIPS III
 
 Worth 3-6% on the O2 (pointer frame 50.8 -> 49.4 ms, window-sized 137 -> 129,

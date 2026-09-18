@@ -51,10 +51,26 @@ picks by CPUARCH. Worth 3-6% on the O2.
    running, and idle together the agent used 230 ms of CPU per 10 s (RESUME
    §B, "Verified on the O2"). If a session ever freezes again, pcsample the
    agent first: a thread with CPU and no syscalls is the signature.
-2. **A key frame is still 2.3 s at 1280x1024** (0.6 s at 1/2): every session
-   start, refresh and scale change pays it, and at Best quality that is what a
-   person waits through. Sample one with pcsample the way the floor was
-   sampled (`encfloor` prints the key frame's time) and see what dominates.
+2. **Measure two things on the O2 that could not be measured without it.**
+   - `patches/libvpx-vp8-key-frame-bpred-once.patch`: a key frame no longer
+     codes its B_PRED macroblocks twice. Bitstream-identical; the time is
+     unknown (the emulator was too noisy). `encfloor 1280 1024 1` against
+     `/tmp/encfloor-new` on the O2, which predates it. A key frame was 2.3 s
+     at 1280x1024, 0.6 s at 1/2 -- every session start, refresh and scale
+     change pays it. What is left is the 4x4 intra search itself (10 modes x
+     16 subblocks) and the transforms; narrowing the search for screen content
+     would change the bitstream and needs a visual check.
+   - `probes/convbench.c`: the capture shim's ABGR->I420 conversion against a
+     word-load variant and a MIPS IV prefetch variant, all checked
+     byte-identical (in an R5000 guest). The shipped kernel runs at ~90 ns a
+     source pixel on the O2 -- memory-bound -- and only the O2 can say whether
+     either variant helps; build it both ways (compile and link separately for
+     MIPS IV, or the wrapper does not raise the ISA) and move the winner into
+     `rd_abgr_to_i420_rect`.
+   Also worth knowing: with two viewers connected, every change is captured,
+   converted and encoded once per viewer -- a forgotten second window halves
+   the speed. Sharing one encode between sessions at the same scale is the fix
+   and a real change to how sessions are built.
 3. **Console heartbeats** cost ~4% of the O2 at idle, measured with pcsample:
    ~3/4 the TLS handshake (P-384 ECDHE, signature verify), ~1/5 parsing the
    121 CA certificates. Parsing once saves the fifth; reusing the connection

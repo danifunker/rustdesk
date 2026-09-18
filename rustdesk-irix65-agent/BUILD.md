@@ -95,7 +95,7 @@ target machine:
 | | notes |
 |---|---|
 | **libsodium 1.0.18** | no source patches. Consumers must link `-lpthread` or `sodium_init()` returns −1 while every `crypto_*` call still works |
-| **libvpx 1.13.1** | three patches -- mogrix's name-collision fix, then ours: `patches/libvpx-vp8-active-map-early-out.patch` and `patches/libvpx-vp8-copy-only-what-changed.patch`, which make an unchanged macroblock cost nothing (the second took a pointer-move frame from 190 to 46 ms at 1280x1024 on an O2, bitstream unchanged); VP8 only, `--disable-webm-io --disable-libyuv` (both are C++ and drag in the host linker) |
+| **libvpx 1.13.1** | four patches -- mogrix's name-collision fix, then ours: `patches/libvpx-vp8-active-map-early-out.patch` and `patches/libvpx-vp8-copy-only-what-changed.patch`, which make an unchanged macroblock cost nothing (the second took a pointer-move frame from 190 to 46 ms at 1280x1024 on an O2), and `patches/libvpx-vp8-key-frame-bpred-once.patch`, which stops a key frame coding its B_PRED macroblocks twice -- all three leave the bitstream unchanged; VP8 only, `--disable-webm-io --disable-libyuv` (both are C++ and drag in the host linker) |
 | **mbedTLS 3.6.2** | two patches |
 | **zstd 1.5.6** | no patches; `clipboard.rs` links it |
 | **zlib 1.3.2** | no patches; `png.rs` links it. `CC=irix-cc ./configure --static && make libz.a`, then copy `libz.a` into `$SGUG_STAGING/lib32`. **Do not** fall back to the machine's own zlib — see below |
