@@ -124,6 +124,42 @@ cat > "$WORK/verify.sh" <<'GUEST'
 # Runs INSIDE the guest, AFTER the install. No LD_LIBRARYN32_PATH anywhere in
 # here -- if the agent needs one, this is where that shows up.
 unset LD_LIBRARYN32_PATH
+H=/usr/local/lib/r-deskvint-irix/agent-helper.sh
+A=/usr/local/sbin/r-deskvint-irix
+SYS=/etc/r-deskvint-irix.conf
+
+# FIRST, before anything else runs the agent: the boot path, and the move of
+# the settings into /etc. Both have to happen on a machine that has never had
+# $SYS, and every later step would create it.
+echo "--- the boot start, as rc2 runs it ---"
+RH=`awk -F: '$3 == 0 { print $6; exit }' /etc/passwd`
+OLD="$RH/.rustdesk-ppc-agent.conf"
+[ "$RH" = / ] && OLD=/.rustdesk-ppc-agent.conf
+OLD_ID=`sed -n 's/^id *= *//p' "$OLD" 2>/dev/null | head -1`
+echo "root's home: $RH; old settings: $OLD; old id: ${OLD_ID:-none}"
+[ -f $SYS ] && echo "PRE-EXISTING $SYS -- the move cannot be tested on this guest"
+# rc2's environment: no HOME, no USER, a short PATH. The helper stopped on an
+# unset HOME here until 2026-09-18, and nothing started at boot.
+env -i PATH=/usr/sbin:/usr/bsd:/sbin:/usr/bin:/etc:/usr/etc:/usr/bin/X11 DISPLAY=:0 \
+    /sbin/sh $H start 2>&1
+sleep 3
+ps -e -o pid,args | awk '{ c = $2; sub(/.*\//, "", c); if (c == "r-deskvint-irix") print "BOOT-START-RUNNING pid " $1 }'
+ls -l $SYS 2>&1
+NEW_ID=`sed -n 's/^id *= *//p' $SYS 2>/dev/null | head -1`
+echo "id in $SYS: ${NEW_ID:-none}"
+[ -n "$OLD_ID" ] && [ "$NEW_ID" = "$OLD_ID" ] && echo "BOOT-MOVE-KEPT-ID"
+ls -l $SYS | awk '{ print "SYS-MODE " $1 " " $3 }'
+$H stop > /dev/null 2>&1
+
+# And the agent's own move, for a root shell that has a HOME: take $SYS away,
+# ask for the id, and it must come back -- same id, written now.
+echo "--- the agent's own move, from a root shell ---"
+mv $SYS $SYS.test-aside
+$A --show-id 2>&1 | head -3
+[ -f $SYS ] && [ "`sed -n 's/^id *= *//p' $SYS | head -1`" = "$OLD_ID" ] && echo "AGENT-MOVE-KEPT-ID"
+rm -f $SYS
+mv $SYS.test-aside $SYS
+
 echo "--- what landed ---"
 ls -l /usr/local/sbin/r-deskvint-irix /usr/local/sbin/r-deskvint-irix-gui 2>&1
 ls -l /usr/local/lib/r-deskvint-irix 2>&1
@@ -169,6 +205,14 @@ echo ">>> what the install produced"
 OUT=$(guest_run 600 'sh /tmp/verify.sh' 2>&1)
 echo "$OUT" | sed 's/^/    /'
 echo "$OUT" | grep -q VERIFY-DONE || die "the verification did not finish (output above)"
+
+# The settings must have moved to /etc with the machine's identity intact, by
+# both routes, and the boot start must actually start the agent.
+for _m in BOOT-START-RUNNING BOOT-MOVE-KEPT-ID AGENT-MOVE-KEPT-ID; do
+	echo "$OUT" | grep -q "$_m" || die "$_m missing: see the boot-start block above"
+done
+echo "$OUT" | grep -q 'SYS-MODE -rw------- root' ||
+	die "/etc/r-deskvint-irix.conf is not mode 600 and owned by root (see above)"
 
 # Each of these is a way the package can be wrong that still leaves inst happy.
 echo "$OUT" | grep -q '/usr/local/sbin/r-deskvint-irix$\|/usr/local/sbin/r-deskvint-irix ' ||

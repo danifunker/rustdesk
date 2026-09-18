@@ -178,6 +178,21 @@ every run.
 /usr/lib/X11/app-chests/R-DeskVint.chest      the Toolchest entry
 ```
 
+**Two things are not in the package, and are not removed with it.**
+
+- **`/etc/r-deskvint-irix.conf`**, all of the machine's settings and its
+  identity (ID, uuid, keypair, password, servers). The agent writes it; root
+  alone can read or change it. It is not an inst file on purpose: `versions
+  remove` and `install.sh -u` leave it, so a reinstall is the same machine.
+  Builds before 2026-09-18 kept it in root's `~/.rustdesk-ppc-agent.conf`, and
+  the first thing run as root afterwards -- the boot start included -- moves it.
+- **The boot start**, `/etc/init.d/r_deskvint_irix` and its rc links, made by
+  `agent-helper.sh service install` and switched on with `chkconfig
+  r_deskvint_irix on`. That copies the init script out of the package, so **an
+  upgrade does not refresh it**: run `service install` again after one (it
+  leaves the chkconfig flag as it was). The copy has so far only ever called
+  the helper, which the upgrade does replace.
+
 The agent links **libsodium, libvpx, mbedTLS, zstd and zlib statically**, so
 none of them are here. What is left is what IRIX 6.5 already has — `libX11`,
 `libXext`, `libpthread`, `libm`, `libc` — and `libgcc_s.so.1`, which it does not.

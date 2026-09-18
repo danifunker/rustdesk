@@ -1,7 +1,7 @@
 #! /sbin/sh
 #Tag 0x00000f00
 #
-# Start and stop the RustDesk agent.
+# Start and stop R-DeskVint, the RustDesk agent.
 #
 # Installed by `agent-helper.sh service install`, which also makes the rc
 # links and registers the chkconfig flag. Turn it on with:
@@ -30,6 +30,19 @@
 IS_ON=/etc/chkconfig
 HELPER=/usr/local/lib/r-deskvint-irix/agent-helper.sh
 
+# What the helper says goes to SYSLOG, where anything that fails at boot on
+# IRIX should be looked for first. It used to go to /dev/null, and so the one
+# time boot start failed -- the helper stopped on an unset HOME -- there was no
+# trace of it anywhere: no log, no SYSLOG line, just an agent that was not
+# running after a reboot.
+say() {
+	if [ -x /usr/bsd/logger ]; then
+		/usr/bsd/logger -t r_deskvint_irix
+	else
+		cat > /dev/null
+	fi
+}
+
 if $IS_ON verbose; then
 	ECHO=echo
 else
@@ -44,14 +57,14 @@ case "$1" in
 		echo "r_deskvint_irix: no helper at $HELPER; not starting."
 		exit 1
 	fi
-	$ECHO "Starting the RustDesk agent."
-	DISPLAY=:0 $HELPER start > /dev/null 2>&1
+	$ECHO "Starting R-DeskVint."
+	DISPLAY=:0 $HELPER start 2>&1 | say
 	;;
 
 'stop')
 	[ -x "$HELPER" ] || exit 0
-	$ECHO "Stopping the RustDesk agent."
-	$HELPER stop > /dev/null 2>&1
+	$ECHO "Stopping R-DeskVint."
+	$HELPER stop 2>&1 | say
 	;;
 
 *)

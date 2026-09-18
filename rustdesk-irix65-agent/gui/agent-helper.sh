@@ -37,7 +37,24 @@ if [ -z "$AGENT" ]; then
     done
     [ -n "$AGENT" ] || AGENT=/usr/sbin/r-deskvint-irix
 fi
-CONF="${RD_CONF:-$HOME/.rustdesk-ppc-agent.conf}"
+# ALL OF THIS MACHINE'S SETTINGS ARE IN ONE FILE, /etc/r-deskvint-irix.conf:
+# its identity (id, uuid, keys), its password, and every server setting. The
+# agent uses that path itself on IRIX (config.rs SYSTEM_PATH); it is passed
+# explicitly below as well, so RD_CONF can point a test somewhere else.
+#
+# Only root can read it or change it, deliberately. It holds the connection
+# password and the private key, and it is the machine's configuration, not a
+# user's. So every verb that reads or changes a setting, or starts and stops
+# the agent, wants root; the panel run by anyone else shows that it is running
+# and says who can change it.
+#
+# Until 2026-09-18 it was $HOME/.rustdesk-ppc-agent.conf, and that is how the
+# boot start came to fail on its first real test: rc2 runs this with no HOME,
+# `set -u` stopped the script on the line that named the file, and nothing
+# started. A per-user file has no right answer at boot anyway -- and an agent
+# looking in the wrong home comes up as a different machine.
+CONF="${RD_CONF:-/etc/r-deskvint-irix.conf}"
+LEGACY_NAME=.rustdesk-ppc-agent.conf
 LOG="${RD_LOG:-/tmp/agent.log}"
 PORT="${RD_PORT:-21118}"
 
@@ -53,8 +70,52 @@ PORT="${RD_PORT:-21118}"
 LD_LIBRARYN32_PATH="${LD_LIBRARYN32_PATH:-$HERE:/usr/sgug/lib32}"
 export LD_LIBRARYN32_PATH
 
+is_root() {
+    id | grep '^uid=0(' > /dev/null
+}
+
+# need_root WHAT -- stop with a sentence the panel can show in its status line.
+need_root() {
+    is_root && return 0
+    echo "Only root can $1: this machine's settings are in $CONF, which only root can read or change."
+    exit 1
+}
+
+# The agent, always told which file. Its own default on IRIX is the same path.
+agent() {
+    "$AGENT" --config "$CONF" "$@"
+}
+
+# migrate_conf -- move root's old per-user file into $CONF, once.
+#
+# The agent does this itself when it can see a HOME. At boot it cannot -- rc2
+# gives it none -- and the first thing to run after an upgrade is quite likely
+# to be the boot start, which would otherwise find no $CONF, no old file, and
+# generate a brand new identity: a different machine, and one hbbs will not
+# let take over the old ID. So root's home comes from the password file, not
+# from the environment. The old file is copied, not moved: it is somebody's
+# only other copy of a signing key, and it does no harm where it is.
+migrate_conf() {
+    [ -f "$CONF" ] && return 0
+    is_root || return 0
+    _rh=`awk -F: '$3 == 0 { print $6; exit }' /etc/passwd`
+    # Root's own home first: `su` without `-` keeps the caller's HOME, and
+    # root must not adopt some other account's identity as the machine's.
+    for _h in "$_rh" "${HOME:-}" /; do
+        [ -n "$_h" ] || continue
+        _old="$_h/$LEGACY_NAME"
+        [ "$_h" = / ] && _old="/$LEGACY_NAME"
+        [ -f "$_old" ] || continue
+        cp "$_old" "$CONF.tmp" && chmod 600 "$CONF.tmp" && chown root "$CONF.tmp" &&
+            mv "$CONF.tmp" "$CONF" || { rm -f "$CONF.tmp"; return 1; }
+        echo "`date`: settings moved from $_old to $CONF (the old file is left where it was)" >> "$LOG"
+        return 0
+    done
+    return 0
+}
+
 conf_get() {
-    [ -f "$CONF" ] || return 0
+    [ -r "$CONF" ] || return 0
     sed -n "s/^$1 *= *//p" "$CONF" | head -1
 }
 
@@ -106,7 +167,7 @@ is_running() {
 # agent dies when the panel's session ends, which on a machine driven over
 # telnet is every time.
 start_agent() {
-    ( cd /tmp && DISPLAY="${DISPLAY:-:0}" nohup "$AGENT" -v \
+    ( cd /tmp && DISPLAY="${DISPLAY:-:0}" nohup "$AGENT" -v --config "$CONF" \
         --listen 0.0.0.0 --port "$PORT" >> "$LOG" 2>&1 & ) 
     sleep 3
 }
@@ -115,6 +176,11 @@ stop_agent() {
     for p in `agent_pids`; do kill -9 "$p" 2>/dev/null; done
     sleep 1
 }
+
+# Before any verb, so that whichever runs first after an upgrade -- the boot
+# start, the panel, a person at a shell -- finds the settings where they now
+# live. A no-op once $CONF exists, and for anyone but root.
+migrate_conf || echo "Could not move the old settings into $CONF; see $LOG." >&2
 
 case "${1:-}" in
 
@@ -125,7 +191,13 @@ status)
     echo "agent=$AGENT"
     echo "present=`[ -x \"$AGENT\" ] && echo yes || echo no`"
     echo "running=`is_running && echo yes || echo no`"
-    echo "id=`conf_get id`"
+    # For anyone but root the file cannot be read, and blank fields would look
+    # like an unconfigured machine. Say whose settings they are instead.
+    if [ ! -r "$CONF" ] && [ -f "$CONF" ]; then
+        echo "id=(only root can see this machine's settings)"
+    else
+        echo "id=`conf_get id`"
+    fi
     echo "password=`conf_get password`"
     echo "server=`conf_get_renamed id_server rendezvous_server`"
     echo "relay=`conf_get relay_server`"
@@ -139,38 +211,40 @@ status)
     echo "capture=`sed -n 's/.*capture path: //p' \"$LOG\" 2>/dev/null | tail -1`"
     ;;
 
-showkey)  "$AGENT" --show-key 2>/dev/null || echo "(no key yet)" ;;
-showid)   "$AGENT" --show-id  2>/dev/null || echo "(no id yet)"  ;;
+showkey)  need_root "read the settings"; agent --show-key 2>/dev/null || echo "(no key yet)" ;;
+showid)   need_root "read the settings"; agent --show-id  2>/dev/null || echo "(no id yet)"  ;;
 showlog)  tail -30 "$LOG" 2>/dev/null || echo "No log yet - the agent has not run." ;;
 
 # Refuses to start a second one. Two agents both bind :21118, both register the
 # same id, and the one that answers a peer is a coin toss -- and `stop` then
 # kills both, so it looks like the first start never worked. Found by running
 # the init script by hand on a machine where boot had already started one.
-start)    if is_running; then
+start)    need_root "start the agent"
+          if is_running; then
               echo "Already running."
           else
               start_agent
               is_running && echo "Started." || echo "Could not start it. Try Show the log."
           fi ;;
-stop)     stop_agent;  is_running && echo "It is still running." || echo "Stopped." ;;
-restart)  stop_agent; start_agent
+stop)     need_root "stop the agent"; stop_agent;  is_running && echo "It is still running." || echo "Stopped." ;;
+restart)  need_root "restart the agent"; stop_agent; start_agent
           is_running && echo "Restarted." || echo "Could not start it. Try Show the log." ;;
 
 # set FIELD VALUE. An empty value is meaningful for most of these -- it is how
 # a setting is cleared -- so it is passed through rather than rejected.
 set)
+    need_root "change a setting"
     field="${2:-}"
     value="${3:-}"
     case "$field" in
-    password) out=`"$AGENT" --password "$value" 2>&1`;      rc=$? ;;
-    server)   if [ -n "$value" ]; then out=`"$AGENT" --server "$value" 2>&1`; rc=$?
-              else out=`"$AGENT" --no-server 2>&1`; rc=$?; fi ;;
-    relay)    out=`"$AGENT" --relay-server "$value" 2>&1`;  rc=$? ;;
-    key)      out=`"$AGENT" --key "$value" 2>&1`;           rc=$? ;;
-    api)      if [ -n "$value" ]; then out=`"$AGENT" --api-server "$value" 2>&1`; rc=$?
-              else out=`"$AGENT" --no-api-server 2>&1`; rc=$?; fi ;;
-    ca)       out=`"$AGENT" --ca-bundle "$value" 2>&1`;     rc=$? ;;
+    password) out=`agent --password "$value" 2>&1`;      rc=$? ;;
+    server)   if [ -n "$value" ]; then out=`agent --server "$value" 2>&1`; rc=$?
+              else out=`agent --no-server 2>&1`; rc=$?; fi ;;
+    relay)    out=`agent --relay-server "$value" 2>&1`;  rc=$? ;;
+    key)      out=`agent --key "$value" 2>&1`;           rc=$? ;;
+    api)      if [ -n "$value" ]; then out=`agent --api-server "$value" 2>&1`; rc=$?
+              else out=`agent --no-api-server 2>&1`; rc=$?; fi ;;
+    ca)       out=`agent --ca-bundle "$value" 2>&1`;     rc=$? ;;
     *)        echo "unknown field: $field"; exit 2 ;;
     esac
 
@@ -207,13 +281,14 @@ set)
 # -- no --flag runs for it. `-` is how you clear one, because Enter is already
 # spoken for; an empty answer cannot mean both "keep" and "erase".
 setup)
+    need_root "change the settings"
     [ -x "$AGENT" ] || { echo "No agent at $AGENT."; exit 1; }
 
     # Restore the terminal if this is interrupted while the password is being
     # typed, or the shell is left with echo off and no prompt to say why.
     trap 'stty echo 2>/dev/null; echo; echo "Cancelled; nothing further was changed."; exit 130' 1 2 3 15
 
-    echo "Configuring the RustDesk agent on `hostname`."
+    echo "Configuring R-DeskVint on `hostname` ($CONF)."
     echo
     echo "  Enter    keep the current value"
     echo "  -        clear it"

@@ -65,6 +65,23 @@ const SHARED_PATH: Option<&str> = Some("/etc/opt/rdeskvint/agent.conf");
 #[cfg(not(target_os = "solaris"))]
 const SHARED_PATH: Option<&str> = None;
 
+/// Where IRIX keeps its configuration: one file for the machine, always.
+///
+/// The Solaris file above is shared *when it exists*, because that agent runs
+/// inside whoever's session is on the console. IRIX's runs as a service -- root,
+/// started at boot by rc2 with no HOME at all -- and a per-user file has no right
+/// answer there: at boot there is no home to look in, and an agent that looked
+/// in the wrong one comes up as a different machine. So everything lives here,
+/// identity and settings alike, and only root can read or change it: it holds
+/// the connection password and the private key, and it is the machine's
+/// configuration, not a user's. On the local root filesystem, deliberately --
+/// not under /usr/local, which sites share between machines over NFS, and a
+/// shared identity is every machine answering to one ID.
+#[cfg(target_os = "irix")]
+const SYSTEM_PATH: Option<&str> = Some("/etc/r-deskvint-irix.conf");
+#[cfg(not(target_os = "irix"))]
+const SYSTEM_PATH: Option<&str> = None;
+
 #[derive(Default)]
 pub struct Config {
     path: PathBuf,
@@ -79,6 +96,10 @@ pub struct Config {
 
 impl Config {
     pub fn default_path() -> PathBuf {
+        // A platform whose configuration always lives in one place.
+        if let Some(system) = SYSTEM_PATH {
+            return PathBuf::from(system);
+        }
         // The shared file first, when there is one. Only its existence decides:
         // a machine either has one identity for every session or it does not,
         // and making that depend on who is logged in is the bug this avoids.
@@ -97,11 +118,29 @@ impl Config {
         SHARED_PATH.map(PathBuf::from)
     }
 
+    /// The one configuration file, on a platform that has one (IRIX).
+    pub fn system_path() -> Option<PathBuf> {
+        SYSTEM_PATH.map(PathBuf::from)
+    }
+
     /// The pre-rename name beside `path`, when there is a distinct one.
     ///
     /// Derived from `path` rather than from `$HOME` so that `--config` keeps
     /// working: point it at a directory and the same migration applies there.
     fn legacy_path(path: &Path) -> Option<PathBuf> {
+        // IRIX used a per-user file until 2026-09-18. Until the system file
+        // exists, the running user's old one is read -- root's, in practice,
+        // since only root can write the new one -- so the upgrade keeps this
+        // machine's identity. With no HOME, which is how rc2 runs things at
+        // boot, there is nothing to find here; agent-helper.sh moves the file
+        // before it starts the agent, for exactly that case.
+        if let Some(system) = SYSTEM_PATH {
+            if path == Path::new(system) {
+                return std::env::var_os("HOME")
+                    .filter(|h| !h.is_empty())
+                    .map(|h| Path::new(&h).join(LEGACY_NAME));
+            }
+        }
         if CONFIG_NAME == LEGACY_NAME {
             return None;
         }

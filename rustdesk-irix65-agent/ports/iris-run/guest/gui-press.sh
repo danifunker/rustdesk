@@ -43,7 +43,7 @@ fi
 # too, or the "before" and "after" it prints describe a different machine.
 HELPER=${RD_HELPER:-/usr/local/lib/r-deskvint-irix/agent-helper.sh}
 [ -x "$HELPER" ] || HELPER=/tmp/agent-helper.sh
-CONF=$HOME/.rustdesk-ppc-agent.conf
+CONF=/etc/r-deskvint-irix.conf
 cd /tmp
 
 TESTVAL=relay.press.test

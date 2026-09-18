@@ -66,7 +66,9 @@ usually fixes it.
 ## In the client
 
 Connect to **`127.0.0.1:21118`**, password **from the guest's
-`/root/.rustdesk-ppc-agent.conf`** (`hunter2` on this image).
+`/etc/r-deskvint-irix.conf`** (`hunter2` on this image). Builds before
+2026-09-18 kept it in root's `~/.rustdesk-ppc-agent.conf`; the first root run of
+a newer one moves it.
 
 This is upstream's direct-IP mode: no rendezvous server, no key exchange, and
 **the session is unencrypted**. That is deliberate and the agent says so in its

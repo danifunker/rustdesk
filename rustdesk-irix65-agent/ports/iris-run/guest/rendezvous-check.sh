@@ -17,7 +17,7 @@ sleep 2
 echo "--- pointing it at the stand-in ---"
 ./r-deskvint-irix --server 192.168.0.1 2>&1 | tail -3
 echo "--- what got persisted ---"
-grep -E "^(id|server|relay|key|api)" /root/.rustdesk-ppc-agent.conf
+grep -E "^(id|id_server|relay_server|key|api_server)" /etc/r-deskvint-irix.conf
 echo "--- running for 25 s ---"
 nohup ./r-deskvint-irix -v --listen 0.0.0.0 --port 21118 > /tmp/agent.log 2>&1 &
 sleep 25

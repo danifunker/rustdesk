@@ -1,5 +1,5 @@
 #!/bin/sh
-# Install the RustDesk agent by hand, from the tarball, on the machine itself.
+# Install R-DeskVint (the RustDesk agent) by hand, from the tarball, on the machine itself.
 #
 # The Software Manager package (.tardist) is the normal way in and does the same
 # thing; this is for a machine where inst is not available or not wanted, and it
@@ -78,7 +78,7 @@ if [ "$UNINSTALL" = 1 ]; then
 	rm -f "$BIN/cacert.pem"
 	rmdir "$LIB" 2>/dev/null
 	rm -f "$CHEST"
-	echo "Removed. The configuration in ~/.rustdesk-ppc-agent.conf is left alone;"
+	echo "Removed. The configuration in /etc/r-deskvint-irix.conf is left alone;"
 	echo "delete it by hand if you want the machine's identity gone too."
 	exit 0
 fi

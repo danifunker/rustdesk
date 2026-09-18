@@ -289,6 +289,24 @@ fn main() {
     log::set_max_level(level);
 
     let mut cfg = Config::load(cfg_path);
+    // IRIX's configuration is the machine's, in /etc, and only root may read or
+    // create it. Anyone else would get an identity invented in memory, fail to
+    // save it -- silently, since generating an id does not report a failed
+    // save -- and run as a machine nobody can find again. Refuse, and say who
+    // can do this instead.
+    #[cfg(target_os = "irix")]
+    {
+        let is_system = Config::system_path().map_or(false, |p| p.as_path() == cfg.path());
+        let root = unsafe { libc::geteuid() } == 0;
+        if is_system && !root && (cfg.unreadable() || !cfg.path().exists()) {
+            eprintln!(
+                "error: this machine's settings are in {}, and only root can read or change them.",
+                cfg.path().display()
+            );
+            eprintln!("       Run this as root.");
+            exit(1);
+        }
+    }
     // Stop here rather than carry on with an identity invented five lines from
     // now. Carrying on is worse than failing: it registers a machine that does
     // not exist, leaves a row in the console's device list that nobody can
@@ -309,6 +327,27 @@ fn main() {
     // one of them is live. Saying nothing invites somebody to edit the old one
     // and conclude the setting does not work.
     if let Some(old) = cfg.migrated_from() {
+        // On IRIX the move is made now rather than at the next change: the
+        // system file is where everything lives, and a machine that went on
+        // reading its old per-user file until someone happened to set something
+        // would have its settings in two places for as long as that took. (Only
+        // root gets this far there -- see above.) The old file is left alone.
+        #[cfg(target_os = "irix")]
+        {
+            let old = old.to_path_buf();
+            match cfg.store() {
+                Ok(()) => eprintln!(
+                    "note: settings moved from {} to {}; the old file is left where it was",
+                    old.display(),
+                    cfg.path().display()
+                ),
+                Err(e) => {
+                    eprintln!("error: could not write {}: {}", cfg.path().display(), e);
+                    exit(1);
+                }
+            }
+        }
+        #[cfg(not(target_os = "irix"))]
         eprintln!(
             "note: settings read from {}; the next change writes {}",
             old.display(),

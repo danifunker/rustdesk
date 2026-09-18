@@ -9,11 +9,14 @@ included by `#[path]` rather than copied. What lives here is the part IRIX needs
 of its own — screen capture over SGI's X extensions, input injection over XTEST,
 and the toolchain and harness to build and test it.
 
-**Status: it works, and it has never run on real hardware.** A peer connects
-over the real protocol, logs in, and receives VP8 video; mouse injection is
-verified. Everything measured so far was measured under emulation, on an
-emulated R5000 or R4400 Indy. See *What is known and what is not* below before
-trusting any of it.
+**Status: it works under emulation, and runs on a real O2.** Under emulation a
+peer connects over the real protocol, logs in, and receives VP8 video; mouse
+injection is verified. On a real O2 (IRIX 6.5.22m, R10000) the package installs
+with `inst`, the agent registers with an ID server and appears in a console's
+device list, peers connect and log in, and capture works against a logged-in
+4Dwm desktop -- but a full session with a picture on real hardware has not been
+recorded yet. See *What is known and what is not* below, and `RESUME.md`
+§REAL HARDWARE, before trusting any of it.
 
 ## What it does
 
@@ -38,9 +41,19 @@ code for the day the extensions turn out to be missing.
 ## Connecting to it
 
 ```sh
-r-deskvint-irix --password <PASSWORD>     # once
+r-deskvint-irix --password <PASSWORD>     # once, as root
 r-deskvint-irix                           # listens on 0.0.0.0:21118
 ```
+
+**Everything it keeps is in `/etc/r-deskvint-irix.conf`** -- the machine's
+identity (ID, uuid, keypair), the password, and every server setting -- and
+only root can read or change it. It is the machine's configuration, not a
+user's: the agent runs as a service, started at boot with no home directory,
+and a per-user file there could only ever be the wrong one. So setting anything,
+from the command line or the settings panel, needs root; anyone else can see
+whether the agent is running and nothing more. Builds before 2026-09-18 kept it
+in root's `~/.rustdesk-ppc-agent.conf`; the first root run of a newer one moves
+it, keeping the ID.
 
 Then type the machine's **IP address into a RustDesk client's ID field**, no
 port. Same as the PowerPC agent — see its README for the details of why that
@@ -67,8 +80,9 @@ Verified on IRIX 6.5.22m under emulation:
 
 Not established:
 
-- **Never run on real hardware.** Every number here is from an emulator, which
-  is roughly 3x slower than a real R5000 and is not a graphics-accurate model.
+- **Little run on real hardware.** One O2 so far (see Status). Most numbers
+  here are from an emulator, which is roughly 3x slower than a real R5000 and
+  is not a graphics-accurate model.
 - **Everything was tested at depth 8.** An O2 or Octane is likely 24-bit.
   ReadDisplay should normalise that, but the fallback and the converters have
   only ever seen 8-bit.
