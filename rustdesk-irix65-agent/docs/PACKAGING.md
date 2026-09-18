@@ -171,12 +171,29 @@ every run.
 ## What the package contains, and why so little
 
 ```
-/usr/local/sbin/r-deskvint-irix                    the agent
+/usr/local/sbin/r-deskvint-irix                    the agent (one of two builds)
 /usr/local/sbin/r-deskvint-irix-gui                the Motif settings panel
 /usr/local/lib/r-deskvint-irix/agent-helper.sh     everything that decides anything
 /usr/local/lib/r-deskvint-irix/libgcc_s.so.1       the one library IRIX does not ship
 /usr/lib/X11/app-chests/R-DeskVint.chest      the Toolchest entry
 ```
+
+**The agent comes in two builds, and a machine gets one.** Since 2026-09-18
+the stage has `bin/r-deskvint-irix`, built for MIPS III -- every IRIX 6.5
+machine runs it -- and `bin/r-deskvint-irix-mips4`, built for MIPS IV: R5000,
+R8000, R10000 and later (R12000-R16000 are MIPS IV too; no SGI machine ever
+shipped a MIPS V CPU). Both install to the same path. The idb gives the first
+`mach(CPUARCH=R4000)` and the second `mach(CPUARCH=R5000 CPUARCH=R8000
+CPUARCH=R10000)`, and inst installs whichever this machine's CPUARCH matches --
+`/var/inst/machfile` maps the processor ID to those four names, and between
+them they are every CPU 6.5 runs on. `install.sh` makes the same choice from
+`hinv`, falling back to MIPS III for anything it does not recognise.
+`iris-install-test.sh` checks inst's choice against the guest's CPU.
+
+What MIPS IV buys is modest -- 3-6% on the encoder on an O2, where the frame is
+the whole cost -- and it costs nothing at run time. A stage built for MIPS III
+alone (`scripts/build.sh --isa mips3`, or a machine without the MIPS IV
+staging tree) packages its one agent with no `mach()` tag at all.
 
 **Two things are not in the package, and are not removed with it.**
 
@@ -289,9 +306,12 @@ check for that in the repository:
 LC_ALL=C sort -k5,5 -c inst/r-deskvint-irix.idb
 ```
 
-The numeric inst version is the first ten digits of the release version, which
-begins with `YYYYMMDD` — so inst's own numeric comparison orders releases by
-date without anything else having to care.
+The numeric inst version is ten digits: the release version's `YYYYMMDD`, then
+how far through that UTC day the commit was made, 00-99 -- so inst's own
+numeric comparison orders releases by commit time without anything else having
+to care. Until 2026-09-18 the last two digits came from the revision hash, and
+two commits on one day could order backwards: `cf5c43c05` was `2026091854`,
+`ed74049` before it `2026091874`. (`dist_version_from` in `scripts/ci-lib.sh`.)
 
 ## Three channels to the guest, and why each is what it is
 

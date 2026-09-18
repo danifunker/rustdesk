@@ -1,8 +1,13 @@
 # RESUME — RustDesk agent for IRIX (SGI MIPS)
 
-Pick-up point. Last updated 2026-09-18, end of the session that **built a
+Pick-up point. Last updated 2026-09-18, late: **the O2 made fast** -- the
+"spin" was two sessions sharing one unlocked X connection, not the boot start;
+an unchanged frame's cost cut by 4x in libvpx; a MIPS IV build beside the MIPS
+III one, chosen by inst. See §B THE O2, MADE FAST, directly below.
+
+Before that, 2026-09-18, the session that **built a
 hosted CI pipeline and ran the agent on MIPS III for the first time** -- see
-§A HOSTED BUILD PIPELINE, directly below. It is rehearsed locally and has never
+§A HOSTED BUILD PIPELINE. It is rehearsed locally and has never
 run on GitHub; the section says exactly what is and is not proven.
 
 Before that, 2026-09-17 **ran it on a
@@ -47,6 +52,187 @@ real O2 a *logged-in* 4Dwm desktop is fine: xdm and the toolchest run,
 `xdpyinfo` answers before and after a full capture run, and capture works
 against it. What happens at **logout** is still unknown on hardware — see
 §REAL HARDWARE for an attempt that read a shutdown as a wedge.
+
+---
+
+## B THE O2, MADE FAST — 2026-09-18, second half
+
+Dani, from the O2: the mouse lags, video updates are slow, "we need this to
+work a lot better", and "create versions for mips3 and mips4". Three causes,
+largest first, each found by measuring on the O2 itself, and each fixed:
+
+| | before | after |
+|---|---|---|
+| a session that overlapped another | froze for good; its thread spun in user code for the life of the process, one more per overlap | serialised; `probes/xrace.c` runs clean |
+| a frame in which the pointer moved, 1280x1024 | 190 ms encode | **46 ms** |
+| the same at 640x512 | 55 ms | **16 ms** |
+| libvpx's own key frame every 128 frames | 2.3 s stall at 1280x1024 | off (IRIX) |
+| MIPS IV instead of MIPS III | -- | a further 3-6% |
+
+### 1. The spin: two sessions, one unlocked X connection
+
+`RESUME-PROMPT-O2-SPEED.md` (the handover this started from) blamed the boot
+start. **Wrong, and the agent's own log says so.** The agent that burned 28 s
+of CPU in 30 was the boot-started one (it started 13:06:16; SYSLOG's
+`r_deskvint_irix: Started.` is stamped 20:06 because rc2 has no TZ), and it
+read the display at boot without trouble -- `grabServer` is False on this O2,
+so the greeter serves clients. What set it apart was **two Macs connected at
+once**: 98690405 from .65 and 487111771 from .102.
+
+- Of its eight sessions, six never logged an end -- and every way a session
+  can end logs one. A thread that never returns does not.
+- The newer session's rolling refresh stops mid-lap at 3338.5 s, 17 s after
+  it started, while the older one carries on. Dani's reconnects were the
+  frozen sessions.
+- A fixed piece of work -- the 80-macroblock refresh frame -- took 70 ms to
+  encode early on, then 185, 244, 436 ms: the CPU shared with one more spinning
+  thread each time. The `par` trace from 14:18 shows signal 48 (libpthread's
+  reschedule) preempting three different thread stacks.
+
+`tools/pcsample.c` is the instrument that settled it: a /proc sampler
+(PIOCTHREAD + PIOCSTATUS per kernel thread, plus PIOCMAP_SGI with inodes, so
+an address can be tied to its DSO with `ls -i`). `tools/pcsample-report.py`
+names the functions. The stuck thread's every sample was in **`_XFlushInt`**:
+
+```
+f581f50: beqz $4, out      ; $4 = dpy->flags & XlibDisplayWriting, read ONCE
+f581f58: beqz $2, f581f50  ; $2 = dpy->lock, read ONCE (NULL: no XInitThreads)
+```
+
+`while (flags & XlibDisplayWriting) if (dpy->lock) ConditionWait(...)` with
+both fields in registers. If one thread enters a flush while another is
+mid-write on the same Display, it spins forever. `src/input_shim.c` kept ONE
+Display for every session, and every session asked it for the pointer
+position (`rd_cursor_pos`, XQueryPointer) on every pass of its loop, 25 times
+a second. `probes/xrace.c` -- threads calling the shim's `rd_cursor_pos` --
+wedges a thread **in under a second** with the old shim, burning ~750 ms of
+CPU a second; with the fix, two threads do ~1350 calls a second each and four
+share evenly. **This was never about boot.** The restart "fixed" it by killing
+the stuck threads, and it would have come back with the next overlap.
+
+The fix, all in the IRIX C shims (no Rust):
+
+- `input_shim.c`: one mutex around every entry point (`INPUT_ENTRY`). Not
+  XInitThreads, which would change how every Display locks, including the
+  per-session capture connections that each only one thread uses.
+- `capture_shim.c`: the X I/O-error landing site (`jmp_buf`) and the protocol-
+  error record were globals shared by every session thread, so an I/O error in
+  one session would longjmp onto *another thread's stack*. Now per-thread, by a
+  pthread key (IRIX's rld has no TLS), exported as `rd_x_guard_*` for the input
+  shim too.
+- `input_shim.c` now uses that guard: a dead input connection is dropped and
+  reopened on the next call. Before, the first cursor query after an X server
+  restart -- a logout -- hit Xlib's I/O error with nothing armed and the
+  process exited. `xrace ... cut_at` shuts the socket down mid-run to prove it:
+  "input: X connection lost; the next event reconnects", and the counts carry on.
+
+Direct-IP serves one peer at a time on purpose (`session::listen`); rendezvous
+sessions each get a thread, which is how the two Macs overlapped.
+
+### 2. The floor under every frame: copying pixels that had not changed
+
+`ports/rust/agent-portable/src/bin/encfloor.rs` measures a frame in which a
+24-pixel square moves, with the active map on its old and new position -- a
+pointer move, without X or a network. On the O2: 190 ms at 1280x1024, 55 ms at
+640x512, and pcsample put 63% of it in `memcpy` and 11% in
+`vp8_copy_mem16x16`. Three whole-frame copies, each ~65, ~65 and ~23 ms:
+
+- our own patch's part (2), seeding the reconstruction from LAST, all of it;
+- the lookahead copying the whole source: libvpx HAS an active-map partial
+  copy, written for a queue of one buffer, and `vp8_lookahead_init` adds one
+  to every depth, so at lag 0 it is dead code;
+- `encode_mb_row` copying every source macroblock to a scratch buffer.
+
+`patches/libvpx-vp8-copy-only-what-changed.patch` (applied after the
+early-out patch) copies only what changed: the lookahead copies the union of
+this frame's and the previous frame's maps (its two buffers alternate), the
+seed copies macroblocks coded since the recycled buffer's frame (per-buffer and
+per-macroblock frame stamps, trusted only along LAST's chain, full copy
+otherwise), and inactive macroblocks skip the scratch copy. **46 ms and 16 ms.
+The bitstream is byte-identical**: `encfloor verify` (pointer, windows, bands,
+empty maps, no maps, forced key frames) hashes 600 frames at 640x512 and 300 at
+1280x1024 to the same value with and without the patch.
+
+What is left of the 46 ms is ordinary encoding -- bitstream packing,
+per-macroblock bookkeeping, border extension -- spread thin; no single item
+above 12%.
+
+### 3. Key frames nobody asked for
+
+libvpx's `VPX_KF_AUTO` puts a key frame every 128 frames (`kf_max_dist`'s
+default) and at what it takes for a scene cut. At 1280x1024 on the O2 a key
+frame is 2.3 s; one at 3741 s in the log took 3.8 s and 72 KB on an
+80-macroblock refresh. The session already sends key frames when a peer
+arrives, asks, or changes scale, and has its own backstop, and upstream RustDesk
+disables these outright. `Tune::auto_keyframes` (default true -- the Mac and
+SPARC are unchanged) is false on IRIX.
+
+### 4. MIPS IV, beside MIPS III
+
+Worth 3-6% on the O2 (pointer frame 50.8 -> 49.4 ms, window-sized 137 -> 129,
+key frame 2.32 -> 2.24 s), bitstream identical. See BUILD.md for the toolchain
+side (`sgug-mips4`, `ports/toolchain/irix-cc-mips4`, `RD_ISA`,
+`mips-sgi-irix6.5-mips4.json`) and docs/PACKAGING.md for the package: ONE
+`.tardist` carries both agents, and inst installs the one this CPU's CPUARCH
+matches (`mach(CPUARCH=R4000)` for MIPS III; R5000, R8000 and R10000 -- which
+R12000-R16000 also report -- for MIPS IV). No SGI machine ever had a MIPS V
+CPU. `build.sh` fails if the MIPS III agent contains a MIPS IV instruction.
+
+Two facts that cost time:
+
+- cc-rs builds clang's `--target` from the first part of the target NAME, so
+  a spec called `mips4-sgi-irix6.5` asks clang for a `mips4` architecture and
+  fails; it is `mips-sgi-irix6.5-mips4`.
+- irix-cc drops `-m*` in link mode but passes `-U` through to the linker, so
+  the ISA flags go in a wrapper that adds them only when compiling.
+
+### 5. Small things Dani asked for or the evidence turned up
+
+- **A version a person can see.** `scripts/build.sh` exports `version_string`
+  as `RD_VERSION`: the agent's banner and `--help` (`main.rs` `version()`) and
+  the panel's title and About box show it. Without it, Cargo's version, so the
+  Mac and SPARC builds are unchanged.
+- **inst versions no longer go backwards within a day**: YYYYMMDD, then the
+  fraction of the commit's UTC day, 00-99 (`dist_version_from`). Every commit
+  from 17:46 UTC on 2026-09-18 is above both builds published that day.
+- `agent-helper.sh service install` says what the chkconfig flag is, rather
+  than always "registered but OFF".
+- The logger writes a line in one `write(2)` -- it was thirteen, at debug level
+  with every mouse event logged -- and no longer panics (and, with
+  panic=abort, exits) when the write fails.
+- `session.rs`'s `LoopClock` (loop time split three ways, beside the process's
+  CPU, every 10 s at debug) stays: it is what showed the session loop was not
+  the spinner.
+
+### Verified on the O2, with the Macs
+
+The fixed agent, installed with inst (the MIPS IV build, `r_deskvint_irix
+2026091865`), and Dani connected from both Macs at once -- 487111771 from .102
+at 400 s, 98690405 from .65 at 477 s -- and used them. Both sessions' loops
+went on reporting every 10 s; pcsample over 30 s found every thread either
+asleep or doing real work (conversion, socket writes, the console's TLS), and
+nothing in `_XFlushInt`. With both idle at 607 s: 250 passes each in 10 s,
+98% of it waiting, and **230 ms of process CPU per 10 s with two peers
+connected** -- where the same overlap before the fix was 28 s of CPU in 30 and
+a frozen session within 17 s.
+
+(`prctl` shows up in busy session threads' samples. It is libpthread's M:N
+scheduler parking a virtual processor -- `_SGIPT_vp_exit`, `_SGIPT_sched_block`
+-- not contention on the new lock.)
+
+The package's choice of agent, all three ways it can go: in an R5000 guest,
+gendist took the tagged pair and inst and install.sh both installed the MIPS IV
+agent; in an R4400 guest (`iris-guest.sh start --cpu r4400`) both installed the
+MIPS III one; and on the O2 inst put the MIPS IV agent on the R10000.
+
+### What is not proven
+
+- `screen_content 2` against 0 was not re-decided: within a few percent on
+  synthetic content; the O2's whole-frame sweep says mode 2 costs 2.4x the
+  bytes on a real desktop.
+- A key frame is still 2.3 s at 1280x1024 (0.6 s at 1/2): every session start,
+  refresh and scale change pays it.
+- Console heartbeats (priority 4 of the handover) are untouched.
 
 ---
 
