@@ -85,12 +85,14 @@ picks by CPUARCH. Worth 3-6% on the O2.
 
 ## On the O2
 
-`r_deskvint_irix 2026091890` (build `20260918-fb4e3a860`, everything in this
-work including the prefetch conversion), MIPS IV agent, installed with inst on
-2026-09-18 with Dani's go-ahead, detached (`/tmp/o2-install2.sh`, output in
-`/tmp/install2.out`). The boot start is on and was proven again by Dani's
-maintenance reboot. `/usr/local/sbin/r-deskvint-irix.2026091885`,
-`.2026091865` and `.cf5c43c05` are the agents before it.
+`r_deskvint_irix 2026091893` -- the package GitHub Actions built from
+430f9a50f (run 35405082390, the first with the MIPS IV toolchain; 14 min),
+downloaded with `gh run download` and installed with inst on 2026-09-18 at
+Dani's request, detached (`/tmp/o2-install3.sh`, output in `/tmp/install3.out`).
+MIPS IV agent; banner `R-DeskVint 20260918-430f9a50f on IRIX`. The boot start
+is on (chkconfig, rc links; SYSLOG shows it stopping and starting across
+Dani's maintenance reboot). `/usr/local/sbin/r-deskvint-irix.2026091890`,
+`.2026091885`, `.2026091865` and `.cf5c43c05` are the agents before it.
 
 Run anything long on the O2 detached (`nohup ... > file &`, then read the
 file): rexec gives up after 300 s of silence, and a script whose connection
