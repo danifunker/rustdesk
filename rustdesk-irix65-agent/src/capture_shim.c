@@ -346,6 +346,38 @@ int rd_display_size(int *w, int *h)
     return 0;
 }
 
+/* The current root geometry, on the capture's own connection.
+ *
+ * `rd_display_size` cannot be used per frame: DisplayWidth/DisplayHeight read
+ * the connection-setup reply, which Xlib caches for the life of the Display, so
+ * seeing a resolution change meant opening a *new* connection every time. On
+ * this server each XOpenDisplay reserves about 16.5 MB of address space and
+ * touches almost none of it -- measured, 40 opens took a process from 3 MB to
+ * 679 MB -- and rd_display_size deliberately never closes the Display. One call
+ * every five seconds is roughly 200 MB a minute, which killed the agent with
+ * "process or stack limit exceeded" after about ten minutes of a live session.
+ *
+ * XGetGeometry is a round trip to the server, so it answers with what is true
+ * now rather than what was true at connect, and needs no new connection.
+ */
+int rd_capture_display_size(rd_capture *c, int *w, int *h)
+{
+    Window root;
+    int x, y;
+    unsigned int ww, hh, bw, depth;
+
+    if (w) *w = 0;
+    if (h) *h = 0;
+    if (!c || !c->dpy)
+        return -1;
+    root = RootWindow(c->dpy, DefaultScreen(c->dpy));
+    if (!XGetGeometry(c->dpy, root, &root, &x, &y, &ww, &hh, &bw, &depth))
+        return -1;
+    if (w) *w = (int)ww;
+    if (h) *h = (int)hh;
+    return 0;
+}
+
 rd_capture *rd_capture_open(const char *display)
 {
     return rd_capture_open_forced(display, RD_PATH_DAMAGE);

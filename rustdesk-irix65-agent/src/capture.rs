@@ -66,6 +66,7 @@ struct RdCapture {
 extern "C" {
     fn rd_capture_open(display: *const c_char) -> *mut RdCapture;
     fn rd_display_size(w: *mut c_int, h: *mut c_int) -> c_int;
+    fn rd_capture_display_size(c: *mut RdCapture, w: *mut c_int, h: *mut c_int) -> c_int;
     fn rd_capture_open_forced(display: *const c_char, max_path: c_int) -> *mut RdCapture;
     fn rd_capture_close(c: *mut RdCapture);
     fn rd_capture_width(c: *const RdCapture) -> c_int;
@@ -429,16 +430,23 @@ impl Capturer {
     pub fn refresh(&mut self) -> bool {
         // Rate-limited, because `session` calls this at the top of every pass of
         // the message loop and a resolution does not change several times a
-        // second. Each call is now a bare X connection rather than a whole
-        // capture context, but a connection per frame is still not free.
+        // second. It is cheap now -- one round trip on the connection this
+        // Capturer already holds -- but there is still no reason to ask often.
+        //
+        // It used to call `display_size`, which opens a fresh connection
+        // because Xlib caches the geometry from connection setup. That leaked
+        // about 16.5 MB of address space per call on this server and killed the
+        // agent with "process or stack limit exceeded" after roughly ten
+        // minutes of a live session. See rd_capture_display_size.
         match self.last_refresh {
             Some(t) if t.elapsed() < std::time::Duration::from_secs(5) => return false,
             _ => self.last_refresh = Some(std::time::Instant::now()),
         }
-        let (w, h) = match display_size() {
-            Some(wh) => wh,
-            None => return false,
-        };
+        let (mut w, mut h) = (0 as c_int, 0 as c_int);
+        if unsafe { rd_capture_display_size(self.inner, &mut w, &mut h) } != 0 {
+            return false;
+        }
+        let (w, h) = (w as i32, h as i32);
         if w <= 0 || h <= 0 {
             return false;
         }
