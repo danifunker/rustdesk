@@ -25,6 +25,8 @@
 #ifndef RD_CAPTURE_SHIM_H
 #define RD_CAPTURE_SHIM_H
 
+#include <setjmp.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -38,6 +40,22 @@ typedef struct rd_capture rd_capture;
 #define RD_PATH_DAMAGE   0   /* SGI-SCREEN-CAPTURE + ReadDisplay, shm */
 #define RD_PATH_READDISP 1   /* ReadDisplay, shm, whole screen each frame */
 #define RD_PATH_GETIMAGE 2   /* XGetImage + colormap; no SGI extensions at all */
+
+/* X error handling, shared with input_shim.c, which talks to X too.
+ *
+ * rd_x_handlers installs the protocol- and I/O-error handlers. Xlib keeps one
+ * of each per process, so every file that opens a Display calls it first.
+ *
+ * The guard is how a connection that dies is survived rather than exiting the
+ * process: setjmp on rd_x_guard_jmp(), rd_x_guard_arm(), talk to X, then
+ * rd_x_guard_disarm(). If the connection dies in between, the I/O handler
+ * disarms and longjmps back, and setjmp returns non-zero. Both belong to the
+ * CALLING THREAD -- each session has its own thread, and a global landing site
+ * sent one session's I/O error onto another session's stack. Do not nest. */
+void rd_x_handlers(void);
+jmp_buf *rd_x_guard_jmp(void);
+void rd_x_guard_arm(void);
+void rd_x_guard_disarm(void);
 
 /* The screen's size, over a bare X connection: no shared memory, no damage
  * interest, no ReadDisplay probe. Returns 0 on success.

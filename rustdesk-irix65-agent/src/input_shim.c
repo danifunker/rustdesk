@@ -29,6 +29,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include <setjmp.h>
+#include <pthread.h>
 
 #include <X11/Xlib.h>
 #include <X11/Xlibint.h>
@@ -38,6 +41,8 @@
  * client is an X11/evdev keycode and not a Mac virtual keycode. */
 #include "../../rustdesk-ppc-agent/src/linux_keycodes.h"
 #include <X11/extensions/XTest.h>
+
+#include "capture_shim.h"   /* rd_x_handlers and the per-thread I/O guard */
 
 /*
  * The XTEST requests are issued by hand rather than through libXtst, because
@@ -89,6 +94,34 @@ static int      g_have_xtest;
 static int      g_xtest_opcode;
 static int      g_btn[8];        /* which X buttons this shim believes are down */
 static unsigned g_held;          /* modifiers this shim pressed and must release */
+static KeyCode  g_scratch;       /* the keycode press_keysym borrowed, if any */
+static int      g_scratch_taken;
+
+/* ONE THREAD AT A TIME ON g_dpy.
+ *
+ * Every session runs on its own thread and they all share this connection:
+ * input from each, and a cursor-position query from each on every pass of its
+ * loop, about 25 a second. The agent never calls XInitThreads, so Xlib's own
+ * LockDisplay is a no-op -- and IRIX's Xlib, finding another thread mid-write
+ * on a connection with no lock, waits for it like this (_XFlushInt, at libX11
+ * .text+0xdf3d0 on 6.5.22m; found by tools/pcsample.c):
+ *
+ *     while (dpy->flags & XlibDisplayWriting)
+ *         if (dpy->lock) ConditionWait(dpy, dpy->lock->writers);
+ *
+ * with both fields read once, into registers. With no lock that is a two-
+ * instruction loop that never ends, even after the writer has finished. On the
+ * O2, two Macs connected at once froze one session for good and left its
+ * thread spinning, one more every time it happened: the agent burned the whole
+ * CPU and every other session ran at a third of its speed. probes/xrace.c
+ * shows it in under a second.
+ *
+ * So every entry point takes this lock (INPUT_ENTRY, at the end of the file).
+ * Uncontended with one session, which is the usual case, and held for a few
+ * milliseconds at most with two. XInitThreads would also do it, but it changes
+ * how every Display in the process locks, including the capture connections
+ * that are each only ever used by one thread; this is the one that is shared. */
+static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /* Open the display once and keep it. Injection is bursty -- a drag is dozens of
  * events -- and a connection per event would cost more than the events do. */
@@ -97,6 +130,7 @@ static Display *dpy(void)
     int first_event, first_error;
     if (g_dpy)
         return g_dpy;
+    rd_x_handlers();
     g_dpy = XOpenDisplay(NULL);
     if (!g_dpy) {
         fprintf(stderr, "input: XOpenDisplay failed; no input will be injected\n");
@@ -209,8 +243,6 @@ static KeySym unicode_to_keysym(unsigned int cp)
 static int press_keysym(KeySym sym, int down)
 {
     KeyCode kc;
-    static KeyCode scratch;
-    static int scratch_taken;
 
     if (sym == NoSymbol || !ready())
         return -1;
@@ -233,15 +265,15 @@ static int press_keysym(KeySym sym, int down)
         map = XGetKeyboardMapping(g_dpy, min_kc, max_kc - min_kc + 1, &n);
         if (!map)
             return -1;
-        scratch = 0;
+        g_scratch = 0;
         for (i = max_kc - min_kc; i >= 0; i--) {
             int j, empty = 1;
             for (j = 0; j < n; j++)
                 if (map[i * n + j] != NoSymbol) { empty = 0; break; }
-            if (empty) { scratch = (KeyCode)(min_kc + i); break; }
+            if (empty) { g_scratch = (KeyCode)(min_kc + i); break; }
         }
         XFree(map);
-        if (!scratch) {
+        if (!g_scratch) {
             fprintf(stderr, "input: no spare keycode to type keysym 0x%lx\n",
                     (unsigned long)sym);
             return -1;
@@ -250,24 +282,24 @@ static int press_keysym(KeySym sym, int down)
             KeySym two[2];
             two[0] = sym;
             two[1] = sym;
-            XChangeKeyboardMapping(g_dpy, scratch, 2, two, 1);
+            XChangeKeyboardMapping(g_dpy, g_scratch, 2, two, 1);
             XSync(g_dpy, False);
         }
-        scratch_taken = 1;
-        fake_key((int)scratch, 1);
+        g_scratch_taken = 1;
+        fake_key((int)g_scratch, 1);
         XFlush(g_dpy);
         return 0;
     }
 
-    if (scratch_taken) {
+    if (g_scratch_taken) {
         KeySym none[2];
-        fake_key((int)scratch, 0);
+        fake_key((int)g_scratch, 0);
         XSync(g_dpy, False);
         none[0] = NoSymbol;
         none[1] = NoSymbol;
-        XChangeKeyboardMapping(g_dpy, scratch, 2, none, 1);
+        XChangeKeyboardMapping(g_dpy, g_scratch, 2, none, 1);
         XSync(g_dpy, False);
-        scratch_taken = 0;
+        g_scratch_taken = 0;
         return 0;
     }
     return -1;
@@ -292,14 +324,17 @@ static void mods_up(void)
     g_held = 0;
 }
 
-/* --- the interface input.rs calls ----------------------------------------- */
+/* --- what the entry points do -------------------------------------------- *
+ *
+ * Everything from here to INPUT_ENTRY runs with g_lock held and this thread's
+ * X I/O guard armed; see the entry points at the end of the file. */
 
 /* Let go of every modifier, whoever pressed it.
  *
  * Worth doing when a session starts: a modifier left held by a client that
  * disconnected mid-shortcut corrupts everything typed afterwards, and on this
  * side the person at the machine has no way to tell why. */
-void rd_release_modifiers(void)
+static void release_modifiers(void)
 {
     static const KeySym all[] = {
         XK_Shift_L, XK_Shift_R, XK_Control_L, XK_Control_R,
@@ -345,24 +380,11 @@ static void post_mouse(int type, int x, int y, int button, int have_xy)
     XFlush(g_dpy);
 }
 
-void rd_mouse(int type, double x, double y, int button)
-{
-    post_mouse(type, (int)x, (int)y, button, 1);
-}
-
-/* A button event from the client carries no coordinates -- proto3 omits zero
- * fields, so a press arrives as nothing but `mask`. Taking those absent
- * coordinates literally clicks the top-left corner every time. */
-void rd_mouse_here(int type, int button)
-{
-    post_mouse(type, 0, 0, button, 0);
-}
-
 /* Wheel notches. X has no scroll axis: it has buttons 4/5 for vertical and
  * 6/7 for horizontal, one press-release per notch. `pixels` says the client
  * sent a distance rather than notches, so scale it down to something sane
  * instead of scrolling a page per twitch. */
-void rd_scroll(int dy, int dx, int pixels)
+static void scroll(int dy, int dx, int pixels)
 {
     int i, n;
     if (!ready())
@@ -390,7 +412,7 @@ void rd_scroll(int dy, int dx, int pixels)
     XFlush(g_dpy);
 }
 
-void rd_key(int keycode, int down)
+static void key_mac(int keycode, int down)
 {
     KeySym sym = mac_to_keysym(keycode);
     if (sym == NoSymbol) {
@@ -403,7 +425,7 @@ void rd_key(int keycode, int down)
 /* A keycode from the platform the agent told the peer it was -- Linux -- rather
  * than a Mac virtual keycode. Decode to a keysym and let press_keysym find
  * whatever keycode this server actually uses for it. */
-void rd_key_platform(int keycode, int down)
+static void key_platform(int keycode, int down)
 {
     KeySym sym = rd_linux_to_keysym(keycode);
     if (sym == NoSymbol) {
@@ -413,26 +435,26 @@ void rd_key_platform(int keycode, int down)
     press_keysym(sym, down);
 }
 
-void rd_key_platform_with_flags(int keycode, int down, unsigned int flags)
+static void key_platform_with_flags(int keycode, int down, unsigned int flags)
 {
     if (down) {
         if (flags)
             mods_down(flags);
-        rd_key_platform(keycode, 1);
+        key_platform(keycode, 1);
     } else {
-        rd_key_platform(keycode, 0);
+        key_platform(keycode, 0);
         mods_up();
     }
 }
 
-void rd_key_with_flags(int keycode, int down, unsigned int flags)
+static void key_mac_with_flags(int keycode, int down, unsigned int flags)
 {
     if (down) {
         if (flags)
             mods_down(flags);
-        rd_key(keycode, 1);
+        key_mac(keycode, 1);
     } else {
-        rd_key(keycode, 0);
+        key_mac(keycode, 0);
         mods_up();
     }
 }
@@ -440,7 +462,7 @@ void rd_key_with_flags(int keycode, int down, unsigned int flags)
 /* Type a character. The layout is consulted first -- pressing the key that
  * actually produces the character is better than borrowing a keycode, because
  * applications that read the keyboard directly see a real key. */
-void rd_key_char(unsigned int cp, int down, unsigned int flags)
+static void key_char(unsigned int cp, int down, unsigned int flags)
 {
     KeySym sym = unicode_to_keysym(cp);
     if (down) {
@@ -453,14 +475,14 @@ void rd_key_char(unsigned int cp, int down, unsigned int flags)
     }
 }
 
-void rd_key_unicode(unsigned int cp, int down)
+static void key_unicode(unsigned int cp, int down)
 {
     press_keysym(unicode_to_keysym(cp), down);
 }
 
 /* Which keycode would produce this character, and does it need shift?
  * Diagnostic only, for --probe-keys. */
-int rd_keycode_for_char(unsigned int cp, int *needs_shift)
+static int keycode_for_char(unsigned int cp, int *needs_shift)
 {
     KeySym sym = unicode_to_keysym(cp);
     KeyCode kc;
@@ -490,7 +512,7 @@ int rd_keycode_for_char(unsigned int cp, int *needs_shift)
     return (int)kc;
 }
 
-void rd_cursor_pos(double *x, double *y)
+static void cursor_pos(double *x, double *y)
 {
     Window root_ret, child_ret;
     int rx = 0, ry = 0, wx, wy;
@@ -505,4 +527,114 @@ void rd_cursor_pos(double *x, double *y)
         return;   /* pointer is on another screen; -1 tells the caller to skip */
     if (x) *x = (double)rx;
     if (y) *y = (double)ry;
+}
+
+/* The connection died under us. A logout does that -- xdm restarts the server
+ * -- and so does a server that wedges and is restarted by hand. Before the
+ * guard, the next cursor query after that met Xlib's I/O error with nothing
+ * armed and the handler exited the process, so the first session after a
+ * logout took the agent down with it.
+ *
+ * Drop the connection and let the next call open a fresh one. The teardown is
+ * rd_capture_close's: give the socket back, keep the Display allocation,
+ * because XCloseDisplay has been seen to poison later connections in this
+ * process. Whatever this shim believed was held down went with the server. */
+static void input_lost(void)
+{
+    if (g_dpy)
+        close(ConnectionNumber(g_dpy));
+    g_dpy = NULL;
+    g_have_xtest = 0;
+    memset(g_btn, 0, sizeof g_btn);
+    g_held = 0;
+    g_scratch_taken = 0;
+    fprintf(stderr, "input: X connection lost; the next event reconnects\n");
+}
+
+/* --- the interface input.rs calls ----------------------------------------- *
+ *
+ * Every entry point runs its body through INPUT_ENTRY: under g_lock, with the
+ * calling thread's I/O guard armed. See g_lock for why the lock, and
+ * input_lost for what happens when the guard fires. The bodies are the static
+ * functions above; they call each other, never these, so nothing takes the
+ * lock twice. */
+
+#define INPUT_ENTRY(body)                                   \
+    do {                                                    \
+        pthread_mutex_lock(&g_lock);                        \
+        if (setjmp(*rd_x_guard_jmp()) == 0) {               \
+            rd_x_guard_arm();                               \
+            body;                                           \
+            rd_x_guard_disarm();                            \
+        } else {                                            \
+            input_lost();                                   \
+        }                                                   \
+        pthread_mutex_unlock(&g_lock);                      \
+    } while (0)
+
+void rd_release_modifiers(void)
+{
+    INPUT_ENTRY(release_modifiers());
+}
+
+void rd_mouse(int type, double x, double y, int button)
+{
+    INPUT_ENTRY(post_mouse(type, (int)x, (int)y, button, 1));
+}
+
+/* A button event from the client carries no coordinates -- proto3 omits zero
+ * fields, so a press arrives as nothing but `mask`. Taking those absent
+ * coordinates literally clicks the top-left corner every time. */
+void rd_mouse_here(int type, int button)
+{
+    INPUT_ENTRY(post_mouse(type, 0, 0, button, 0));
+}
+
+void rd_scroll(int dy, int dx, int pixels)
+{
+    INPUT_ENTRY(scroll(dy, dx, pixels));
+}
+
+void rd_key(int keycode, int down)
+{
+    INPUT_ENTRY(key_mac(keycode, down));
+}
+
+void rd_key_platform(int keycode, int down)
+{
+    INPUT_ENTRY(key_platform(keycode, down));
+}
+
+void rd_key_platform_with_flags(int keycode, int down, unsigned int flags)
+{
+    INPUT_ENTRY(key_platform_with_flags(keycode, down, flags));
+}
+
+void rd_key_with_flags(int keycode, int down, unsigned int flags)
+{
+    INPUT_ENTRY(key_mac_with_flags(keycode, down, flags));
+}
+
+void rd_key_char(unsigned int cp, int down, unsigned int flags)
+{
+    INPUT_ENTRY(key_char(cp, down, flags));
+}
+
+void rd_key_unicode(unsigned int cp, int down)
+{
+    INPUT_ENTRY(key_unicode(cp, down));
+}
+
+int rd_keycode_for_char(unsigned int cp, int *needs_shift)
+{
+    volatile int kc = -1;   /* volatile: read after a longjmp */
+    INPUT_ENTRY(kc = keycode_for_char(cp, needs_shift));
+    return kc;
+}
+
+void rd_cursor_pos(double *x, double *y)
+{
+    if (x) *x = -1.0;
+    if (y) *y = -1.0;
+    INPUT_ENTRY(cursor_pos(x, y));
 }

@@ -13,6 +13,7 @@
 #include <string.h>
 #include <errno.h>
 #include <setjmp.h>
+#include <pthread.h>
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/ipc.h>
@@ -71,32 +72,71 @@ struct rd_capture {
  * so when this server wedges and gets restarted -- which it does -- an agent
  * without a handler dies silently instead of reconnecting. Xlib forbids
  * returning from it, so it longjmps back to whoever was talking to the server.
+ *
+ * **Whoever, on this thread.** Each session runs on its own thread with its
+ * own capture connection, and two sessions at once are ordinary -- two Macs
+ * connected to the O2 did exactly that. The landing site and the error record
+ * used to be one global each, so the second session to arm the guard
+ * overwrote the first one's: an I/O error in session A would longjmp onto
+ * session B's stack, from A's thread, and a BadMatch in one session could be
+ * reported by the other. Both now belong to the calling thread. The handlers
+ * run synchronously inside the Xlib call that met the error, on the thread
+ * that made it, so "this thread's" is always the right one.
+ *
+ * No __thread: IRIX's rld has no TLS. A pthread key does the same job.
  * ------------------------------------------------------------------------ */
 
-static char        g_last_x_err[MAX_ERR];
-static int         g_x_err_count;
-static jmp_buf     g_io_jmp;
-static volatile int g_io_jmp_armed;
-static volatile int g_io_died;
+struct x_thread {
+    jmp_buf jmp;                    /* where an I/O error lands */
+    int     armed;                  /* ...if this is set */
+    int     err_count;              /* protocol errors since x_err_reset */
+    char    last_err[MAX_ERR];
+};
+
+static pthread_key_t  g_x_key;
+static pthread_once_t g_x_once = PTHREAD_ONCE_INIT;
+/* Only if calloc fails: shared, so no worse than the old globals. */
+static struct x_thread g_x_fallback;
+
+static void x_key_make(void)
+{
+    pthread_key_create(&g_x_key, free);
+}
+
+static struct x_thread *x_thread(void)
+{
+    struct x_thread *t;
+    pthread_once(&g_x_once, x_key_make);
+    t = (struct x_thread *)pthread_getspecific(g_x_key);
+    if (!t) {
+        t = (struct x_thread *)calloc(1, sizeof *t);
+        if (!t || pthread_setspecific(g_x_key, t) != 0) {
+            free(t);
+            return &g_x_fallback;
+        }
+    }
+    return t;
+}
 
 static int on_x_error(Display *d, XErrorEvent *e)
 {
+    struct x_thread *t = x_thread();
     char buf[96];
     XGetErrorText(d, e->error_code, buf, sizeof buf);
-    snprintf(g_last_x_err, sizeof g_last_x_err,
+    snprintf(t->last_err, sizeof t->last_err,
              "X error %d (%s) request %d.%d", e->error_code, buf,
              e->request_code, e->minor_code);
-    g_x_err_count++;
+    t->err_count++;
     return 0;
 }
 
 static int on_x_io_error(Display *d)
 {
+    struct x_thread *t = x_thread();
     (void)d;
-    g_io_died = 1;
-    if (g_io_jmp_armed) {
-        g_io_jmp_armed = 0;
-        longjmp(g_io_jmp, 1);
+    if (t->armed) {
+        t->armed = 0;
+        longjmp(t->jmp, 1);
     }
     /* Nobody armed a landing site, and Xlib does not allow a return. Exiting
      * here would be the default behaviour anyway; at least say why. */
@@ -104,6 +144,16 @@ static int on_x_io_error(Display *d)
     exit(1);
     return 0;   /* not reached */
 }
+
+void rd_x_handlers(void)
+{
+    XSetErrorHandler(on_x_error);
+    XSetIOErrorHandler(on_x_io_error);
+}
+
+jmp_buf *rd_x_guard_jmp(void) { return &x_thread()->jmp; }
+void rd_x_guard_arm(void)     { x_thread()->armed = 1; }
+void rd_x_guard_disarm(void)  { x_thread()->armed = 0; }
 
 static void err_set(rd_capture *c, const char *fmt, ...)
 {
@@ -117,29 +167,33 @@ static void err_set(rd_capture *c, const char *fmt, ...)
  * jump to `on_death`. */
 #define WITH_X_GUARD(c, on_death)                       \
     do {                                                \
-        if (setjmp(g_io_jmp)) {                         \
-            g_io_jmp_armed = 0;                         \
+        if (setjmp(*rd_x_guard_jmp())) {                \
             (c)->dead = 1;                              \
             err_set((c), "X connection lost");          \
             goto on_death;                              \
         }                                               \
-        g_io_jmp_armed = 1;                             \
+        rd_x_guard_arm();                               \
     } while (0)
 
-#define END_X_GUARD() do { g_io_jmp_armed = 0; } while (0)
+#define END_X_GUARD() rd_x_guard_disarm()
 
 /* The same, for the two entry points that have no rd_capture to record the
  * death on. Armed exactly as above; `on_death` is somewhere to land. */
 #define WITH_X_GUARD_BARE(on_death)                     \
     do {                                                \
-        if (setjmp(g_io_jmp)) {                         \
-            g_io_jmp_armed = 0;                         \
+        if (setjmp(*rd_x_guard_jmp()))                  \
             goto on_death;                              \
-        }                                               \
-        g_io_jmp_armed = 1;                             \
+        rd_x_guard_arm();                               \
     } while (0)
 
-static void x_err_reset(void) { g_x_err_count = 0; g_last_x_err[0] = 0; }
+static void x_err_reset(void)
+{
+    struct x_thread *t = x_thread();
+    t->err_count = 0;
+    t->last_err[0] = 0;
+}
+static int x_errs(void) { return x_thread()->err_count; }
+static const char *x_last_err(void) { return x_thread()->last_err; }
 
 /* ------------------------------------------------------------------------ */
 
@@ -174,8 +228,8 @@ static int alloc_canvas(rd_capture *c)
         return -1;
     }
     XSync(c->dpy, False);
-    if (g_x_err_count) {
-        err_set(c, "XShmAttach: %s", g_last_x_err);
+    if (x_errs()) {
+        err_set(c, "XShmAttach: %s", x_last_err());
         return -1;
     }
     shmctl(c->shminfo.shmid, IPC_RMID, NULL);
@@ -257,9 +311,7 @@ static rd_capture *open_common(const char *display, int max_path)
     c->force_full = 1;
     strcpy(c->err, "no error");
 
-    XSetErrorHandler(on_x_error);
-    XSetIOErrorHandler(on_x_io_error);
-    g_io_died = 0;
+    rd_x_handlers();
 
     c->dpy = XOpenDisplay(display);
     if (!c->dpy) {
@@ -301,10 +353,10 @@ static rd_capture *open_common(const char *display, int max_path)
                                                      (unsigned)c->width,
                                                      (unsigned)c->height);
                 XSync(c->dpy, False);
-                if (c->interest && !g_x_err_count) {
+                if (c->interest && !x_errs()) {
                     SGICapStart(c->dpy, c->interest);
                     XSync(c->dpy, False);
-                    if (!g_x_err_count) {
+                    if (!x_errs()) {
                         c->cap_started = 1;
                         c->path = RD_PATH_DAMAGE;
                     }
@@ -359,7 +411,7 @@ int rd_display_size(int *w, int *h)
     Display *d;
     if (w) *w = 0;
     if (h) *h = 0;
-    XSetIOErrorHandler(on_x_io_error);
+    rd_x_handlers();
 
     /* Guarded, because this is called once per session while building PeerInfo
      * and it killed the agent there: a peer logged in successfully at the xdm
@@ -577,7 +629,7 @@ static int full_getimage(rd_capture *c)
     XSync(c->dpy, False);
     if (!im) {
         err_set(c, "XGetImage failed%s%s",
-                g_x_err_count ? ": " : "", g_x_err_count ? g_last_x_err : "");
+                x_errs() ? ": " : "", x_errs() ? x_last_err() : "");
         return -1;
     }
     if (im->bits_per_pixel == 8) expand_indexed(c, im);
@@ -632,9 +684,9 @@ int rd_capture_full(rd_capture *c)
             XShmReadDisplayRects(c->dpy, c->root, &r, 1, c->rdbuf, 0, 0,
                                  XRD_READ_POINTER, &hints_ret);
             XSync(c->dpy, False);
-            if (g_x_err_count) {
+            if (x_errs()) {
                 err_set(c, "XShmReadDisplayRects(rows %d..%d): %s",
-                        y, y + h, g_last_x_err);
+                        y, y + h, x_last_err());
                 rc = -1;
             }
         }
@@ -680,8 +732,8 @@ int rd_capture_read_rect(rd_capture *c, int x, int y, int w, int h)
     XShmReadDisplayRects(c->dpy, c->root, &r, 1, c->rdbuf, 0, 0,
                          XRD_READ_POINTER, &hints_ret);
     XSync(c->dpy, False);
-    if (g_x_err_count) {
-        err_set(c, "XShmReadDisplayRects(rect): %s", g_last_x_err);
+    if (x_errs()) {
+        err_set(c, "XShmReadDisplayRects(rect): %s", x_last_err());
         rc = -1;
     } else {
         rc = 0;
@@ -740,8 +792,8 @@ int rd_capture_poll(rd_capture *c, int *rects, int max_rects)
         r = SGICapQueryCopyAndReset(c->dpy, c->interest, &when, &count,
                                     &ordering, c->rdbuf);
         XSync(c->dpy, False);
-        if (g_x_err_count) {
-            err_set(c, "SGICapQueryCopyAndReset: %s", g_last_x_err);
+        if (x_errs()) {
+            err_set(c, "SGICapQueryCopyAndReset: %s", x_last_err());
             if (r) XFree(r);
             END_X_GUARD();
             return -1;
