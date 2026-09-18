@@ -128,6 +128,17 @@ static void err_set(rd_capture *c, const char *fmt, ...)
 
 #define END_X_GUARD() do { g_io_jmp_armed = 0; } while (0)
 
+/* The same, for the two entry points that have no rd_capture to record the
+ * death on. Armed exactly as above; `on_death` is somewhere to land. */
+#define WITH_X_GUARD_BARE(on_death)                     \
+    do {                                                \
+        if (setjmp(g_io_jmp)) {                         \
+            g_io_jmp_armed = 0;                         \
+            goto on_death;                              \
+        }                                               \
+        g_io_jmp_armed = 1;                             \
+    } while (0)
+
 static void x_err_reset(void) { g_x_err_count = 0; g_last_x_err[0] = 0; }
 
 /* ------------------------------------------------------------------------ */
@@ -349,16 +360,32 @@ int rd_display_size(int *w, int *h)
     if (w) *w = 0;
     if (h) *h = 0;
     XSetIOErrorHandler(on_x_io_error);
+
+    /* Guarded, because this is called once per session while building PeerInfo
+     * and it killed the agent there: a peer logged in successfully at the xdm
+     * login screen, this ran, the server dropped the connection, and the
+     * process exited between the login_request and the first frame. Callers
+     * already treat -1 as "size unknown". */
+    WITH_X_GUARD_BARE(dead_size);
+
     d = XOpenDisplay(NULL);
-    if (!d)
+    if (!d) {
+        END_X_GUARD();
         return -1;
+    }
     if (w) *w = DisplayWidth(d, DefaultScreen(d));
     if (h) *h = DisplayHeight(d, DefaultScreen(d));
     /* Not XCloseDisplay, for the reason given on rd_capture_close: it poisons
      * every later ReadDisplay connection in this process. The descriptor is
      * released; the Display allocation is not. */
     close(ConnectionNumber(d));
+    END_X_GUARD();
     return 0;
+
+dead_size:
+    if (w) *w = 0;
+    if (h) *h = 0;
+    return -1;
 }
 
 /* The current root geometry, on the capture's own connection.
@@ -450,6 +477,13 @@ rd_capture *rd_capture_open_forced(const char *display, int max_path)
 void rd_capture_close(rd_capture *c)
 {
     if (!c) return;
+    /* Teardown talks to the server as well, so a connection that dies *while*
+     * we are tidying up would exit the process from inside the cleanup path.
+     * The !c->dead tests below handle a connection already known to be gone;
+     * this handles one that goes here. Landing on the label sets c->dead, which
+     * free_canvas and the XFlush further down both already honour, so the
+     * memory and the descriptor are still released either way. */
+    WITH_X_GUARD(c, x_teardown_done);
     if (c->dpy && !c->dead) {
         if (c->cap_started) {
             SGICapStop(c->dpy, c->interest);
@@ -458,6 +492,8 @@ void rd_capture_close(rd_capture *c)
         if (c->rdbuf) XShmDestroyReadDisplayBuf(c->rdbuf);
         if (c->fb_image) { XDestroyImage(c->fb_image); c->fb_image = NULL; }
     }
+x_teardown_done:
+    END_X_GUARD();
     if (c->shm_ok) free_canvas(c);
     else if (c->buf) free(c->buf);
 
