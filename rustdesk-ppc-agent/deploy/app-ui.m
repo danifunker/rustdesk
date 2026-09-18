@@ -123,9 +123,9 @@
           initWithString:[self run:[NSArray arrayWithObject:@"status"]]] autorelease]];
     [statusView setFont:[NSFont userFixedPitchFontOfSize:11.0]];
 
-    [idServerField setStringValue:[self conf:@"rendezvous_server"]];
+    [idServerField setStringValue:[self conf:@"id_server"]];
     [relayField setStringValue:[self conf:@"relay_server"]];
-    [keyField setStringValue:[self conf:@"server_key"]];
+    [keyField setStringValue:[self conf:@"key"]];
     [consoleField setStringValue:[self conf:@"api_server"]];
     [caField setStringValue:[self conf:@"ca_bundle"]];
     [passwordField setStringValue:@""];
@@ -168,7 +168,7 @@
     int changed = 0;
 
     v = [idServerField stringValue];
-    if (![v isEqualToString:[self conf:@"rendezvous_server"]]) {
+    if (![v isEqualToString:[self conf:@"id_server"]]) {
         changed++;
         [done appendString:[self run:[NSArray arrayWithObjects:@"set", @"server", v, nil]]];
     }
@@ -180,7 +180,7 @@
     }
 
     v = [keyField stringValue];
-    if (![v isEqualToString:[self conf:@"server_key"]]) {
+    if (![v isEqualToString:[self conf:@"key"]]) {
         changed++;
         [done appendString:[self run:[NSArray arrayWithObjects:@"set", @"key", v, nil]]];
     }

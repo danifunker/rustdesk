@@ -44,6 +44,18 @@ conf_get() {
     sed -n "s/^$1 *= *//p" "$CONF" | head -1
 }
 
+# Two settings have been renamed in the agent -- rendezvous_server -> id_server
+# and server_key -> key (config.rs RENAMED). It migrates on load and writes the
+# new names the next time anything is set, so reading only the old ones showed
+# a configured Mac as having no ID server and no key, and opened the window with
+# both fields blank. Read the new name, and fall back to the old for a file
+# nothing has rewritten yet.
+conf_get_renamed() {
+    v="$(conf_get "$1")"
+    [ -n "$v" ] || v="$(conf_get "$2")"
+    echo "$v"
+}
+
 # The installed wrapper knows where the agent went; before installation, point
 # the bundled control script at the bundle's own copy.
 ctl() {
@@ -89,9 +101,9 @@ status)
         st="Not installed"
     fi
     id="$("$A" --show-id 2>/dev/null || echo '?')"
-    srv="$(conf_get rendezvous_server)"; [ -n "$srv" ] || srv="(none - direct IP only)"
+    srv="$(conf_get_renamed id_server rendezvous_server)"; [ -n "$srv" ] || srv="(none - direct IP only)"
     rly="$(conf_get relay_server)";      [ -n "$rly" ] || rly="(whichever the ID server names)"
-    key="$(conf_get server_key)";        [ -n "$key" ] && key="(set)" || key="(none)"
+    key="$(conf_get_renamed key server_key)"; [ -n "$key" ] && key="(set)" || key="(none)"
     # Reachable and visible are different things: the ID server makes this Mac
     # connectable, the console makes it appear in a device list. Both are shown
     # because having one and not the other is a normal state, and looks like a
@@ -157,7 +169,14 @@ start)   ctl >/dev/null 2>&1; sleep 2; is_running && echo "Started." || echo "Co
 restart) ctl stop >/dev/null 2>&1; sleep 1; ctl >/dev/null 2>&1; sleep 2
          is_running && echo "Restarted." || echo "It did not come back. Try Show the log." ;;
 stop)    ctl stop >/dev/null 2>&1; sleep 1; is_running && echo "It is still running." || echo "Stopped." ;;
-conf)    conf_get "$2" ;;
+conf)
+    # The window asks by the current names; see conf_get_renamed.
+    case "$2" in
+        id_server) conf_get_renamed id_server rendezvous_server ;;
+        key)       conf_get_renamed key server_key ;;
+        *)         conf_get "$2" ;;
+    esac
+    ;;
 info)    info_get "$2" ;;
 showkey) "$(agent_bin)" --show-key 2>/dev/null || echo "(no key yet)" ;;
 showlog) tail -25 "$PREFIX/agent.log" 2>/dev/null || echo "No log yet - the agent has not run." ;;
