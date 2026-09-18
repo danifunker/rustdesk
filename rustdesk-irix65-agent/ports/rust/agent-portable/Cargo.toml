@@ -58,6 +58,10 @@ path = "src/bin/pipeline.rs"
 name = "perfprobe"
 path = "src/bin/perfprobe.rs"
 
+[[bin]]
+name = "encfloor"
+path = "src/bin/encfloor.rs"
+
 [profile.release]
 opt-level = 2
 panic = "abort"

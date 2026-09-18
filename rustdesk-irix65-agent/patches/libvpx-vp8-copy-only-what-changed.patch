@@ -1,0 +1,405 @@
+Make an almost-unchanged VP8 frame cheap: copy only what changed.
+
+Applied after libvpx-vp8-active-map-early-out.patch, which it builds on.
+
+That patch stopped the encoder *thinking* about macroblocks the active map
+excludes. It did not stop it *copying* them. Sampled on a real O2 (R10000,
+195 MHz) with tools/pcsample.c, a 1280x1024 frame in which a pointer moved --
+seven or eight active macroblocks out of 5120 -- took a median 190 ms, and
+three quarters of that was moving pixels that had not changed:
+
+   init_encode_frame_mb_context   ~65 ms   the early-out patch's own part (2):
+                                           the whole reference copied into
+                                           the reconstruction buffer, every
+                                           frame
+   vp8_copy_and_extend_frame      ~65 ms   the lookahead taking a full copy of
+                                           the source, every frame
+   vp8_copy_mem16x16 (encode_mb_row) ~23 ms  each source macroblock copied to
+                                           a scratch buffer, all 5120 of them
+
+That floor is the pointer: every frame pays it however little changed, so it
+is both the pointer's frame rate and its latency.
+
+Three changes:
+
+1. The lookahead copies only the active part of the source -- which libvpx
+   already has code for, and never runs. The partial copy is written for a
+   queue of one buffer, and vp8_lookahead_init adds one to every depth "to keep
+   the last frame", so lag_in_frames 0 makes a queue of two and `max_sz == 1`
+   never holds. With two buffers written in turn, the one being written last
+   held the frame from two pushes ago, and what has changed since is exactly
+   what this frame's map and the previous frame's map mark. Copying their union
+   brings the WHOLE buffer up to date, not just its active part -- which
+   matters, because a few things read the entire source (the skin map, for
+   one). Anything that breaks the chain -- no map, a flagged frame, the first
+   two pushes -- takes the full copy as before and restarts it.
+
+2. The reconstruction buffer is seeded from LAST only where the two differ.
+   The buffer being written is a free one holding an earlier frame on LAST's
+   chain (in steady state, the one before LAST), so it already matches LAST
+   except in the macroblocks coded since. The encoder now keeps, per frame
+   buffer, which frame it holds (fb_stamp, set only when a frame becomes LAST,
+   so a dropped frame's buffer is never trusted) and, per macroblock, the last
+   frame that coded it (mb_stamp; all_stamp for a key frame, a frame without a
+   map, or the loop filter, which touches every macroblock). The seed copies
+   what is newer than the buffer and nothing else, and falls back to copying
+   the whole visible area whenever the record cannot be trusted.
+
+3. encode_mb_row (and its threaded twin) skips the scratch copy of an excluded
+   macroblock, which vp8cx_encode_inter_macroblock returns before reading.
+
+Measured on the O2 with ports/rust/agent-portable/src/bin/encfloor.rs, a
+24x24 square moving with the map covering its old and new position (median of
+60 frames, two runs each):
+
+                  before      after
+   1280x1024      190 ms      46 ms     (4.1x)
+    640x512        55 ms      16 ms     (3.4x)
+
+THE BITSTREAM IS UNCHANGED. `encfloor verify` runs a deliberately awkward
+sequence -- the pointer, windows, full-width bands, frames with an empty map,
+frames with no map, forced key frames -- and hashes every encoded byte. Built
+against libvpx with and without this patch, on the O2:
+
+   640x512, 600 frames     1579270 bytes, hash fb4c9ed6 both    51.3 s -> 29.5 s
+   1280x1024, 300 frames   2355057 bytes, hash 2966bffe both    87.9 s -> 51.6 s
+
+A wrong seed or a stale source anywhere a later macroblock predicted from would
+have changed the bytes of every frame after it.
+
+--- a/vp8/encoder/lookahead.c
++++ b/vp8/encoder/lookahead.c
+@@ -9,6 +9,7 @@
+  */
+ #include <assert.h>
+ #include <stdlib.h>
++#include <string.h>
+ #include "vpx_config.h"
+ #include "lookahead.h"
+ #include "vp8/common/extend.h"
+@@ -21,6 +22,11 @@
+   unsigned int read_idx;       /* Read index */
+   unsigned int write_idx;      /* Write index */
+   struct lookahead_entry *buf; /* Buffer list */
++  /* The previous push's active map, for the partial copy below. */
++  unsigned char *prev_map;
++  unsigned int map_size;
++  int prev_map_valid;
++  unsigned int pushes;
+ };
+ 
+ /* Return the buffer at the given absolute index and increment the index */
+@@ -45,6 +51,7 @@
+       }
+       free(ctx->buf);
+     }
++    free(ctx->prev_map);
+     free(ctx);
+   }
+ }
+@@ -75,6 +82,12 @@
+     ctx->max_sz = depth;
+     ctx->buf = calloc(depth, sizeof(*ctx->buf));
+     if (!ctx->buf) goto bail;
++    /* Only the two-buffer queue that lag_in_frames 0 makes uses it; a failed
++     * allocation just means every push copies the whole frame. */
++    if (depth == 2) {
++      ctx->map_size = (width >> 4) * (height >> 4);
++      ctx->prev_map = calloc(ctx->map_size, 1);
++    }
+     for (i = 0; i < depth; ++i) {
+       if (vp8_yv12_alloc_frame_buffer(&ctx->buf[i].img, width, height,
+                                       VP8BORDERINPIXELS)) {
+@@ -100,6 +113,45 @@
+   ctx->sz++;
+   buf = pop(ctx, &ctx->write_idx);
+ 
++  /* The partial copy below, made reachable. It is written for a queue of one
++   * buffer, and there is no such queue: init adds one to every depth to keep
++   * the last frame, so lag_in_frames 0 -- the only setting a live encoder
++   * uses -- makes two, and the condition below never holds. Every frame
++   * copied the whole source, active map or not: on IRIX / R10000 that was a
++   * third of the cost of a 1280x1024 frame in which a pointer moved.
++   *
++   * With two buffers used in turn, the one being written last held the frame
++   * from two pushes ago. What changed since then is what this frame's map and
++   * the previous frame's map mark, so copying their union brings it exactly
++   * up to date -- the whole buffer, not just the active part, which matters
++   * because a few things (the skin map, for one) read the entire source.
++   * Anything that breaks the chain -- a push without a map, a flagged frame,
++   * the first two pushes -- takes the full copy and restarts it. */
++  if (ctx->max_sz == 2 && ctx->prev_map && active_map && !flags &&
++      ctx->prev_map_valid && ctx->pushes >= 2 &&
++      (unsigned int)(mb_rows * mb_cols) == ctx->map_size) {
++    const unsigned char *prev = ctx->prev_map;
++    for (row = 0; row < mb_rows; ++row) {
++      col = 0;
++      while (1) {
++        for (; col < mb_cols; ++col) {
++          if (active_map[col] || prev[col]) break;
++        }
++        if (col == mb_cols) break;
++        active_end = col;
++        for (; active_end < mb_cols; ++active_end) {
++          if (!active_map[active_end] && !prev[active_end]) break;
++        }
++        vp8_copy_and_extend_frame_with_rect(src, &buf->img, row << 4, col << 4,
++                                            16, (active_end - col) << 4);
++        col = active_end;
++      }
++      active_map += mb_cols;
++      prev += mb_cols;
++    }
++    active_map -= mb_rows * mb_cols;
++  } else
++
+   /* Only do this partial copy if the following conditions are all met:
+    * 1. Lookahead queue has has size of 1.
+    * 2. Active map is provided.
+@@ -138,6 +190,12 @@
+   } else {
+     vp8_copy_and_extend_frame(src, &buf->img);
+   }
++  if (ctx->prev_map) {
++    ctx->prev_map_valid = active_map && !flags &&
++                          (unsigned int)(mb_rows * mb_cols) == ctx->map_size;
++    if (ctx->prev_map_valid) memcpy(ctx->prev_map, active_map, ctx->map_size);
++  }
++  ctx->pushes++;
+   buf->ts_start = ts_start;
+   buf->ts_end = ts_end;
+   buf->flags = flags;
+--- a/vp8/encoder/encodeframe.c
++++ b/vp8/encoder/encodeframe.c
+@@ -408,8 +408,13 @@
+     x->rddiv = cpi->RDDIV;
+     x->rdmult = cpi->RDMULT;
+ 
+-    /* Copy current mb to a buffer */
+-    vp8_copy_mem16x16(x->src.y_buffer, x->src.y_stride, x->thismb, 16);
++    /* Copy current mb to a buffer -- unless the active map excludes it, in
++     * which case vp8cx_encode_inter_macroblock() returns before anything reads
++     * the copy. 5120 of these a frame at 1280x1024 was 23 ms on an R10000. */
++    if (!cpi->active_map_enabled || cm->frame_type == KEY_FRAME ||
++        cpi->active_map[map_index + mb_col]) {
++      vp8_copy_mem16x16(x->src.y_buffer, x->src.y_stride, x->thismb, 16);
++    }
+ 
+ #if CONFIG_MULTITHREAD
+     if (vpx_atomic_load_acquire(&cpi->b_multi_threaded) != 0) {
+@@ -604,9 +609,18 @@
+    * skipped, and the only thing that still had to happen for it was moving 384
+    * bytes of reference pixels into the reconstruction buffer so the frame is
+    * complete. Doing that per macroblock means thousands of small scattered
+-   * copies -- 5120 of them on a 1280x1024 frame. Here it is one pass over each
+-   * plane, a row at a time, which has the locality and none of the
+-   * per-macroblock overhead.
++   * copies -- 5120 of them on a 1280x1024 frame. Here it is done a row at a
++   * time, which has the locality and none of the per-macroblock overhead.
++   *
++   * And only where the two buffers differ. The buffer being written is a free
++   * one, holding some earlier frame on LAST's chain -- in steady state the one
++   * before LAST -- so it already matches LAST everywhere except the
++   * macroblocks coded since. fb_stamp says which frame it holds and mb_stamp
++   * when each macroblock was last coded; copy those, and nothing else. Copying
++   * all of it every frame cost 65 ms of a 210 ms frame at 1280x1024 on an
++   * R10000 in which seven macroblocks changed. Whenever that record cannot be
++   * trusted -- a buffer with no stamp, a key frame or a frame without a map
++   * since, the loop filter since -- the whole visible area is copied as before.
+    *
+    * The visible area only, copied by hand: vp8_yv12_copy_frame() would also
+    * extend the borders of the whole frame. And only when the two buffers agree
+@@ -621,21 +635,77 @@
+    * Not on key frames: they code every macroblock by definition, so the copy
+    * would be overwritten in full and there is no reference to take it from.
+    */
+-  if (cpi->active_map_enabled && cm->frame_type != KEY_FRAME) {
+-    const YV12_BUFFER_CONFIG *src = &cm->yv12_fb[cm->lst_fb_idx];
+-    YV12_BUFFER_CONFIG *dst = &cm->yv12_fb[cm->new_fb_idx];
+-    if (src->y_width == dst->y_width && src->y_height == dst->y_height &&
+-        src->uv_width == dst->uv_width && src->uv_height == dst->uv_height) {
+-      int row;
+-      for (row = 0; row < src->y_height; ++row) {
+-        memcpy(dst->y_buffer + row * dst->y_stride,
+-               src->y_buffer + row * src->y_stride, src->y_width);
+-      }
+-      for (row = 0; row < src->uv_height; ++row) {
+-        memcpy(dst->u_buffer + row * dst->uv_stride,
+-               src->u_buffer + row * src->uv_stride, src->uv_width);
+-        memcpy(dst->v_buffer + row * dst->uv_stride,
+-               src->v_buffer + row * src->uv_stride, src->uv_width);
++  {
++    const unsigned int now = ++cpi->recon_frame;
++    const unsigned int held = cpi->fb_stamp[cm->new_fb_idx];
++
++    /* Overwritten from here on; update_reference_frames stamps it again if
++     * this frame becomes LAST. */
++    cpi->fb_stamp[cm->new_fb_idx] = 0;
++
++    if (!cpi->active_map_enabled || cm->frame_type == KEY_FRAME) {
++      cpi->all_stamp = now;
++    } else {
++      const YV12_BUFFER_CONFIG *src = &cm->yv12_fb[cm->lst_fb_idx];
++      YV12_BUFFER_CONFIG *dst = &cm->yv12_fb[cm->new_fb_idx];
++      const int mbs = cm->mb_rows * cm->mb_cols;
++      int i;
++      if (src->y_width == dst->y_width && src->y_height == dst->y_height &&
++          src->uv_width == dst->uv_width && src->uv_height == dst->uv_height) {
++        if (held == 0 || cpi->fb_stamp[cm->lst_fb_idx] == 0 ||
++            cpi->all_stamp > held) {
++          int row;
++          for (row = 0; row < src->y_height; ++row) {
++            memcpy(dst->y_buffer + row * dst->y_stride,
++                   src->y_buffer + row * src->y_stride, src->y_width);
++          }
++          for (row = 0; row < src->uv_height; ++row) {
++            memcpy(dst->u_buffer + row * dst->uv_stride,
++                   src->u_buffer + row * src->uv_stride, src->uv_width);
++            memcpy(dst->v_buffer + row * dst->uv_stride,
++                   src->v_buffer + row * src->uv_stride, src->uv_width);
++          }
++        } else {
++          int mb_row;
++          for (mb_row = 0; mb_row < cm->mb_rows; ++mb_row) {
++            const unsigned int *stamp = cpi->mb_stamp + mb_row * cm->mb_cols;
++            int col = 0;
++            while (col < cm->mb_cols) {
++              int end, x0, w, r, y0, h;
++              if (stamp[col] <= held) {
++                ++col;
++                continue;
++              }
++              for (end = col; end < cm->mb_cols && stamp[end] > held; ++end) {
++              }
++              /* Clamped, though the buffers are allocated to whole
++               * macroblocks and these never bind. */
++              x0 = col * 16;
++              w = VPXMIN(end * 16, src->y_width) - x0;
++              y0 = mb_row * 16;
++              h = VPXMIN(y0 + 16, src->y_height) - y0;
++              for (r = 0; r < h; ++r) {
++                memcpy(dst->y_buffer + (y0 + r) * dst->y_stride + x0,
++                       src->y_buffer + (y0 + r) * src->y_stride + x0, w);
++              }
++              x0 = col * 8;
++              w = VPXMIN(end * 8, src->uv_width) - x0;
++              y0 = mb_row * 8;
++              h = VPXMIN(y0 + 8, src->uv_height) - y0;
++              for (r = 0; r < h; ++r) {
++                memcpy(dst->u_buffer + (y0 + r) * dst->uv_stride + x0,
++                       src->u_buffer + (y0 + r) * src->uv_stride + x0, w);
++                memcpy(dst->v_buffer + (y0 + r) * dst->uv_stride + x0,
++                       src->v_buffer + (y0 + r) * src->uv_stride + x0, w);
++              }
++              col = end;
++            }
++          }
++        }
++      }
++      /* What this frame codes is what the next seed has to bring across. */
++      for (i = 0; i < mbs; ++i) {
++        if (cpi->active_map[i]) cpi->mb_stamp[i] = now;
+       }
+     }
+   }
+@@ -1202,10 +1272,10 @@
+     x->count_mb_ref_frame_usage[LAST_FRAME]++;
+ 
+     /* The reconstruction buffer already holds this block's reference pixels:
+-     * init_encode_frame_mb_context() copied the whole reference in when the
+-     * active map was enabled, precisely so this loop does not have to do it
+-     * 5120 times. `pre` is still pointed at the reference because the entropy
+-     * and mode bookkeeping below reads it. */
++     * init_encode_frame_mb_context() brought them across when the active map
++     * was enabled, precisely so this loop does not have to do it 5120 times.
++     * `pre` is still pointed at the reference because the entropy and mode
++     * bookkeeping below reads it. */
+     xd->pre.y_buffer =
+         cpi->common.yv12_fb[cpi->common.lst_fb_idx].y_buffer + recon_yoffset;
+     xd->pre.u_buffer =
+--- a/vp8/encoder/ethreading.c
++++ b/vp8/encoder/ethreading.c
+@@ -146,8 +146,12 @@
+           x->rddiv = cpi->RDDIV;
+           x->rdmult = cpi->RDMULT;
+ 
+-          /* Copy current mb to a buffer */
+-          vp8_copy_mem16x16(x->src.y_buffer, x->src.y_stride, x->thismb, 16);
++          /* Copy current mb to a buffer, unless the active map excludes it;
++           * see the same test in encodeframe.c. */
++          if (!cpi->active_map_enabled || cm->frame_type == KEY_FRAME ||
++              cpi->active_map[map_index + mb_col]) {
++            vp8_copy_mem16x16(x->src.y_buffer, x->src.y_stride, x->thismb, 16);
++          }
+ 
+           if (cpi->oxcf.tuning == VP8_TUNE_SSIM) vp8_activity_masking(cpi, x);
+ 
+--- a/vp8/encoder/onyx_if.c
++++ b/vp8/encoder/onyx_if.c
+@@ -423,6 +423,9 @@
+   vpx_free(cpi->active_map);
+   cpi->active_map = 0;
+ 
++  vpx_free(cpi->mb_stamp);
++  cpi->mb_stamp = 0;
++
+   vp8_de_alloc_frame_buffers(&cpi->common);
+ 
+   vp8_yv12_de_alloc_frame_buffer(&cpi->pick_lf_lvl_frame);
+@@ -1211,6 +1214,14 @@
+                                               sizeof(*cpi->active_map)));
+   memset(cpi->active_map, 1, (cm->mb_rows * cm->mb_cols));
+ 
++  /* New frame buffers hold nothing yet: every stamp starts unknown. */
++  vpx_free(cpi->mb_stamp);
++  CHECK_MEM_ERROR(cpi->mb_stamp, vpx_calloc(cm->mb_rows * cm->mb_cols,
++                                            sizeof(*cpi->mb_stamp)));
++  memset(cpi->fb_stamp, 0, sizeof(cpi->fb_stamp));
++  cpi->recon_frame = 0;
++  cpi->all_stamp = 0;
++
+ #if CONFIG_MULTITHREAD
+   if (width < 640) {
+     cpi->mt_sync_range = 1;
+@@ -2938,6 +2949,10 @@
+     cm->yv12_fb[cm->lst_fb_idx].flags &= ~VP8_LAST_FRAME;
+     cm->lst_fb_idx = cm->new_fb_idx;
+ 
++    /* Only now is this reconstruction on LAST's chain; see mb_stamp. A frame
++     * that is dropped, or refreshes only golden, leaves its buffer at 0. */
++    cpi->fb_stamp[cm->new_fb_idx] = cpi->recon_frame;
++
+     cpi->current_ref_frames[LAST_FRAME] = cm->current_video_frame;
+   }
+ 
+@@ -4407,6 +4422,9 @@
+     vp8_loopfilter_frame(cpi, cm);
+   }
+ 
++  /* The loop filter touches every macroblock's edges, coded or not. */
++  if (cm->filter_level > 0) cpi->all_stamp = cpi->recon_frame;
++
+   update_reference_frames(cpi);
+ 
+ #ifdef OUTPUT_YUV_DENOISED
+--- a/vp8/encoder/onyx_int.h
++++ b/vp8/encoder/onyx_int.h
+@@ -490,6 +490,18 @@
+   unsigned char *active_map;
+   unsigned int active_map_enabled;
+ 
++  /* Which pixels of which frame buffer are already right, so that seeding the
++   * reconstruction from LAST (encodeframe.c, init_encode_frame_mb_context)
++   * copies only what differs. recon_frame counts frames as they are coded;
++   * fb_stamp[i] is the count whose reconstruction buffer i holds, 0 when it
++   * holds nothing on LAST's chain; mb_stamp[m] is the last count at which
++   * macroblock m was coded, and all_stamp the last at which every one was (a
++   * key frame, a frame without a map, the loop filter). */
++  unsigned int recon_frame;
++  unsigned int all_stamp;
++  unsigned int fb_stamp[NUM_YV12_BUFFERS];
++  unsigned int *mb_stamp;
++
+   /* Video conferencing cyclic refresh mode flags. This is a mode
+    * designed to clean up the background over time in live encoding
+    * scenarious. It uses segmentation.
