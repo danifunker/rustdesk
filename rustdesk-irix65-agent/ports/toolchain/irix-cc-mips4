@@ -1,0 +1,24 @@
+#!/bin/sh
+# irix-cc, compiling for MIPS IV: R5000, R8000, R10000 and later.
+#
+# scripts/toolchain.sh installs this as sgug-mips4/bin/irix-cc, beside symlinks
+# to everything else in sgug/bin, so that pointing SGUG_STAGING at sgug-mips4
+# switches a whole build over: the five static libraries, the agent's C shims
+# (the cc crate finds this through CC_<target>), and -- through irix-ld's
+# $SGUG_STAGING/lib32 -- which libraries get linked.
+#
+# irix-cc itself hardcodes -march=mips3 and _MIPS_ISA_MIPS3, because MIPS III
+# is what every IRIX 6.5 machine can run. Flags after its own win, so these go
+# last. ONLY WHEN COMPILING (-c, or -E for the preprocessor): in link mode
+# irix-cc drops -march, but would hand -U_MIPS_ISA to the linker, which rejects
+# it. A compile-and-link in one step -- a configure test -- is passed through
+# unchanged; its object is thrown away, and the libraries it checks are right.
+#
+# _MIPS_ISA is redefined rather than left at MIPS3 so the IRIX headers see the
+# ISA the code is actually compiled for.
+REAL=$(cd "$(dirname "$0")/../../sgug/bin" && pwd)/irix-cc
+case " $* " in
+	*" -c "*|*" -E "*)
+		exec "$REAL" "$@" -march=mips4 -U_MIPS_ISA -D_MIPS_ISA=_MIPS_ISA_MIPS4 ;;
+esac
+exec "$REAL" "$@"

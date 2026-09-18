@@ -37,10 +37,23 @@ fi
 # The sysroot is not in either: it is licensed, comes from the boot image
 # (scripts/make-sysroot.sh), and is named by IRIX_SYSROOT, which irix-cc and
 # irix-ld read themselves (default /opt/irix-sysroot).
+#
+# RD_ISA=mips4 builds for R5000, R8000, R10000 and later instead of for every
+# IRIX 6.5 machine: SGUG_STAGING becomes the staging tree whose compiler and
+# static libraries are MIPS IV, and cargo wants --target
+# mips-sgi-irix6.5-mips4.json. Only the toolchain layout has that tree
+# (scripts/toolchain.sh builds it as sgug-mips4); /opt would need a sibling
+# /opt/sgug-staging/usr/sgug-mips4 made the same way.
+case "${RD_ISA:-mips3}" in
+	mips3) RD_ISA_SUFFIX="" ;;
+	mips4) RD_ISA_SUFFIX="-mips4" ;;
+	*)     echo "env.sh: RD_ISA is mips3 or mips4, not '$RD_ISA'; using mips3" >&2
+	       RD_ISA_SUFFIX="" ;;
+esac
 if [ -n "${IRIX_TOOLCHAIN:-}" ]; then
 	export RUSTUP_HOME="$IRIX_TOOLCHAIN/rust/rustup"
 	export CARGO_HOME="$IRIX_TOOLCHAIN/rust/cargo"
-	export SGUG_STAGING="$IRIX_TOOLCHAIN/sgug"
+	export SGUG_STAGING="$IRIX_TOOLCHAIN/sgug$RD_ISA_SUFFIX"
 	export MOGRIX_CROSS="$IRIX_TOOLCHAIN/mogrix/cross/bin"
 	export IRIX_CLANG="$IRIX_TOOLCHAIN/cross/bin/clang"
 	export IRIX_LLD="$IRIX_TOOLCHAIN/cross/bin/ld.lld-irix"
@@ -48,7 +61,7 @@ if [ -n "${IRIX_TOOLCHAIN:-}" ]; then
 else
 	export RUSTUP_HOME="$RD_RUST/rustup"
 	export CARGO_HOME="$RD_RUST/cargo"
-	export SGUG_STAGING="${SGUG_STAGING:-/opt/sgug-staging/usr/sgug}"
+	export SGUG_STAGING="${SGUG_STAGING:-/opt/sgug-staging/usr/sgug$RD_ISA_SUFFIX}"
 	export MOGRIX_CROSS="${MOGRIX_CROSS:-$HOME/repos/mogrix/cross/bin}"
 	export IRIX_COMPAT_DIR="$RD_RUST/hello/compat"
 fi
@@ -95,9 +108,13 @@ export SODIUM_INCLUDE_DIR="$SGUG_STAGING/include"
 export SGUG_LIB_DIR="$SGUG_STAGING/lib32"
 export SGUG_INCLUDE_DIR="$SGUG_STAGING/include"
 
-# The cc crate needs the cross compiler named per-target.
+# The cc crate needs the cross compiler named per-target -- the target's file
+# name, dots and dashes made underscores. For the MIPS IV target this is the
+# wrapper in the MIPS IV staging tree, which is what raises the ISA.
 export CC_mips_sgi_irix6_5="$SGUG_STAGING/bin/irix-cc"
 export AR_mips_sgi_irix6_5=ar
+export CC_mips_sgi_irix6_5_mips4="$SGUG_STAGING/bin/irix-cc"
+export AR_mips_sgi_irix6_5_mips4=ar
 
 echo "IRIX rust env: RUSTUP_HOME=$RUSTUP_HOME"
 echo "               CARGO_HOME=$CARGO_HOME"

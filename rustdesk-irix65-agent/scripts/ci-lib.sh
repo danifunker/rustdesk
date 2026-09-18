@@ -116,6 +116,14 @@ dist_version_from() {
 # the OS that packages the build, exactly as irixscsitb does it: n32 is packaged
 # by a 6.5 guest. An o32 flavor would be packaged by a 5.3 one, which is why the
 # ABI is a parameter rather than a constant even though only n32 exists today.
+#
+# Two agents, one path. The idb installs /usr/local/sbin/r-deskvint-irix from
+# bin/r-deskvint-irix (MIPS III) on CPUARCH=R4000 -- which inst reports for the
+# R4000, R4400, R4600 and R4700 -- and from bin/r-deskvint-irix-mips4 on R5000,
+# R8000 and R10000 (R12000 and later report R10000 too); /var/inst/machfile is
+# the table. Between them that is every CPU IRIX 6.5 runs on. A tree built for
+# MIPS III alone has no MIPS IV line, and its one agent loses the mach() tag so
+# it installs everywhere.
 stage_inst_inputs() {
 	_fl="$1"; _dv="$2"; _dst="$3"
 	case "$_fl" in
@@ -125,8 +133,13 @@ stage_inst_inputs() {
 	esac
 	sed -e "s/@VERSION@/$_dv/" -e "s/@SUBSYS@/$_fl/" -e "s/@ABI_DESC@/$_abi/" \
 		"$REPO/inst/r-deskvint-irix.spec" > "$_dst/r-deskvint-irix.spec"
-	sed -e "s/@SUBSYS@/$_fl/" \
-		"$REPO/inst/r-deskvint-irix.idb" > "$_dst/r-deskvint-irix.idb"
+	if [ -f "$_dst/bin/r-deskvint-irix-mips4" ]; then
+		sed -e "s/@SUBSYS@/$_fl/" -e "s/ @MACH_MIPS3@/ mach(CPUARCH=R4000)/" \
+			"$REPO/inst/r-deskvint-irix.idb" > "$_dst/r-deskvint-irix.idb"
+	else
+		sed -e "s/@SUBSYS@/$_fl/" -e "s/ @MACH_MIPS3@//" -e "/bin\/r-deskvint-irix-mips4 /d" \
+			"$REPO/inst/r-deskvint-irix.idb" > "$_dst/r-deskvint-irix.idb"
+	fi
 }
 
 # ---------------------------------------------------------------------------

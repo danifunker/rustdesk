@@ -107,6 +107,11 @@ R-DeskVint for IRIX -- $VERSION ($ABI)
 
 What lands where, and what it needs, is in the header of install.sh.
 
+bin/ holds the agent twice: r-deskvint-irix is built for MIPS III and runs on
+every IRIX 6.5 machine; r-deskvint-irix-mips4, when present, is built for MIPS
+IV -- R5000, R8000, R10000 and later -- and is a few percent faster there.
+install.sh picks by CPU, as inst does with the .tardist.
+
 The agent needs an X server on :0 and nothing else: libsodium, libvpx, mbedTLS
 zstd and zlib are linked in, and the one library IRIX 6.5 does not ship --
 libgcc_s.so.1 -- is in lib/ and is installed beside the agent.

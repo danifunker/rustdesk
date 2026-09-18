@@ -4,5 +4,6 @@ f 0755 root sys usr/local/lib/r-deskvint-irix/agent-helper.sh lib/agent-helper.s
 f 0755 root sys usr/local/lib/r-deskvint-irix/libgcc_s.so.1 lib/libgcc_s.so.1 r_deskvint_irix.sw.@SUBSYS@
 f 0755 root sys usr/local/lib/r-deskvint-irix/r_deskvint_irix.init lib/r_deskvint_irix.init r_deskvint_irix.sw.@SUBSYS@
 f 0644 root sys usr/local/sbin/cacert.pem bin/cacert.pem r_deskvint_irix.sw.@SUBSYS@
-f 0755 root sys usr/local/sbin/r-deskvint-irix bin/r-deskvint-irix r_deskvint_irix.sw.@SUBSYS@
+f 0755 root sys usr/local/sbin/r-deskvint-irix bin/r-deskvint-irix r_deskvint_irix.sw.@SUBSYS@ @MACH_MIPS3@
+f 0755 root sys usr/local/sbin/r-deskvint-irix bin/r-deskvint-irix-mips4 r_deskvint_irix.sw.@SUBSYS@ mach(CPUARCH=R5000 CPUARCH=R8000 CPUARCH=R10000)
 f 0755 root sys usr/local/sbin/r-deskvint-irix-gui bin/r-deskvint-irix-gui r_deskvint_irix.sw.@SUBSYS@

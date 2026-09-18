@@ -247,89 +247,149 @@ fi
 # trees' config.status) and mogrix's rules/packages/*.yaml, which also hold the
 # reasons for each flag. All static: nothing here should cost the agent an rld
 # dependency, and a stock IRIX lacks all five (or, for zlib, has too old a one).
-if ! done_ zlib; then
-	say "zlib 1.3.2"
-	d=$(unpack "$(fetch "$ZLIB_URL" "$ZLIB_SHA")")
-	( cd "$d" && CC="$CC" ./configure --static --prefix="$STAGING" > "$LOGS/zlib.log" 2>&1 &&
-	  make -j"$JOBS" libz.a >> "$LOGS/zlib.log" 2>&1 ) || { tail -30 "$LOGS/zlib.log" >&2; die "zlib failed"; }
-	cp "$d/libz.a" "$STAGING/lib32/libz.a"
-	mark zlib
-fi
+#
+# TWICE, once per ISA. First for MIPS III into sgug/lib32 -- what every IRIX 6.5
+# machine runs, and exactly what this built before there were two. Then for
+# MIPS IV into sgug-mips4/lib32, for the agent built for R5000, R8000, R10000
+# and later (scripts/build.sh): same sources, same recipes, and the one
+# difference is the compiler, sgug-mips4/bin/irix-cc, which is irix-cc with the
+# ISA raised (ports/toolchain/irix-cc-mips4 says how). Headers are
+# ISA-independent and are installed once, by the first pass.
+#
+# sgug-mips4 is otherwise sgug: relative symlinks to its bin, include and
+# everything in its lib32 but these archives. So SGUG_STAGING=.../sgug-mips4
+# switches a build to MIPS IV, including which archives irix-ld finds first.
+STAGING4="$TC/sgug-mips4"
+MINE="libz.a libzstd.a libsodium.a libvpx.a libmbedtls.a libmbedx509.a libmbedcrypto.a"
 
-if ! done_ zstd; then
-	say "zstd 1.5.6"
-	d=$(unpack "$(fetch "$ZSTD_URL" "$ZSTD_SHA")")
-	# -ffile-prefix-map: divsufsort.c's assert() records its own path, so
-	# without it the archive differs by where this directory is. (The agent
-	# does not link that object; the cache should not depend on it either.)
-	( cd "$d/lib" && make -j"$JOBS" libzstd.a CC="$CC" AR=ar RANLIB=ranlib \
-		CFLAGS="-O2 -DZSTD_MULTITHREAD=0 -ffile-prefix-map=$d=/zstd-1.5.6" > "$LOGS/zstd.log" 2>&1 ) ||
-		{ tail -30 "$LOGS/zstd.log" >&2; die "zstd failed"; }
-	cp "$d/lib/libzstd.a" "$STAGING/lib32/"
-	cp "$d/lib/zstd.h" "$d/lib/zstd_errors.h" "$STAGING/include/"
-	mark zstd
-fi
+static_libs() {	# SUFFIX: "" for MIPS III, "-mips4"
+	_sfx=$1
+	if [ -z "$_sfx" ]; then
+		_st="$STAGING"
+	else
+		_st="$STAGING4"
+	fi
+	_cc="$_st/bin/irix-cc"
+	_lib="$_st/lib32"
+	# irix-cc and irix-ld read it: headers, and the lib32 a configure test links.
+	SGUG_STAGING="$_st"; export SGUG_STAGING
 
-if ! done_ sodium; then
-	say "libsodium 1.0.18"
-	d=$(unpack "$(fetch "$SODIUM_URL" "$SODIUM_SHA")")
-	( cd "$d" && ./configure --host=mips-sgi-irix6.5 --prefix="$SRC/sodium-inst" \
-		--disable-shared --enable-static --disable-pie --disable-ssp \
-		CC="$CC" AR="$AR" RANLIB="$RANLIB" CFLAGS=-O2 > "$LOGS/sodium.log" 2>&1 &&
-	  make -j"$JOBS" >> "$LOGS/sodium.log" 2>&1 && make install >> "$LOGS/sodium.log" 2>&1 ) ||
-		{ tail -30 "$LOGS/sodium.log" >&2; die "libsodium failed"; }
-	cp "$SRC/sodium-inst/lib/libsodium.a" "$STAGING/lib32/"
-	rm -rf "$STAGING/include/sodium"
-	cp -R "$SRC/sodium-inst/include/sodium" "$SRC/sodium-inst/include/sodium.h" "$STAGING/include/"
-	mark sodium
-fi
+	if ! done_ zlib$_sfx; then
+		say "zlib 1.3.2${_sfx:+ ($_sfx)}"
+		d=$(unpack "$(fetch "$ZLIB_URL" "$ZLIB_SHA")")
+		( cd "$d" && CC="$_cc" ./configure --static --prefix="$_st" > "$LOGS/zlib$_sfx.log" 2>&1 &&
+		  make -j"$JOBS" libz.a >> "$LOGS/zlib$_sfx.log" 2>&1 ) || { tail -30 "$LOGS/zlib$_sfx.log" >&2; die "zlib failed"; }
+		cp "$d/libz.a" "$_lib/libz.a"
+		mark zlib$_sfx
+	fi
 
-if ! done_ vpx; then
-	say "libvpx 1.13.1, VP8 only, with three patches"
-	d=$(unpack "$(fetch "$VPX_URL" "$VPX_SHA")")
-	# A name collision with an IRIX header (mogrix); the active-map early exit
-	# that halves the cost of an unchanged frame; and copying only what changed,
-	# which quarters what is left (patches/, and why -- in that order).
-	( cd "$d" && patch -p1 -s < "$MOGRIX/patches/packages/libvpx/libvpx-irix-sync-name-collision.patch" &&
-	  patch -p1 -s < "$REPO/patches/libvpx-vp8-active-map-early-out.patch" &&
-	  patch -p1 -s < "$REPO/patches/libvpx-vp8-copy-only-what-changed.patch" ) || die "a libvpx patch did not apply"
-	# LD as well as CC: configure's link test otherwise uses the host's gcc and
-	# fails on "relocations in generic ELF (EM: 8)".
-	# --prefix is only RECORDED -- nothing here runs `make install` -- but
-	# libvpx bakes the configure line into vpx_codec_build_config(), so it is
-	# the development machine's value, which lets the two archives compare equal.
-	( cd "$d" && CC="$CC" LD="$CC" AR="$AR" ./configure --target=generic-gnu --prefix=/opt/sgug-staging/usr/sgug \
-		--disable-shared --enable-static \
-		--enable-vp8-encoder --enable-vp8-decoder \
-		--disable-vp9-encoder --disable-vp9-decoder \
-		--disable-examples --disable-tools --disable-docs --disable-unit-tests \
-		--disable-runtime-cpu-detect --disable-webm-io --disable-libyuv > "$LOGS/vpx.log" 2>&1 &&
-	  make -j"$JOBS" libvpx.a >> "$LOGS/vpx.log" 2>&1 ) || { tail -30 "$LOGS/vpx.log" >&2; die "libvpx failed"; }
-	cp "$d/libvpx.a" "$STAGING/lib32/"
-	rm -rf "$STAGING/include/vpx"
-	mkdir -p "$STAGING/include/vpx"
-	for _h in vp8.h vp8cx.h vp8dx.h vpx_codec.h vpx_decoder.h vpx_encoder.h \
-	          vpx_ext_ratectrl.h vpx_frame_buffer.h vpx_image.h vpx_integer.h; do
-		cp "$d/vpx/$_h" "$STAGING/include/vpx/"
-	done
-	mark vpx
-fi
+	if ! done_ zstd$_sfx; then
+		say "zstd 1.5.6${_sfx:+ ($_sfx)}"
+		d=$(unpack "$(fetch "$ZSTD_URL" "$ZSTD_SHA")")
+		# -ffile-prefix-map: divsufsort.c's assert() records its own path, so
+		# without it the archive differs by where this directory is. (The agent
+		# does not link that object; the cache should not depend on it either.)
+		( cd "$d/lib" && make -j"$JOBS" libzstd.a CC="$_cc" AR=ar RANLIB=ranlib \
+			CFLAGS="-O2 -DZSTD_MULTITHREAD=0 -ffile-prefix-map=$d=/zstd-1.5.6" > "$LOGS/zstd$_sfx.log" 2>&1 ) ||
+			{ tail -30 "$LOGS/zstd$_sfx.log" >&2; die "zstd failed"; }
+		cp "$d/lib/libzstd.a" "$_lib/"
+		[ -n "$_sfx" ] || cp "$d/lib/zstd.h" "$d/lib/zstd_errors.h" "$STAGING/include/"
+		mark zstd$_sfx
+	fi
 
-if ! done_ mbedtls; then
-	say "mbedTLS 3.6.2, with two patches"
-	d=$(unpack "$(fetch "$MBEDTLS_URL" "$MBEDTLS_SHA")")
-	for _p in mbedtls-irix-no-xopen-hides-getaddrinfo.patch mbedtls-irix-no-udbl-division.patch; do
-		( cd "$d" && patch -p1 -s < "$MOGRIX/patches/packages/mbedtls/$_p" ) || die "$_p did not apply"
-	done
-	# NOT `make install`: it builds programs/, whose sub-make loses CC and links
-	# with the host linker. The library, then its headers, by hand.
-	( cd "$d" && make -j"$JOBS" lib CC="$CC" CFLAGS=-O2 > "$LOGS/mbedtls.log" 2>&1 ) ||
-		{ tail -30 "$LOGS/mbedtls.log" >&2; die "mbedTLS failed"; }
-	cp "$d/library/libmbedtls.a" "$d/library/libmbedx509.a" "$d/library/libmbedcrypto.a" "$STAGING/lib32/"
-	rm -rf "$STAGING/include/mbedtls" "$STAGING/include/psa"
-	cp -R "$d/include/mbedtls" "$d/include/psa" "$STAGING/include/"
-	mark mbedtls
-fi
+	if ! done_ sodium$_sfx; then
+		say "libsodium 1.0.18${_sfx:+ ($_sfx)}"
+		d=$(unpack "$(fetch "$SODIUM_URL" "$SODIUM_SHA")")
+		( cd "$d" && ./configure --host=mips-sgi-irix6.5 --prefix="$SRC/sodium-inst$_sfx" \
+			--disable-shared --enable-static --disable-pie --disable-ssp \
+			CC="$_cc" AR="$AR" RANLIB="$RANLIB" CFLAGS=-O2 > "$LOGS/sodium$_sfx.log" 2>&1 &&
+		  make -j"$JOBS" >> "$LOGS/sodium$_sfx.log" 2>&1 && make install >> "$LOGS/sodium$_sfx.log" 2>&1 ) ||
+			{ tail -30 "$LOGS/sodium$_sfx.log" >&2; die "libsodium failed"; }
+		cp "$SRC/sodium-inst$_sfx/lib/libsodium.a" "$_lib/"
+		if [ -z "$_sfx" ]; then
+			rm -rf "$STAGING/include/sodium"
+			cp -R "$SRC/sodium-inst/include/sodium" "$SRC/sodium-inst/include/sodium.h" "$STAGING/include/"
+		fi
+		mark sodium$_sfx
+	fi
+
+	if ! done_ vpx$_sfx; then
+		say "libvpx 1.13.1, VP8 only, with three patches${_sfx:+ ($_sfx)}"
+		d=$(unpack "$(fetch "$VPX_URL" "$VPX_SHA")")
+		# A name collision with an IRIX header (mogrix); the active-map early exit
+		# that halves the cost of an unchanged frame; and copying only what changed,
+		# which quarters what is left (patches/, and why -- in that order).
+		( cd "$d" && patch -p1 -s < "$MOGRIX/patches/packages/libvpx/libvpx-irix-sync-name-collision.patch" &&
+		  patch -p1 -s < "$REPO/patches/libvpx-vp8-active-map-early-out.patch" &&
+		  patch -p1 -s < "$REPO/patches/libvpx-vp8-copy-only-what-changed.patch" ) || die "a libvpx patch did not apply"
+		# LD as well as CC: configure's link test otherwise uses the host's gcc and
+		# fails on "relocations in generic ELF (EM: 8)".
+		# --prefix is only RECORDED -- nothing here runs `make install` -- but
+		# libvpx bakes the configure line into vpx_codec_build_config(), so it is
+		# the development machine's value, which lets the two archives compare equal.
+		( cd "$d" && CC="$_cc" LD="$_cc" AR="$AR" ./configure --target=generic-gnu --prefix=/opt/sgug-staging/usr/sgug \
+			--disable-shared --enable-static \
+			--enable-vp8-encoder --enable-vp8-decoder \
+			--disable-vp9-encoder --disable-vp9-decoder \
+			--disable-examples --disable-tools --disable-docs --disable-unit-tests \
+			--disable-runtime-cpu-detect --disable-webm-io --disable-libyuv > "$LOGS/vpx$_sfx.log" 2>&1 &&
+		  make -j"$JOBS" libvpx.a >> "$LOGS/vpx$_sfx.log" 2>&1 ) || { tail -30 "$LOGS/vpx$_sfx.log" >&2; die "libvpx failed"; }
+		cp "$d/libvpx.a" "$_lib/"
+		if [ -z "$_sfx" ]; then
+			rm -rf "$STAGING/include/vpx"
+			mkdir -p "$STAGING/include/vpx"
+			for _h in vp8.h vp8cx.h vp8dx.h vpx_codec.h vpx_decoder.h vpx_encoder.h \
+			          vpx_ext_ratectrl.h vpx_frame_buffer.h vpx_image.h vpx_integer.h; do
+				cp "$d/vpx/$_h" "$STAGING/include/vpx/"
+			done
+		fi
+		mark vpx$_sfx
+	fi
+
+	if ! done_ mbedtls$_sfx; then
+		say "mbedTLS 3.6.2, with two patches${_sfx:+ ($_sfx)}"
+		d=$(unpack "$(fetch "$MBEDTLS_URL" "$MBEDTLS_SHA")")
+		for _p in mbedtls-irix-no-xopen-hides-getaddrinfo.patch mbedtls-irix-no-udbl-division.patch; do
+			( cd "$d" && patch -p1 -s < "$MOGRIX/patches/packages/mbedtls/$_p" ) || die "$_p did not apply"
+		done
+		# NOT `make install`: it builds programs/, whose sub-make loses CC and links
+		# with the host linker. The library, then its headers, by hand.
+		( cd "$d" && make -j"$JOBS" lib CC="$_cc" CFLAGS=-O2 > "$LOGS/mbedtls$_sfx.log" 2>&1 ) ||
+			{ tail -30 "$LOGS/mbedtls$_sfx.log" >&2; die "mbedTLS failed"; }
+		cp "$d/library/libmbedtls.a" "$d/library/libmbedx509.a" "$d/library/libmbedcrypto.a" "$_lib/"
+		if [ -z "$_sfx" ]; then
+			rm -rf "$STAGING/include/mbedtls" "$STAGING/include/psa"
+			cp -R "$d/include/mbedtls" "$d/include/psa" "$STAGING/include/"
+		fi
+		mark mbedtls$_sfx
+	fi
+
+	SGUG_STAGING="$STAGING"; export SGUG_STAGING
+}
+
+static_libs ""
+
+# The MIPS IV staging tree: the wrapper compiler, and links to everything else.
+# Rebuilt every run -- it is only symlinks, and new files in sgug must appear.
+mkdir -p "$STAGING4/bin" "$STAGING4/lib32"
+for _e in "$STAGING"/*; do
+	_n=$(basename "$_e")
+	case "$_n" in bin|lib32) continue ;; esac
+	ln -sfn "../sgug/$_n" "$STAGING4/$_n"
+done
+for _e in "$STAGING/bin"/*; do
+	_n=$(basename "$_e")
+	[ "$_n" = irix-cc ] || ln -sfn "../../sgug/bin/$_n" "$STAGING4/bin/$_n"
+done
+cp "$REPO/ports/toolchain/irix-cc-mips4" "$STAGING4/bin/irix-cc"
+chmod 755 "$STAGING4/bin/irix-cc"
+for _e in "$STAGING/lib32"/*; do
+	_n=$(basename "$_e")
+	case " $MINE " in *" $_n "*) continue ;; esac
+	ln -sfn "../../sgug/lib32/$_n" "$STAGING4/lib32/$_n"
+done
+
+static_libs -mips4
 
 # ---- 5. Rust ---------------------------------------------------------------------------
 RH="$TC/rust"

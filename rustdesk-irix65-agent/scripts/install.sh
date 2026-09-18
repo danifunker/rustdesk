@@ -12,7 +12,10 @@
 #   sh install.sh -u              remove what an install put there
 #
 # WHAT GOES WHERE
-#   $PREFIX/sbin/r-deskvint-irix              the agent
+#   $PREFIX/sbin/r-deskvint-irix              the agent: bin/r-deskvint-irix-mips4
+#                                            on an R5000, R8000, R10000 or later,
+#                                            bin/r-deskvint-irix (MIPS III) on
+#                                            anything else -- see below
 #   $PREFIX/sbin/r-deskvint-irix-gui          the settings panel
 #   $PREFIX/lib/r-deskvint-irix/agent-helper.sh
 #   $PREFIX/lib/r-deskvint-irix/libgcc_s.so.1
@@ -89,10 +92,28 @@ for f in bin/r-deskvint-irix bin/r-deskvint-irix-gui lib/agent-helper.sh lib/lib
 	[ -f "$SRC/$f" ] || { echo "install.sh: missing $SRC/$f" >&2; exit 1; }
 done
 
+# Which agent. The tarball carries two builds of it: bin/r-deskvint-irix for
+# MIPS III, which every IRIX 6.5 machine can run, and bin/r-deskvint-irix-mips4
+# for MIPS IV -- R5000, R8000, R10000 and everything after -- a few percent
+# faster. hinv names the CPU. Anything not recognised gets MIPS III, because the
+# cost of guessing wrong the other way is an agent that dies of SIGILL. The
+# .tardist makes the same choice through inst's CPUARCH (see the idb).
+AGENT_SRC="$SRC/bin/r-deskvint-irix"
+AGENT_ISA="MIPS III"
+if [ -f "$SRC/bin/r-deskvint-irix-mips4" ]; then
+	case "`hinv -c processor 2>/dev/null | grep '^CPU'`" in
+		*R4[0-9]00*) ;;
+		*R5000*|*R8000*|*R1[0-9]000*|*RM5[0-9]*|*RM7[0-9]*)
+			AGENT_SRC="$SRC/bin/r-deskvint-irix-mips4"
+			AGENT_ISA="MIPS IV" ;;
+	esac
+fi
+
 mkdir -p "$BIN" "$LIB" || exit 1
 
 echo "Installing into $PREFIX."
-cp "$SRC/bin/r-deskvint-irix"      "$BIN/r-deskvint-irix"      || exit 1
+echo "Agent: the $AGENT_ISA build (`hinv -c processor 2>/dev/null | sed -n 's/^CPU: //p'`)."
+cp "$AGENT_SRC"                   "$BIN/r-deskvint-irix"      || exit 1
 cp "$SRC/bin/r-deskvint-irix-gui"  "$BIN/r-deskvint-irix-gui"  || exit 1
 cp "$SRC/lib/agent-helper.sh"     "$LIB/agent-helper.sh"     || exit 1
 cp "$SRC/lib/libgcc_s.so.1"       "$LIB/libgcc_s.so.1"       || exit 1

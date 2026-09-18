@@ -10,6 +10,8 @@
 #     work on the build machine and fail on everybody else's
 #   - the Toolchest fragment not being where the desktop reads it
 #   - inst rejecting the product outright
+#   - inst choosing the wrong one of the two agents for this CPU (MIPS IV on
+#     R5000 and later, MIPS III on an R4x00 -- the idb's mach() tags)
 #
 # It runs the installed binary WITHOUT LD_LIBRARYN32_PATH set, deliberately.
 # Every other script here sets it, so an rpath that silently did nothing would
@@ -164,6 +166,9 @@ echo "--- what landed ---"
 ls -l /usr/local/sbin/r-deskvint-irix /usr/local/sbin/r-deskvint-irix-gui 2>&1
 ls -l /usr/local/lib/r-deskvint-irix 2>&1
 ls -l /usr/lib/X11/app-chests/R-DeskVint.chest 2>&1
+echo "--- which build inst chose ---"
+hinv -c processor | grep '^CPU'
+file /usr/local/sbin/r-deskvint-irix | sed 's/^/INSTALLED-AGENT /'
 echo "--- inst's own inventory ---"
 versions -n r_deskvint_irix 2>&1 | head -8
 echo "--- the installed agent runs ---"
@@ -225,6 +230,18 @@ if echo "$OUT" | grep -qi 'rld:\|not found\|cannot open'; then
 fi
 echo "$OUT" | grep -q 'agent id\|^[a-z0-9]\{9\}$' ||
 	echo "    NOTE: --show-id printed nothing recognisable; read the block above."
+
+# The right agent for the CPU. Only a package that carries both has a choice to
+# get wrong; its idb says so, and is right here in the tardist.
+if tar xOf "$TARDIST" r_deskvint_irix.idb 2>/dev/null | grep -q 'r-deskvint-irix-mips4'; then
+	case "`echo "$OUT" | grep '^CPU'`" in
+		*R4[0-9]00*) _want=mips-3 ;;
+		*)           _want=mips-4 ;;
+	esac
+	echo "$OUT" | grep '^INSTALLED-AGENT' | grep -q " $_want " ||
+		die "inst installed the wrong agent for this CPU: wanted $_want (see 'which build inst chose' above)"
+	echo "    inst chose the $_want agent for `echo "$OUT" | sed -n 's/^CPU: //p'`"
+fi
 
 # The helper must resolve the INSTALLED agent. It used to default to a SGUG
 # path and fall back to /tmp, so on a development machine it reported the /tmp
