@@ -284,10 +284,72 @@ setup)
     fi
     ;;
 
+# service install|remove|status -- boot integration, the IRIX way.
+#
+# /etc/init.d holds the script, rc2.d and rc0.d hold links to it, and
+# /etc/config holds a flag chkconfig(1M) reads. Four pieces, which is why this
+# is a verb rather than a paragraph in a README that someone half-follows.
+#
+# The flag is registered OFF. Installing software that silently starts
+# listening on every boot is not ours to decide; `chkconfig rustdesk_agent on`
+# is one command and it is the admin's.
+service)
+    INIT=/etc/init.d/rustdesk_agent
+    SRC="$HERE/rustdesk_agent.init"
+    case "${2:-status}" in
+    install)
+        id | grep -q 'uid=0' || { echo "service install: run this as root." >&2; exit 1; }
+        [ -f "$SRC" ] || { echo "service install: no $SRC" >&2; exit 1; }
+        [ -d /etc/init.d ] || { echo "service install: no /etc/init.d on this machine" >&2; exit 1; }
+        cp "$SRC" "$INIT" && chmod 755 "$INIT" || exit 1
+        # S99 because xdm is S98, K01 because xdm is K02: up after the display,
+        # down before it.
+        rm -f /etc/rc2.d/S99rustdesk_agent /etc/rc0.d/K01rustdesk_agent
+        ln -s ../init.d/rustdesk_agent /etc/rc2.d/S99rustdesk_agent
+        ln -s ../init.d/rustdesk_agent /etc/rc0.d/K01rustdesk_agent
+        if [ ! -f /etc/config/rustdesk_agent ]; then
+            chkconfig -f rustdesk_agent off 2>/dev/null || echo off > /etc/config/rustdesk_agent
+        fi
+        echo "Installed $INIT, and the rc links."
+        echo "It is registered but OFF. To start it at every boot:"
+        echo "    chkconfig rustdesk_agent on"
+        echo "and to start it now without rebooting:"
+        echo "    $INIT start"
+        ;;
+    remove)
+        id | grep -q 'uid=0' || { echo "service remove: run this as root." >&2; exit 1; }
+        rm -f /etc/rc2.d/S99rustdesk_agent /etc/rc0.d/K01rustdesk_agent "$INIT"
+        # The flag is left: chkconfig has no unregister, and a stray `off` entry
+        # is inert. Removing the file by hand is what clears it from the list.
+        echo "Removed $INIT and the rc links."
+        [ -f /etc/config/rustdesk_agent ] &&
+            echo "The chkconfig flag is left behind; rm /etc/config/rustdesk_agent clears it."
+        ;;
+    status)
+        [ -f "$INIT" ] && echo "init script : $INIT" || echo "init script : not installed"
+        [ -h /etc/rc2.d/S99rustdesk_agent ] && echo "start link  : /etc/rc2.d/S99rustdesk_agent" \
+                                            || echo "start link  : missing"
+        [ -h /etc/rc0.d/K01rustdesk_agent ] && echo "stop link   : /etc/rc0.d/K01rustdesk_agent" \
+                                            || echo "stop link   : missing"
+        if [ -f /etc/config/rustdesk_agent ]; then
+            echo "chkconfig   : `cat /etc/config/rustdesk_agent`"
+        else
+            echo "chkconfig   : not registered"
+        fi
+        echo "running now : `is_running && echo yes || echo no`"
+        ;;
+    *)
+        echo "usage: $0 service install|remove|status"
+        exit 2
+        ;;
+    esac
+    ;;
+
 *)
     echo "usage: $0 status | showid | showkey | showlog | start | stop | restart"
     echo "       $0 set password|server|relay|key|api|ca VALUE"
     echo "       $0 setup      ask for each setting in turn"
+    echo "       $0 service install|remove|status   start it at boot (chkconfig)"
     exit 2
     ;;
 esac

@@ -1,0 +1,100 @@
+#! /sbin/sh
+#Tag 0x00000f00
+#
+# Start and stop the RustDesk agent.
+#
+# Installed by `agent-helper.sh service install`, which also makes the rc
+# links and registers the chkconfig flag. Turn it on with:
+#
+#	chkconfig rustdesk_agent on
+#
+# Ordering: S99 in rc2.d, because xdm is S98 and the agent wants a display to
+# capture; K01 in rc0.d, because xdm is K02 and an agent still holding an X
+# connection while the server goes down is the case RESUME.md says has never
+# been exercised. Stopping first keeps shutdown out of that question.
+#
+# Everything here defers to agent-helper.sh rather than starting the binary
+# itself. The helper already knows the three things that are easy to get wrong
+# -- nohup so the agent outlives the calling shell, DISPLAY, and matching the
+# process by the basename of argv[0] rather than by a command line that also
+# matches the panel and this script -- and having two places that know them is
+# how they drift.
+
+IS_ON=/etc/chkconfig
+HELPER=/usr/local/lib/rustdesk-agent/agent-helper.sh
+
+if $IS_ON verbose; then
+	ECHO=echo
+else
+	# For a quiet startup and shutdown
+	ECHO=:
+fi
+
+# Does :0 answer? Bounded, because a wedged server accepts the connection and
+# then never replies -- xdpyinfo does not time out on its own and simply hangs
+# for ever, which is how this script first failed to start anything at all. The
+# wedge is real on this hardware, not just the emulator: after a logout the
+# server was found with its CPU time frozen and four xdpyinfo processes stacked
+# up behind it. See docs/ISSUE-xdm-wedge.md.
+x_answers() {
+	/usr/bin/X11/xdpyinfo -display :0 > /dev/null 2>&1 &
+	_xp=$!
+	_i=0
+	while [ $_i -lt 5 ]; do
+		kill -0 $_xp 2>/dev/null || { wait $_xp; return $?; }
+		_i=`expr $_i + 1`
+		sleep 1
+	done
+	kill -9 $_xp 2>/dev/null
+	return 1
+}
+
+# Wait for an X server to accept a connection, then start.
+#
+# Backgrounded, and that is the point: rc2.d runs sequentially, so blocking
+# here delays every later script and the login prompt with them. The agent
+# does not actually need a display to start -- it warns, reports 0x0, and
+# re-reads the geometry when a peer arrives -- but a boot log that says 0x0
+# invites someone to go looking for a fault that is not there.
+start_when_x_is_up() {
+	i=0
+	while [ $i -lt 60 ]; do
+		x_answers && break
+		i=`expr $i + 1`
+		sleep 2
+	done
+	DISPLAY=:0 $HELPER start > /dev/null 2>&1
+}
+
+case "$1" in
+'start')
+	$IS_ON rustdesk_agent || exit 0
+	if [ ! -x "$HELPER" ]; then
+		echo "rustdesk_agent: no helper at $HELPER; not starting."
+		exit 1
+	fi
+	$ECHO "Starting the RustDesk agent."
+	# A subshell that ignores the hangup, not `nohup`: nohup is an external
+	# command and cannot see a shell function, so `nohup start_when_x_is_up`
+	# silently does nothing at all -- verified on this machine. A subshell
+	# inherits functions, and trapping HUP is what makes it outlive the shell
+	# that started it. At boot there is no controlling terminal and a bare `&`
+	# would have survived, but the same script is run by hand to test it, and
+	# there the hangup took the waiter with it and looked like a flag that was
+	# being ignored.
+	( trap '' 1 2 3; start_when_x_is_up ) > /dev/null 2>&1 &
+	;;
+
+'stop')
+	[ -x "$HELPER" ] || exit 0
+	$ECHO "Stopping the RustDesk agent."
+	$HELPER stop > /dev/null 2>&1
+	;;
+
+*)
+	echo "usage: $0 {start|stop}"
+	exit 1
+	;;
+esac
+
+exit 0

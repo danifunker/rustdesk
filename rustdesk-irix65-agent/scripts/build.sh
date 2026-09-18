@@ -28,6 +28,7 @@
 #   bin/cacert.pem            -> /usr/local/sbin/cacert.pem
 #   lib/agent-helper.sh       -> /usr/local/lib/rustdesk-agent/agent-helper.sh
 #   lib/libgcc_s.so.1         -> /usr/local/lib/rustdesk-agent/libgcc_s.so.1
+#   lib/rustdesk_agent.init   -> /usr/local/lib/rustdesk-agent/rustdesk_agent.init
 #   chest/RustDesk.chest      -> /usr/lib/X11/app-chests/RustDesk.chest
 set -eu
 
@@ -99,6 +100,11 @@ mkdir -p "$OUT/bin" "$OUT/lib" "$OUT/chest"
 cp "$REL/rustdesk-agent"           "$OUT/bin/rustdesk-agent"
 cp "$REPO/gui/rustdesk-agent-gui"  "$OUT/bin/rustdesk-agent-gui"
 cp "$REPO/gui/agent-helper.sh"     "$OUT/lib/agent-helper.sh"
+# The init script ships beside the helper rather than straight into /etc/init.d:
+# a package that writes to /etc on install decides for the admin that this
+# machine runs the agent at boot. `agent-helper.sh service install` puts it
+# there when someone asks for it.
+cp "$REPO/init/rustdesk_agent"     "$OUT/lib/rustdesk_agent.init"
 cp "$REPO/desktop/RustDesk.chest"  "$OUT/chest/RustDesk.chest"
 
 # libgcc_s.so.1 is the ONE library the agent needs that stock IRIX 6.5 does not
@@ -146,7 +152,8 @@ else
 	echo "    --ca-bundle. Set RD_CA_BUNDLE to one to include it."
 fi
 
-chmod 755 "$OUT/bin/"* "$OUT/lib/agent-helper.sh" "$OUT/lib/libgcc_s.so.1"
+chmod 755 "$OUT/bin/"* "$OUT/lib/agent-helper.sh" "$OUT/lib/libgcc_s.so.1" \
+          "$OUT/lib/rustdesk_agent.init"
 chmod 644 "$OUT/chest/RustDesk.chest"
 if [ -f "$OUT/bin/cacert.pem" ]; then chmod 644 "$OUT/bin/cacert.pem"; fi
 

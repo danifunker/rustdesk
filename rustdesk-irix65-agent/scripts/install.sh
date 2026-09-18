@@ -17,6 +17,9 @@
 #   $PREFIX/lib/rustdesk-agent/agent-helper.sh
 #   $PREFIX/lib/rustdesk-agent/libgcc_s.so.1
 #   $PREFIX/sbin/cacert.pem                  CA roots for an https console
+#   $PREFIX/lib/rustdesk-agent/rustdesk_agent.init   the init.d script, NOT
+#                                            installed into /etc by this script:
+#                                            `agent-helper.sh service install`
 #   /usr/lib/X11/app-chests/RustDesk.chest   Toolchest entry (default prefix only)
 #
 # The Toolchest fragment is the one path that is not ours to choose: the desktop
@@ -71,7 +74,7 @@ if [ "$UNINSTALL" = 1 ]; then
 	# $BIN are wrappers, so both places have to go or `rmdir` below quietly
 	# fails on a directory that still holds a 7 MB agent.
 	rm -f "$LIB/rustdesk-agent" "$LIB/rustdesk-agent-gui"
-	rm -f "$LIB/agent-helper.sh" "$LIB/libgcc_s.so.1"
+	rm -f "$LIB/agent-helper.sh" "$LIB/libgcc_s.so.1" "$LIB/rustdesk_agent.init"
 	rm -f "$BIN/cacert.pem"
 	rmdir "$LIB" 2>/dev/null
 	rm -f "$CHEST"
@@ -93,6 +96,9 @@ cp "$SRC/bin/rustdesk-agent"      "$BIN/rustdesk-agent"      || exit 1
 cp "$SRC/bin/rustdesk-agent-gui"  "$BIN/rustdesk-agent-gui"  || exit 1
 cp "$SRC/lib/agent-helper.sh"     "$LIB/agent-helper.sh"     || exit 1
 cp "$SRC/lib/libgcc_s.so.1"       "$LIB/libgcc_s.so.1"       || exit 1
+if [ -f "$SRC/lib/rustdesk_agent.init" ]; then
+	cp "$SRC/lib/rustdesk_agent.init" "$LIB/rustdesk_agent.init" && chmod 755 "$LIB/rustdesk_agent.init"
+fi
 
 # Beside the binary, which is where the agent looks first. Optional, because a
 # build made on a host with no bundle still installs and runs -- it just cannot
