@@ -40,8 +40,8 @@ measurement in the emulator sections below was taken against a bare
 `Xsgi :0 -bs -c`, because starting xdm on the emulator wedges the X server. On a
 real O2 a *logged-in* 4Dwm desktop is fine: xdm and the toolchest run,
 `xdpyinfo` answers before and after a full capture run, and capture works
-against it. **Logging out still wedges the server**, on real hardware, with the
-same frozen-CPU signature. See §REAL HARDWARE.
+against it. What happens at **logout** is still unknown on hardware — see
+§REAL HARDWARE for an attempt that read a shutdown as a wedge.
 
 ---
 
@@ -72,19 +72,21 @@ holds on hardware too (`xhost` reports `LOCAL:`, `localhost.localdomain`,
 `sgio2`). `xdpyinfo` answered instantly before a full `--probe-display` run and
 again after it, and capture against that live desktop worked throughout.
 
-**But the wedge is not emulator-only, and this file said so for a few hours on
-the strength of the paragraph above.** Session captured, agent working, user
-logs out — and `Xsgi` is left with its CPU time frozen at 3:16 across ten
-seconds, answering nobody; `xdpyinfo` hangs rather than failing, and four of
-them stacked up before anyone noticed. That is the signature in
-`docs/ISSUE-xdm-wedge.md` exactly, on an O2 rather than under IRIS. What is
-proven on hardware is the *logged-in* case. The logout path is still the open
-one, and it is worse than it looked, because on the emulator it could be blamed
-on the emulator.
+**The logout path is untested, and was briefly and wrongly recorded here as a
+wedge.** After a logout `Xsgi` was seen with its CPU time unchanged across ten
+seconds while `xdpyinfo` failed to return, and this file said that was
+`docs/ISSUE-xdm-wedge.md` reproducing on hardware. It was not. A few minutes
+later there was no X process at all and `xdpyinfo` said *"X connection to :0.0
+broken (explicit kill or server shutdown)"*, and the machine turned out to be on
+its way to a reboot. An idle server and a server shutting down both show
+unchanged CPU time, and a connection to one that is going away stalls rather
+than refusing. Nothing here distinguished a wedge from a teardown. **The logout
+path remains untested on hardware, in either direction.**
 
-**Anything that probes X must bound its wait.** A wedged server accepts the
-connection and never replies, so `xdpyinfo` does not fail, it hangs. The boot
-script's readiness probe learned this the hard way; §Mistakes not to repeat.
+**Anything that probes X must still bound its wait**, which is the one durable
+thing that came out of it: a server that is going away, wedged or not, leaves
+`xdpyinfo` stalled rather than failing, and it has no timeout of its own. See
+§Mistakes not to repeat.
 
 ### The package did not work, and the install test could not have told us
 
@@ -1814,9 +1816,10 @@ Items 1 to 4 of the previous list are **done** — see §PERFORMANCE. What is le
 
 1. **Half done on hardware.** A *logged-in* desktop captures fine on the O2 —
    xdm, 4Dwm, toolchest, `xdpyinfo` answering throughout, `--probe-display`
-   against the live screen. **Logging out still wedges the server**, on real
-   hardware and not only under IRIS, so the greeter and the login transition
-   remain uncaptured and `docs/ISSUE-xdm-wedge.md` describes something real.
+   against the live screen. The **logout** path is still untested: the one
+   attempt could not tell a wedge from the machine shutting down, so the
+   greeter and the login transition remain uncaptured and whether
+   `docs/ISSUE-xdm-wedge.md` reproduces on hardware is still an open question.
    Still open besides that: keyboard injection into somebody else's
    application, and damage volume on a desktop actually in use.
 
@@ -2116,13 +2119,20 @@ libvpx that staging was built from, so deleting it means re-applying
 
 ## Mistakes not to repeat
 
-**A wedged X server hangs, it does not fail.** It accepts the connection and
-never replies, so every naive readiness check waits for ever: `xdpyinfo` has no
-timeout of its own. The boot script's first readiness probe was
-`xdpyinfo -display :0 > /dev/null 2>&1` in a loop, and against a wedged server
-it started nothing at all and left a pile of stuck xdpyinfo processes behind.
-Bound every X probe. `/root/tmo 25 xdpyinfo` is the guest's version of the same
-lesson, further up this file.
+**An X server that is going away stalls a client, it does not refuse it.**
+Wedged, shutting down, or halfway through a reboot all look the same from
+outside: the connection is accepted and nothing comes back, and `xdpyinfo` has
+no timeout of its own. The boot script's first readiness probe was
+`xdpyinfo -display :0 > /dev/null 2>&1` in a loop; it started nothing at all and
+left a pile of stuck xdpyinfo processes behind. Bound every X probe.
+`/root/tmo 25 xdpyinfo` is the guest's version of the same lesson, further up
+this file.
+
+**And do not diagnose a wedge from the outside.** Frozen CPU time plus a stalled
+client is equally consistent with an idle server, a shutdown, and a reboot. This
+file carried "the wedge reproduces on hardware" for about an hour on exactly
+that evidence, and the machine had been rebooting the whole time. `ps` for the
+server process before saying anything about its state.
 
 **`nohup` cannot see a shell function.** `nohup some_function &` silently does
 nothing -- no error, no process. A subshell inherits functions, so
