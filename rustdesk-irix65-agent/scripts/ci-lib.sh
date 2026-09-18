@@ -80,7 +80,10 @@ resolve_local_image() {
 # the second an upgrade of the first. Now a commit has one version wherever and
 # whenever it is built. (A shallow CI checkout still has HEAD's commit date.)
 version_string() {
-	_rev=$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null)
+	# Nine characters, always -- not `--short`, whose length depends on how
+	# many objects the clone has: CI's shallow checkout said ed74049 where this
+	# repository says ed7404922, and one commit got two package names.
+	_rev=$(git -C "$REPO" rev-parse HEAD 2>/dev/null | cut -c1-9)
 	if [ -z "$_rev" ]; then
 		printf '%s-nogit' "$(date -u '+%Y%m%d')"
 		return 0
