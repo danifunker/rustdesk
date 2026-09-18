@@ -85,18 +85,24 @@ picks by CPUARCH. Worth 3-6% on the O2.
 
 ## On the O2
 
-`r_deskvint_irix 2026091865`: a build of this work from before the version
-display and the logger change (it still says `R-DeskVint 0.1.0`), MIPS IV
-agent, installed with inst on 2026-09-18 with Dani's go-ahead. The boot start
-is on (`chkconfig r_deskvint_irix on`, init script and rc links in place).
-The previous agent binary is kept as `/usr/local/sbin/r-deskvint-irix.cf5c43c05`.
+`r_deskvint_irix 2026091885` (build `20260918-85a3efe43`: everything but the
+prefetch conversion), MIPS IV agent, installed with inst on 2026-09-18 with
+Dani's go-ahead. The boot start is on and was proven again by Dani's
+maintenance reboot. `/usr/local/sbin/r-deskvint-irix.2026091865` and
+`.cf5c43c05` are the agents before it.
 
-The next thing to install is `dist/r-deskvint-irix-20260918-85a3efe43-n32.tardist`
-(inst version 2026091885; built from the key-frame commit, gendist in an R5000
-guest). The packaging is the same as 5177b49f6's, which passed the install
-test in both an R5000 and an R4400 guest. Ask first: it restarts the agent. The
-install is what `/tmp/o2-install.sh` on the O2 does: stop the agent, `inst -f`
-with `install standard / go / quit`, start it with the helper.
+Next to install: `dist/r-deskvint-irix-20260918-fb4e3a860-n32.tardist` (inst
+version 2026091890, the prefetch conversion; gendist in an R5000 guest). Ask
+first: it restarts the agent. Run anything long on the O2 detached (`nohup
+... > file &`, then read the file): rexec gives up after 300 s of silence, and
+a script whose connection closed dies of SIGPIPE on its next echo -- which is
+how the 85a3efe43 install left the agent stopped for five minutes.
+
+The clock reset to 1995 in that maintenance (flat clock battery, most likely);
+Dani set it with ntpdate. `ntp` is off in chkconfig and /etc/ntp.conf names a
+placeholder server, so it will not survive the next power-off unless Dani
+configures ntpd (NTPSERVS in /etc/init.d/ntp, servers in /etc/ntp.conf,
+`chkconfig ntp on`). A wrong clock fails the console's certificate.
 
 ## Reaching the O2
 
