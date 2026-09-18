@@ -87,9 +87,10 @@ agent, installed with inst on 2026-09-18 with Dani's go-ahead. The boot start
 is on (`chkconfig r_deskvint_irix on`, init script and rc links in place).
 The previous agent binary is kept as `/usr/local/sbin/r-deskvint-irix.cf5c43c05`.
 
-The committed build, `dist/r-deskvint-irix-20260918-5177b49f6-n32.tardist`
-(inst version 2026091882), passed gendist and the install test in an R4400 guest
-and is the next thing to install -- ask first: it restarts the agent. The
+The next thing to install is `dist/r-deskvint-irix-20260918-85a3efe43-n32.tardist`
+(inst version 2026091885; built from the key-frame commit, gendist in an R5000
+guest). The packaging is the same as 5177b49f6's, which passed the install
+test in both an R5000 and an R4400 guest. Ask first: it restarts the agent. The
 install is what `/tmp/o2-install.sh` on the O2 does: stop the agent, `inst -f`
 with `install standard / go / quit`, start it with the helper.
 
