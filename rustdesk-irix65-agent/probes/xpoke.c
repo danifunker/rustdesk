@@ -2,7 +2,7 @@
  * xpoke.c -- aim the agent's own injection shim at a coordinate, by hand.
  *
  * The Motif panel is the first thing on this machine with a button on it, and
- * pressing one is the last unproven step in the input path. `rustdesk-agent
+ * pressing one is the last unproven step in the input path. `r-deskvint-irix
  * --probe-keys X Y` does part of it, but it types a fixed word and takes a
  * photograph; driving a settings panel needs an arbitrary sequence -- click a
  * field, type a hostname, click Apply -- and needs it in ONE process, because

@@ -1,6 +1,6 @@
 ################################################################################
-# RustDesk.chest -- installed by the RustDesk agent Software Manager package
-# (rustdesk_agent.sw.*). scripts/install.sh writes an equivalent fragment when
+# R-DeskVint.chest -- installed by the RustDesk agent Software Manager package
+# (r_deskvint_irix.sw.*). scripts/install.sh writes an equivalent fragment when
 # installing by hand; keep the menu text in both places in sync.
 #
 # Pulled in by the "sinclude /usr/lib/X11/app-chests" at the end of
@@ -16,5 +16,5 @@
 Menu ToolChest
 {
      no-label			f.separator
-    "RustDesk Agent"		f.checkexec.sh "/usr/local/sbin/rustdesk-agent-gui"
+    "R-DeskVint"		f.checkexec.sh "/usr/local/sbin/r-deskvint-irix-gui"
 }

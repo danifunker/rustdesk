@@ -1,11 +1,11 @@
 #!/bin/sh
 # Turn a staged tree and an inst product into the things a person downloads.
 #
-#   rustdesk-agent-VER-n32.tardist   Software Manager package. Copy it to the
+#   r-deskvint-irix-VER-n32.tardist   Software Manager package. Copy it to the
 #                                    IRIX box and open it with swmgr, or
 #                                    `inst -f <dir>` after untarring it. This is
 #                                    the normal way to install.
-#   rustdesk-agent-VER-n32.tar.gz    the same files raw, plus install.sh, for a
+#   r-deskvint-irix-VER-n32.tar.gz    the same files raw, plus install.sh, for a
 #                                    machine where inst is not available or the
 #                                    files want to go somewhere else.
 #   SHA256SUMS                       so a download can be checked.
@@ -57,14 +57,14 @@ load_local_conf
 mkdir -p "$OUTDIR"
 OUTDIR=$(cd "$OUTDIR" && pwd)
 
-BASE="rustdesk-agent-$VERSION-$ABI"
+BASE="r-deskvint-irix-$VERSION-$ABI"
 
 # ---- the Software Manager package --------------------------------------------
 if [ "$DO_TARDIST" = 1 ]; then
-	if [ -f "$INST/rustdesk_agent.sw" ]; then
+	if [ -f "$INST/r_deskvint_irix.sw" ]; then
 		echo ">>> tardist: $OUTDIR/$BASE.tardist"
 		( cd "$INST" && tar cf "$OUTDIR/$BASE.tardist" \
-			rustdesk_agent rustdesk_agent.idb rustdesk_agent.sw )
+			r_deskvint_irix r_deskvint_irix.idb r_deskvint_irix.sw )
 	else
 		# Not fatal. The cross-build works on any machine; the inst product
 		# needs a running IRIX guest, so a host without one still gets a
@@ -102,8 +102,8 @@ The agent needs an X server on :0 and nothing else: libsodium, libvpx, mbedTLS
 zstd and zlib are linked in, and the one library IRIX 6.5 does not ship --
 libgcc_s.so.1 -- is in lib/ and is installed beside the agent.
 
-  rustdesk-agent --show-id         this machine's ID
-  rustdesk-agent-gui               the settings panel (Motif; needs a display)
+  r-deskvint-irix --show-id         this machine's ID
+  r-deskvint-irix-gui               the settings panel (Motif; needs a display)
   agent-helper.sh start|stop|status
 
 If you would rather use the Software Manager, install the .tardist instead --
@@ -121,5 +121,5 @@ if command -v sha256sum > /dev/null 2>&1; then
 fi
 
 echo
-echo "Packaged rustdesk-agent $VERSION ($ABI):"
+echo "Packaged r-deskvint-irix $VERSION ($ABI):"
 ls -la "$OUTDIR" | sed 's/^/    /'

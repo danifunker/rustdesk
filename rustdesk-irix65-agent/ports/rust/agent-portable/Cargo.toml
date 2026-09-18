@@ -35,7 +35,7 @@ cc = "1.0"
 
 # The real agent, built straight from the PPC tree's main.rs.
 [[bin]]
-name = "rustdesk-agent"
+name = "r-deskvint-irix"
 path = "../../../../rustdesk-ppc-agent/src/main.rs"
 
 [[bin]]

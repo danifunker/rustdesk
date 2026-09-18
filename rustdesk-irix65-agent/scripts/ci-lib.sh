@@ -101,9 +101,9 @@ stage_inst_inputs() {
 		*)   return 1 ;;
 	esac
 	sed -e "s/@VERSION@/$_dv/" -e "s/@SUBSYS@/$_fl/" -e "s/@ABI_DESC@/$_abi/" \
-		"$REPO/inst/rustdesk-agent.spec" > "$_dst/rustdesk-agent.spec"
+		"$REPO/inst/r-deskvint-irix.spec" > "$_dst/r-deskvint-irix.spec"
 	sed -e "s/@SUBSYS@/$_fl/" \
-		"$REPO/inst/rustdesk-agent.idb" > "$_dst/rustdesk-agent.idb"
+		"$REPO/inst/r-deskvint-irix.idb" > "$_dst/r-deskvint-irix.idb"
 }
 
 # ---------------------------------------------------------------------------

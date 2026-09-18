@@ -20,16 +20,16 @@
 #   --stage-only  skip compiling; stage whatever is already built
 #   --out DIR     where the staged tree goes                     [build/stage]
 #
-# The staged tree is laid out the way inst/rustdesk-agent.idb expects, which is
+# The staged tree is laid out the way inst/r-deskvint-irix.idb expects, which is
 # by SOURCE path under a gendist -sbase, not by destination:
 #
-#   bin/rustdesk-agent        -> /usr/local/sbin/rustdesk-agent
-#   bin/rustdesk-agent-gui    -> /usr/local/sbin/rustdesk-agent-gui
+#   bin/r-deskvint-irix        -> /usr/local/sbin/r-deskvint-irix
+#   bin/r-deskvint-irix-gui    -> /usr/local/sbin/r-deskvint-irix-gui
 #   bin/cacert.pem            -> /usr/local/sbin/cacert.pem
-#   lib/agent-helper.sh       -> /usr/local/lib/rustdesk-agent/agent-helper.sh
-#   lib/libgcc_s.so.1         -> /usr/local/lib/rustdesk-agent/libgcc_s.so.1
-#   lib/rustdesk_agent.init   -> /usr/local/lib/rustdesk-agent/rustdesk_agent.init
-#   chest/RustDesk.chest      -> /usr/lib/X11/app-chests/RustDesk.chest
+#   lib/agent-helper.sh       -> /usr/local/lib/r-deskvint-irix/agent-helper.sh
+#   lib/libgcc_s.so.1         -> /usr/local/lib/r-deskvint-irix/libgcc_s.so.1
+#   lib/r_deskvint_irix.init   -> /usr/local/lib/r-deskvint-irix/r_deskvint_irix.init
+#   chest/R-DeskVint.chest      -> /usr/lib/X11/app-chests/R-DeskVint.chest
 set -eu
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
@@ -69,7 +69,7 @@ stay siblings. Set PPC_AGENT_DIR in ci/local.conf if it lives somewhere else."
 
 # ---- 1. the agent ------------------------------------------------------------
 if [ "$DO_AGENT" = 1 ]; then
-	echo ">>> cargo: rustdesk-agent (n32)"
+	echo ">>> cargo: r-deskvint-irix (n32)"
 	# env.sh resolves its own location, so this works from any directory and
 	# on any machine. It also sets the -rpath the installed agent uses to
 	# find its libgcc_s without an environment variable.
@@ -80,12 +80,12 @@ if [ "$DO_AGENT" = 1 ]; then
 	export RD_RUST_DIR
 	# shellcheck disable=SC1091
 	. "$REPO/ports/rust/env.sh" > /dev/null
-	( cd "$REPO/ports/rust/agent-portable" && cargo +nightly build --release --bin rustdesk-agent )
+	( cd "$REPO/ports/rust/agent-portable" && cargo +nightly build --release --bin r-deskvint-irix )
 fi
 
 # ---- 2. the panel ------------------------------------------------------------
 if [ "$DO_GUI" = 1 ]; then
-	echo ">>> irix-cc: rustdesk-agent-gui (Motif 1.2)"
+	echo ">>> irix-cc: r-deskvint-irix-gui (Motif 1.2)"
 	SGUG="$SGUG" "$REPO/gui/build-gui.sh"
 fi
 
@@ -94,18 +94,18 @@ echo ">>> staging into $OUT"
 rm -rf "$OUT"
 mkdir -p "$OUT/bin" "$OUT/lib" "$OUT/chest"
 
-[ -f "$REL/rustdesk-agent" ] || die "no $REL/rustdesk-agent -- build without --stage-only first"
-[ -f "$REPO/gui/rustdesk-agent-gui" ] || die "no gui/rustdesk-agent-gui -- build without --stage-only first"
+[ -f "$REL/r-deskvint-irix" ] || die "no $REL/r-deskvint-irix -- build without --stage-only first"
+[ -f "$REPO/gui/r-deskvint-irix-gui" ] || die "no gui/r-deskvint-irix-gui -- build without --stage-only first"
 
-cp "$REL/rustdesk-agent"           "$OUT/bin/rustdesk-agent"
-cp "$REPO/gui/rustdesk-agent-gui"  "$OUT/bin/rustdesk-agent-gui"
+cp "$REL/r-deskvint-irix"           "$OUT/bin/r-deskvint-irix"
+cp "$REPO/gui/r-deskvint-irix-gui"  "$OUT/bin/r-deskvint-irix-gui"
 cp "$REPO/gui/agent-helper.sh"     "$OUT/lib/agent-helper.sh"
 # The init script ships beside the helper rather than straight into /etc/init.d:
 # a package that writes to /etc on install decides for the admin that this
 # machine runs the agent at boot. `agent-helper.sh service install` puts it
 # there when someone asks for it.
-cp "$REPO/init/rustdesk_agent"     "$OUT/lib/rustdesk_agent.init"
-cp "$REPO/desktop/RustDesk.chest"  "$OUT/chest/RustDesk.chest"
+cp "$REPO/init/r_deskvint_irix"     "$OUT/lib/r_deskvint_irix.init"
+cp "$REPO/desktop/R-DeskVint.chest"  "$OUT/chest/R-DeskVint.chest"
 
 # libgcc_s.so.1 is the ONE library the agent needs that stock IRIX 6.5 does not
 # ship. Everything else it links -- libX11, libXext, libpthread, libm, libc --
@@ -153,8 +153,8 @@ else
 fi
 
 chmod 755 "$OUT/bin/"* "$OUT/lib/agent-helper.sh" "$OUT/lib/libgcc_s.so.1" \
-          "$OUT/lib/rustdesk_agent.init"
-chmod 644 "$OUT/chest/RustDesk.chest"
+          "$OUT/lib/r_deskvint_irix.init"
+chmod 644 "$OUT/chest/R-DeskVint.chest"
 if [ -f "$OUT/bin/cacert.pem" ]; then chmod 644 "$OUT/bin/cacert.pem"; fi
 
 # ---- 4. say what is in it, and check it ---------------------------------------
@@ -167,7 +167,7 @@ echo ">>> staged tree:"
 if command -v file > /dev/null 2>&1; then
 	echo
 	echo ">>> what the binaries actually are:"
-	for f in "$OUT/bin/rustdesk-agent" "$OUT/bin/rustdesk-agent-gui" "$OUT/lib/libgcc_s.so.1"; do
+	for f in "$OUT/bin/r-deskvint-irix" "$OUT/bin/r-deskvint-irix-gui" "$OUT/lib/libgcc_s.so.1"; do
 		# cacert.pem is deliberately not in this list: it is text, not an object.
 		printf '    %-24s %s\n' "$(basename "$f")" "$(file -b "$f")"
 		case "$(file -b "$f")" in
@@ -187,7 +187,7 @@ fi
 if command -v readelf > /dev/null 2>&1; then
 	echo
 	echo ">>> run-time dependencies:"
-	for f in "$OUT/bin/rustdesk-agent" "$OUT/bin/rustdesk-agent-gui"; do
+	for f in "$OUT/bin/r-deskvint-irix" "$OUT/bin/r-deskvint-irix-gui"; do
 		echo "    $(basename "$f"):"
 		readelf -d "$f" | sed -n 's/.*Shared library: \[\(.*\)\]/      \1/p'
 		readelf -d "$f" | sed -n 's/.*Library rpath: \[\(.*\)\]/      rpath: \1/p'

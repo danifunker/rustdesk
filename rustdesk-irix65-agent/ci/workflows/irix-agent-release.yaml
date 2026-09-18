@@ -146,7 +146,7 @@ jobs:
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: rustdesk-agent-irix
+          name: r-deskvint-irix-irix
           path: rustdesk-irix65-agent/dist/*
           if-no-files-found: error
 

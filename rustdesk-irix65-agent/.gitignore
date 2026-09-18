@@ -39,7 +39,7 @@ probes/rex3-wedge-repro
 ports/iris-run/iris-target-r4k/
 
 # The cross-built panel is an artifact of gui/build-gui.sh, like the agent.
-gui/rustdesk-agent-gui
+gui/r-deskvint-irix-gui
 
 # Probe binary, rebuilt with one irix-cc command:
 #   irix-cc -O2 -o probes/xpoke probes/xpoke.c src/input_shim.c -lXext -lX11

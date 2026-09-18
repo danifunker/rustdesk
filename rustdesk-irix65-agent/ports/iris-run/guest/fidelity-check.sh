@@ -16,7 +16,7 @@ xsetroot -solid gray30
 sleep 6
 cd /tmp
 rm -f /tmp/decoded.ppm
-nohup /tmp/rustdesk-agent -v --listen 127.0.0.1 --port 21118 > /tmp/agent.log 2>&1 &
+nohup /tmp/r-deskvint-irix -v --listen 127.0.0.1 --port 21118 > /tmp/agent.log 2>&1 &
 sleep 10
 ./testpeer 127.0.0.1:21118 hunter2 100 decode 2>&1 | tail -9
 # The xterm stops after ~80 s; the clock keeps ticking, so its face is the only

@@ -9,7 +9,7 @@
 # possible. Everything below runs from a terminal, which is how it gets tested.
 #
 # It is also what keeps the panel honest about the CLI. Every `set` verb is one
-# `rustdesk-agent --flag` invocation, so the panel cannot drift into having its
+# `r-deskvint-irix --flag` invocation, so the panel cannot drift into having its
 # own idea of what a setting means, and anything it can do can be done without
 # it.
 #
@@ -21,21 +21,21 @@ set -u
 # development /tmp. The packaged location has to come before /tmp or an
 # installed machine that once had a copy in /tmp keeps using the stale one --
 # which is exactly what the first install test found, with `status` reporting
-# `agent=/tmp/rustdesk-agent` on a machine that had just installed the package.
+# `agent=/tmp/r-deskvint-irix` on a machine that had just installed the package.
 #
-# `$HERE/rustdesk-agent` comes first because it is the only entry that works for
+# `$HERE/r-deskvint-irix` comes first because it is the only entry that works for
 # an install under a prefix nobody chose in advance: install.sh -p puts the real
 # binary beside this script, and looking next to itself needs no configuration
 # and no wrapper.
 HERE=`dirname "$0"`
 AGENT="${RD_AGENT:-}"
 if [ -z "$AGENT" ]; then
-    for _a in "$HERE/rustdesk-agent" /usr/local/sbin/rustdesk-agent \
-              /usr/sbin/rustdesk-agent \
-              /usr/sgug/bin/rustdesk-agent /tmp/rustdesk-agent; do
+    for _a in "$HERE/r-deskvint-irix" /usr/local/sbin/r-deskvint-irix \
+              /usr/sbin/r-deskvint-irix \
+              /usr/sgug/bin/r-deskvint-irix /tmp/r-deskvint-irix; do
         if [ -x "$_a" ]; then AGENT="$_a"; break; fi
     done
-    [ -n "$AGENT" ] || AGENT=/usr/sbin/rustdesk-agent
+    [ -n "$AGENT" ] || AGENT=/usr/sbin/r-deskvint-irix
 fi
 CONF="${RD_CONF:-$HOME/.rustdesk-ppc-agent.conf}"
 LOG="${RD_LOG:-/tmp/agent.log}"
@@ -73,14 +73,14 @@ conf_get_renamed() {
 # Which processes are the agent. Two IRIX traps and one of our own making, all
 # of which produced a panel whose buttons looked broken:
 #
-#   `ps -e` truncates COMD to EIGHT characters, so `rustdesk-agent` appears as
-#   `rustdesk-` and `ps -e | grep rustdesk-agent` matches NOTHING. Written that
+#   `ps -e` truncates COMD to EIGHT characters, so `r-deskvint-irix` appears as
+#   `rustdesk-` and `ps -e | grep r-deskvint-irix` matches NOTHING. Written that
 #   way, is_running answered "no" for a running agent: Stop killed nothing and
 #   still said "Stopped.", and Start said "Could not start it" about an agent it
 #   had just started.
 #
-#   `ps -e -o pid,args | grep rustdesk-agent` fixes that and matches too much.
-#   It matches `rustdesk-agent-gui` -- so Stop takes down the window that
+#   `ps -e -o pid,args | grep r-deskvint-irix` fixes that and matches too much.
+#   It matches `r-deskvint-irix-gui` -- so Stop takes down the window that
 #   pressed it -- and, once INSTALLED, it matches this script's own shell,
 #   because the path is /usr/lib/RUSTDESK-AGENT/agent-helper.sh. That one is
 #   invisible until the software is installed: is_running then always says yes,
@@ -93,7 +93,7 @@ agent_pids() {
         {
             cmd = $2
             sub(/.*\//, "", cmd)
-            if (cmd == "rustdesk-agent")
+            if (cmd == "r-deskvint-irix")
                 print $1
         }'
 }
@@ -300,11 +300,11 @@ setup)
 # is a verb rather than a paragraph in a README that someone half-follows.
 #
 # The flag is registered OFF. Installing software that silently starts
-# listening on every boot is not ours to decide; `chkconfig rustdesk_agent on`
+# listening on every boot is not ours to decide; `chkconfig r_deskvint_irix on`
 # is one command and it is the admin's.
 service)
-    INIT=/etc/init.d/rustdesk_agent
-    SRC="$HERE/rustdesk_agent.init"
+    INIT=/etc/init.d/r_deskvint_irix
+    SRC="$HERE/r_deskvint_irix.init"
     case "${2:-status}" in
     install)
         id | grep -q 'uid=0' || { echo "service install: run this as root." >&2; exit 1; }
@@ -313,35 +313,35 @@ service)
         cp "$SRC" "$INIT" && chmod 755 "$INIT" || exit 1
         # S99 because xdm is S98, K01 because xdm is K02: up after the display,
         # down before it.
-        rm -f /etc/rc2.d/S99rustdesk_agent /etc/rc0.d/K01rustdesk_agent
-        ln -s ../init.d/rustdesk_agent /etc/rc2.d/S99rustdesk_agent
-        ln -s ../init.d/rustdesk_agent /etc/rc0.d/K01rustdesk_agent
-        if [ ! -f /etc/config/rustdesk_agent ]; then
-            chkconfig -f rustdesk_agent off 2>/dev/null || echo off > /etc/config/rustdesk_agent
+        rm -f /etc/rc2.d/S99r_deskvint_irix /etc/rc0.d/K01r_deskvint_irix
+        ln -s ../init.d/r_deskvint_irix /etc/rc2.d/S99r_deskvint_irix
+        ln -s ../init.d/r_deskvint_irix /etc/rc0.d/K01r_deskvint_irix
+        if [ ! -f /etc/config/r_deskvint_irix ]; then
+            chkconfig -f r_deskvint_irix off 2>/dev/null || echo off > /etc/config/r_deskvint_irix
         fi
         echo "Installed $INIT, and the rc links."
         echo "It is registered but OFF. To start it at every boot:"
-        echo "    chkconfig rustdesk_agent on"
+        echo "    chkconfig r_deskvint_irix on"
         echo "and to start it now without rebooting:"
         echo "    $INIT start"
         ;;
     remove)
         id | grep -q 'uid=0' || { echo "service remove: run this as root." >&2; exit 1; }
-        rm -f /etc/rc2.d/S99rustdesk_agent /etc/rc0.d/K01rustdesk_agent "$INIT"
+        rm -f /etc/rc2.d/S99r_deskvint_irix /etc/rc0.d/K01r_deskvint_irix "$INIT"
         # The flag is left: chkconfig has no unregister, and a stray `off` entry
         # is inert. Removing the file by hand is what clears it from the list.
         echo "Removed $INIT and the rc links."
-        [ -f /etc/config/rustdesk_agent ] &&
-            echo "The chkconfig flag is left behind; rm /etc/config/rustdesk_agent clears it."
+        [ -f /etc/config/r_deskvint_irix ] &&
+            echo "The chkconfig flag is left behind; rm /etc/config/r_deskvint_irix clears it."
         ;;
     status)
         [ -f "$INIT" ] && echo "init script : $INIT" || echo "init script : not installed"
-        [ -h /etc/rc2.d/S99rustdesk_agent ] && echo "start link  : /etc/rc2.d/S99rustdesk_agent" \
+        [ -h /etc/rc2.d/S99r_deskvint_irix ] && echo "start link  : /etc/rc2.d/S99r_deskvint_irix" \
                                             || echo "start link  : missing"
-        [ -h /etc/rc0.d/K01rustdesk_agent ] && echo "stop link   : /etc/rc0.d/K01rustdesk_agent" \
+        [ -h /etc/rc0.d/K01r_deskvint_irix ] && echo "stop link   : /etc/rc0.d/K01r_deskvint_irix" \
                                             || echo "stop link   : missing"
-        if [ -f /etc/config/rustdesk_agent ]; then
-            echo "chkconfig   : `cat /etc/config/rustdesk_agent`"
+        if [ -f /etc/config/r_deskvint_irix ]; then
+            echo "chkconfig   : `cat /etc/config/r_deskvint_irix`"
         else
             echo "chkconfig   : not registered"
         fi

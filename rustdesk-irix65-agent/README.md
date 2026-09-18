@@ -38,8 +38,8 @@ code for the day the extensions turn out to be missing.
 ## Connecting to it
 
 ```sh
-rustdesk-agent --password <PASSWORD>     # once
-rustdesk-agent                           # listens on 0.0.0.0:21118
+r-deskvint-irix --password <PASSWORD>     # once
+r-deskvint-irix                           # listens on 0.0.0.0:21118
 ```
 
 Then type the machine's **IP address into a RustDesk client's ID field**, no
@@ -124,8 +124,8 @@ inst -f /path/to/unpacked-tardist        #   install standard
                                          #   go
 
 # or, without inst
-gunzip -c rustdesk-agent-VERSION-n32.tar.gz | tar xf -
-cd rustdesk-agent-VERSION-n32 && sh install.sh
+gunzip -c r-deskvint-irix-VERSION-n32.tar.gz | tar xf -
+cd r-deskvint-irix-VERSION-n32 && sh install.sh
 ```
 
 It needs **nothing else on the machine**: libsodium, libvpx, mbedTLS and zstd
@@ -135,11 +135,11 @@ rpath, with no environment variable and no wrapper. A machine that has never
 heard of SGUG-RSE or a cross toolchain runs it.
 
 ```
-/usr/local/sbin/rustdesk-agent                    the agent
-/usr/local/sbin/rustdesk-agent-gui                the Motif settings panel
-/usr/local/lib/rustdesk-agent/agent-helper.sh     start, stop, and every setting
+/usr/local/sbin/r-deskvint-irix                    the agent
+/usr/local/sbin/r-deskvint-irix-gui                the Motif settings panel
+/usr/local/lib/r-deskvint-irix/agent-helper.sh     start, stop, and every setting
                                             (`agent-helper.sh setup` asks for each)
-/usr/lib/X11/app-chests/RustDesk.chest      a Toolchest entry
+/usr/lib/X11/app-chests/R-DeskVint.chest      a Toolchest entry
 ```
 
 Building the package:
@@ -178,7 +178,7 @@ src/                    the IRIX backend — the part that would ship
   capture.rs              the Rust side, keeping the PPC agent's BANDS API
   input_shim.c            keyboard and pointer injection over XTEST
 ports/rust/             the build: target spec, compat archive, crate harness
-  agent-portable/         where rustdesk-agent and the test binaries are built
+  agent-portable/         where r-deskvint-irix and the test binaries are built
   env.sh                  private RUSTUP_HOME/CARGO_HOME and build vars
   build-compat.sh         the compat archive; run once per clone
 ports/iris-run/         emulator harness: iris.toml, nvram, gsh.py

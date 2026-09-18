@@ -19,21 +19,21 @@
 # register somewhere that does not exist.
 #
 # `ps -e -o pid,args`, never plain `ps -e`: IRIX truncates COMD to eight
-# characters, so `grep rustdesk-agent-gui` against it matches nothing.
+# characters, so `grep r-deskvint-irix-gui` against it matches nothing.
 #
 # Runs against the /tmp build by default and against the INSTALLED one when
 # asked, which is worth doing after a package install because it exercises the
 # paths a person actually gets -- the panel finding its helper, and the helper
 # finding the agent, neither of which is the same lookup as in /tmp:
 #
-#   RD_GUI=/usr/local/sbin/rustdesk-agent-gui RD_HELPER= sh /tmp/gui-press.sh
+#   RD_GUI=/usr/local/sbin/r-deskvint-irix-gui RD_HELPER= sh /tmp/gui-press.sh
 #
 # An empty RD_HELPER means "let the panel search", which is the whole point
 # there.
 DISPLAY=:0; export DISPLAY
 LD_LIBRARYN32_PATH=/usr/sgug/lib32; export LD_LIBRARYN32_PATH
 RD_GUI_GEOM=1; export RD_GUI_GEOM
-GUI=${RD_GUI:-/tmp/rustdesk-agent-gui}
+GUI=${RD_GUI:-/tmp/r-deskvint-irix-gui}
 if [ -n "${RD_HELPER+set}" ]; then
     export RD_HELPER
 else
@@ -41,7 +41,7 @@ else
 fi
 # Whichever helper the panel is going to use is the one this script should drive
 # too, or the "before" and "after" it prints describe a different machine.
-HELPER=${RD_HELPER:-/usr/local/lib/rustdesk-agent/agent-helper.sh}
+HELPER=${RD_HELPER:-/usr/local/lib/r-deskvint-irix/agent-helper.sh}
 [ -x "$HELPER" ] || HELPER=/tmp/agent-helper.sh
 CONF=$HOME/.rustdesk-ppc-agent.conf
 cd /tmp
@@ -62,10 +62,10 @@ else
     exit 1
 fi
 
-for p in `ps -e -o pid,args | grep rustdesk-agent-gui | grep -v grep | awk '{print $1}'`; do
+for p in `ps -e -o pid,args | grep r-deskvint-irix-gui | grep -v grep | awk '{print $1}'`; do
     kill -9 $p 2>/dev/null
 done
-for p in `ps -e -o pid,args | awk '{ c = $2; sub(/.*\//, "", c); if (c == "rustdesk-agent") print $1 }'`; do
+for p in `ps -e -o pid,args | awk '{ c = $2; sub(/.*\//, "", c); if (c == "r-deskvint-irix") print $1 }'`; do
     kill -9 $p 2>/dev/null
 done
 sleep 2
@@ -90,7 +90,7 @@ nohup "$GUI" > /tmp/gui.log 2>&1 &
 # before that. Twenty seconds covers both on an emulated R5000.
 sleep 20
 echo "panel: $GUI, helper: $HELPER"
-echo "panels running: `ps -e -o pid,args | grep rustdesk-agent-gui | grep -v grep | wc -l`"
+echo "panels running: `ps -e -o pid,args | grep r-deskvint-irix-gui | grep -v grep | wc -l`"
 echo "--- geometry ---"
 grep '^geom' /tmp/gui.log
 
@@ -103,10 +103,10 @@ w() {
 # How many agents are running, as a bare number. `expr` strips the leading
 # whitespace `wc -l` leaves, which `test -eq` will not.
 # Match the basename of argv[0] exactly, not the command line: `grep
-# rustdesk-agent` also matches the panel, and -- once the software is installed
-# -- the helper's own shell, because the helper lives in /usr/local/lib/rustdesk-agent.
+# r-deskvint-irix` also matches the panel, and -- once the software is installed
+# -- the helper's own shell, because the helper lives in /usr/local/lib/r-deskvint-irix.
 agent_count() {
-    expr `ps -e -o pid,args | awk '{ c = $2; sub(/.*\//, "", c); if (c == "rustdesk-agent") print $1 }' | wc -l` + 0
+    expr `ps -e -o pid,args | awk '{ c = $2; sub(/.*\//, "", c); if (c == "r-deskvint-irix") print $1 }' | wc -l` + 0
 }
 
 # wait_agents COUNT SECONDS -- poll rather than sleep a guess.

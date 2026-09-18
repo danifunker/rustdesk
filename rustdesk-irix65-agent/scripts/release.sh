@@ -55,7 +55,7 @@ load_local_conf
 [ -n "$VERSION" ] || VERSION=$(version_string)
 [ -n "$OUTDIR" ]  || OUTDIR="$REPO/dist"
 
-echo "=== rustdesk-agent for IRIX, $VERSION ==="
+echo "=== r-deskvint-irix for IRIX, $VERSION ==="
 echo
 
 if [ "$DO_BUILD" = 1 ]; then

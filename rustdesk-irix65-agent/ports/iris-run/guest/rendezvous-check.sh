@@ -15,11 +15,11 @@ cd /tmp
 for p in `ps -e | grep rustdesk | awk '{print $1}'`; do kill -9 $p 2>/dev/null; done
 sleep 2
 echo "--- pointing it at the stand-in ---"
-./rustdesk-agent --server 192.168.0.1 2>&1 | tail -3
+./r-deskvint-irix --server 192.168.0.1 2>&1 | tail -3
 echo "--- what got persisted ---"
 grep -E "^(id|server|relay|key|api)" /root/.rustdesk-ppc-agent.conf
 echo "--- running for 25 s ---"
-nohup ./rustdesk-agent -v --listen 0.0.0.0 --port 21118 > /tmp/agent.log 2>&1 &
+nohup ./r-deskvint-irix -v --listen 0.0.0.0 --port 21118 > /tmp/agent.log 2>&1 &
 sleep 25
 grep -i rendezvous /tmp/agent.log | head -6
 for p in `ps -e | grep rustdesk | awk '{print $1}'`; do kill -9 $p 2>/dev/null; done

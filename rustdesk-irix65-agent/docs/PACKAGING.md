@@ -150,11 +150,11 @@ every run.
 ## What the package contains, and why so little
 
 ```
-/usr/local/sbin/rustdesk-agent                    the agent
-/usr/local/sbin/rustdesk-agent-gui                the Motif settings panel
-/usr/local/lib/rustdesk-agent/agent-helper.sh     everything that decides anything
-/usr/local/lib/rustdesk-agent/libgcc_s.so.1       the one library IRIX does not ship
-/usr/lib/X11/app-chests/RustDesk.chest      the Toolchest entry
+/usr/local/sbin/r-deskvint-irix                    the agent
+/usr/local/sbin/r-deskvint-irix-gui                the Motif settings panel
+/usr/local/lib/r-deskvint-irix/agent-helper.sh     everything that decides anything
+/usr/local/lib/r-deskvint-irix/libgcc_s.so.1       the one library IRIX does not ship
+/usr/lib/X11/app-chests/R-DeskVint.chest      the Toolchest entry
 ```
 
 The agent links **libsodium, libvpx, mbedTLS, zstd and zlib statically**, so
@@ -170,7 +170,7 @@ against the sysroot therefore started on the build image and died everywhere
 else with
 
 ```
-rld: Error: unresolvable symbol in /usr/local/sbin/rustdesk-agent: compressBound
+rld: Error: unresolvable symbol in /usr/local/sbin/r-deskvint-irix: compressBound
 rld: Fatal Error: this executable has unresolvable symbols
 ```
 
@@ -199,7 +199,7 @@ and only one of them is any good:
 - **`/usr/lib32/libgcc_s.so.1`.** Dropping a GCC runtime into a system directory
   where some unrelated program will find it in a year's time.
 - **An rpath.** The binary is linked with
-  `-Wl,-rpath,/usr/local/lib/rustdesk-agent`, the package puts a copy there, and it
+  `-Wl,-rpath,/usr/local/lib/r-deskvint-irix`, the package puts a copy there, and it
   simply works with no environment and no wrapper. This is what it does.
 
 `scripts/iris-install-test.sh` runs the installed agent with
@@ -220,11 +220,11 @@ It found a bug that cannot exist anywhere else. `agent-helper.sh` decides
 whether the agent is running with
 
 ```sh
-ps -e -o pid,args | grep rustdesk-agent
+ps -e -o pid,args | grep r-deskvint-irix
 ```
 
 which is correct in `/tmp` and wrong the moment the software is installed,
-because the helper then lives in `/usr/lib/`**`rustdesk-agent`**`/agent-helper.sh`
+because the helper then lives in `/usr/lib/`**`r-deskvint-irix`**`/agent-helper.sh`
 — so the pattern matches the helper's own shell, `is_running` always answers
 yes, and the panel's **Start button is greyed out for ever**. Nothing on the
 build host can see that. Nothing in a `/tmp` test can see it. It appears exactly
@@ -242,7 +242,7 @@ are all stock. Motif 1.2.4 is what 6.5 ships.
 
 An inst product is three files — a spec, an idb, and a `.sw` archive in SGI's
 own format — and `gendist`(1M) is the only thing that writes them. It runs in
-the guest. `inst/rustdesk-agent.spec` and `inst/rustdesk-agent.idb` are
+the guest. `inst/r-deskvint-irix.spec` and `inst/r-deskvint-irix.idb` are
 templates; `stage_inst_inputs` in `scripts/ci-lib.sh` stamps the version and
 the ABI into them, and the whole staged tree goes into the guest as one tar.
 
@@ -250,7 +250,7 @@ The idb must be **sorted by destination path** or gendist rejects it. There is a
 check for that in the repository:
 
 ```sh
-LC_ALL=C sort -k5,5 -c inst/rustdesk-agent.idb
+LC_ALL=C sort -k5,5 -c inst/r-deskvint-irix.idb
 ```
 
 The numeric inst version is the first ten digits of the release version, which
@@ -284,15 +284,15 @@ inst -f /path/to/unpacked-tardist
 #   go
 
 # or, without inst
-gunzip -c rustdesk-agent-VERSION-n32.tar.gz | tar xf -
-cd rustdesk-agent-VERSION-n32 && sh install.sh
+gunzip -c r-deskvint-irix-VERSION-n32.tar.gz | tar xf -
+cd r-deskvint-irix-VERSION-n32 && sh install.sh
 ```
 
 `install.sh` does the same thing by hand, honours a different prefix with `-p`,
 and `-u` removes what it put there.
 
 A non-default prefix breaks two lookups that are compiled in — the agent's rpath
-names `/usr/local/lib/rustdesk-agent`, and the panel searches beside `argv[0]` and
+names `/usr/local/lib/r-deskvint-irix`, and the panel searches beside `argv[0]` and
 then that same directory for the helper. Both are bridged with a small wrapper
 that sets a variable, because nothing should quietly rewrite a linked path
 behind anyone's back. The helper needs no wrapper: it looks beside *itself*

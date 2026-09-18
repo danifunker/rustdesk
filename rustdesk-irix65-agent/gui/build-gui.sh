@@ -33,7 +33,7 @@ set -e
 
 SGUG=${SGUG:-/opt/sgug-staging/usr/sgug}
 CC=${CC:-$SGUG/bin/irix-cc}
-OUT=${OUT:-$(cd "$(dirname "$0")" && pwd)/rustdesk-agent-gui}
+OUT=${OUT:-$(cd "$(dirname "$0")" && pwd)/r-deskvint-irix-gui}
 SRC=$(cd "$(dirname "$0")" && pwd)/gui_motif.c
 
 if [ ! -f /opt/irix-sysroot/usr/include/Xm/Xm.h ]; then

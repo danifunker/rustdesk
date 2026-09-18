@@ -11,4 +11,4 @@ LD_LIBRARYN32_PATH=/usr/sgug/lib32; export LD_LIBRARYN32_PATH
 cd /tmp
 ./testpeer 127.0.0.1:21118 hunter2 12 move 100 100 2>&1 | grep -E "display|pointer|sent a"
 echo "--- and where the pointer actually is, natively ---"
-./rustdesk-agent --probe-live 2>&1 | grep -i "cursor before" | head -2
+./r-deskvint-irix --probe-live 2>&1 | grep -i "cursor before" | head -2

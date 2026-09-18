@@ -1,9 +1,9 @@
 /*
- * rustdesk-agent-gui -- the IRIX settings panel for the RustDesk agent.
+ * r-deskvint-irix-gui -- the IRIX settings panel for the RustDesk agent.
  *
  * IRIS IM (OSF/Motif) front end, built as a SECOND binary beside the agent
  * itself. The agent is a headless daemon and stays one: everything here can be
- * done with `rustdesk-agent --server ...` and friends, and this exists because
+ * done with `r-deskvint-irix --server ...` and friends, and this exists because
  * a settings *window* is a different thing from a settings *command* to the
  * person at the machine.
  *
@@ -13,7 +13,7 @@
  * bundle's app-ui.m, and the reason is the same in all three: the interface is
  * the part that can only be exercised by a person sitting in front of it, so it
  * should hold as little as possible. Here it also keeps the panel honest about
- * the CLI -- each `set` verb is one `rustdesk-agent --flag` invocation, so the
+ * the CLI -- each `set` verb is one `r-deskvint-irix --flag` invocation, so the
  * window cannot drift into having its own idea of what a setting means.
  *
  * WRITTEN AGAINST THE MOTIF 1.2 API DELIBERATELY. That is what IRIX 6.5 ships
@@ -486,7 +486,7 @@ static void apply_cb(Widget w, XtPointer client, XtPointer call)
 	 * COPY IT. helper() returns a static buffer and refresh_state() calls
 	 * helper() again, so `out` afterwards points at the STATUS BLOB rather
 	 * than at what this Apply did -- which is precisely what the status line
-	 * showed on the machine: `agent=/usr/sbin/rustdesk-agent present=yes
+	 * showed on the machine: `agent=/usr/sbin/r-deskvint-irix present=yes
 	 * running=yes id=...`, one long line of key=value where a sentence
 	 * belonged. Before set_status was taught to flatten newlines it was
 	 * worse: the label grew to fit and drew off the bottom of the window.
@@ -550,7 +550,7 @@ static void about_cb(Widget w, XtPointer client, XtPointer call)
 		 "Screen sharing and remote control for SGI workstations,\n"
 		 "speaking the RustDesk protocol.\n\n"
 		 "This panel only sets what the agent's own command line sets;\n"
-		 "anything here can be done with rustdesk-agent --help.",
+		 "anything here can be done with r-deskvint-irix --help.",
 		 0);
 }
 
@@ -775,7 +775,7 @@ static void find_helper(const char *argv0)
 			return;
 	}
 	/* Where the package puts it. This has to be here: installed, the panel
-	 * is $PREFIX/sbin/rustdesk-agent-gui, so "beside argv[0]" looks in sbin
+	 * is $PREFIX/sbin/r-deskvint-irix-gui, so "beside argv[0]" looks in sbin
 	 * and finds nothing -- and the first install test duly fell through to
 	 * the /tmp copy, which existed only because that machine had been used
 	 * for development. On anyone else's machine the panel would have found
@@ -784,13 +784,13 @@ static void find_helper(const char *argv0)
 	 * /usr/lib is still searched after /usr/local: the package installed
 	 * there until 2026-09-17, and a panel from a new build should still find
 	 * an older install rather than silently falling through to /tmp. */
-	strcpy(helper_path, "/usr/local/lib/rustdesk-agent/agent-helper.sh");
+	strcpy(helper_path, "/usr/local/lib/r-deskvint-irix/agent-helper.sh");
 	if (access(helper_path, X_OK) == 0)
 		return;
-	strcpy(helper_path, "/usr/lib/rustdesk-agent/agent-helper.sh");
+	strcpy(helper_path, "/usr/lib/r-deskvint-irix/agent-helper.sh");
 	if (access(helper_path, X_OK) == 0)
 		return;
-	strcpy(helper_path, "/usr/sgug/lib/rustdesk-agent/agent-helper.sh");
+	strcpy(helper_path, "/usr/sgug/lib/r-deskvint-irix/agent-helper.sh");
 	if (access(helper_path, X_OK) == 0)
 		return;
 	strcpy(helper_path, "/tmp/agent-helper.sh");

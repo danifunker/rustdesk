@@ -121,7 +121,7 @@ the archive but not the reason.
 
 | binary | what it is |
 |---|---|
-| `rustdesk-agent` | the agent, built from the PPC tree's `main.rs` |
+| `r-deskvint-irix` | the agent, built from the PPC tree's `main.rs` |
 | `testpeer` | a client that speaks the real protocol; how to test without RustDesk |
 | `capture-selftest` | the capture module through its Rust API, all paths |
 | `pipeline` | capture → scale → convert → encode, with per-stage timings |
@@ -143,13 +143,13 @@ libgcc_s.so.1                                                          ← NOT o
 `panic=abort`. It is in the staging tree at
 `/opt/sgug-staging/usr/sgug/lib32/libgcc_s.so.1`.
 
-**The binary carries an rpath of `/usr/local/lib/rustdesk-agent`**, which is where the
+**The binary carries an rpath of `/usr/local/lib/r-deskvint-irix`**, which is where the
 package puts a copy — so an installed agent needs no environment variable and no
 wrapper. Running one straight out of `target/` on a development machine, where
 nothing is installed, still wants the old incantation:
 
 ```sh
-LD_LIBRARYN32_PATH=/usr/sgug/lib32 rustdesk-agent --password <PASSWORD>
+LD_LIBRARYN32_PATH=/usr/sgug/lib32 r-deskvint-irix --password <PASSWORD>
 ```
 
 ## Making something installable
@@ -194,8 +194,8 @@ links fine; this only bites on the extensions SGI shipped static.
 Against a real or emulated IRIX machine with X running:
 
 ```sh
-rustdesk-agent --password hunter2         # once
-rustdesk-agent --listen 127.0.0.1 --port 21118 &
+r-deskvint-irix --password hunter2         # once
+r-deskvint-irix --listen 127.0.0.1 --port 21118 &
 testpeer 127.0.0.1:21118 hunter2 120
 ```
 
@@ -205,8 +205,8 @@ arrived. For the capture path on its own:
 ```sh
 capture-selftest          # all three paths, band mapping, rebuild-after-drop
 pipeline 4 2              # timings at 1/4 and 1/2 scale
-rustdesk-agent --probe-display    # the agent's own view of the framebuffer
-rustdesk-agent --probe-live       # mouse injection self-test
+r-deskvint-irix --probe-display    # the agent's own view of the framebuffer
+r-deskvint-irix --probe-live       # mouse injection self-test
 ```
 
 `probes/` holds the C probes that established the platform's behaviour in the

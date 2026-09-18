@@ -135,8 +135,8 @@ rm -rf dist && mkdir dist || exit 1
 # start. The idb has already been version- and ABI-stamped on the host.
 /usr/sbin/gendist -verbose \
     -sbase /tmp/gd \
-    -idb   /tmp/gd/rustdesk-agent.idb \
-    -spec  /tmp/gd/rustdesk-agent.spec \
+    -idb   /tmp/gd/r-deskvint-irix.idb \
+    -spec  /tmp/gd/r-deskvint-irix.spec \
     -dist  /tmp/gd/dist \
     -all
 rc=$?
@@ -149,7 +149,7 @@ chmod 755 "$STAGE/gendist-run.sh"
 
 TARBALL="$REPO/build/gd-stage.tar"
 mkdir -p "$REPO/build"
-( cd "$STAGE" && tar cf "$TARBALL" bin lib chest rustdesk-agent.spec rustdesk-agent.idb gendist-run.sh )
+( cd "$STAGE" && tar cf "$TARBALL" bin lib chest r-deskvint-irix.spec r-deskvint-irix.idb gendist-run.sh )
 echo "    $(ls -l "$TARBALL" | awk '{print $5}') bytes to move in"
 
 # ---- 2. serve it, and pull it in from the guest -------------------------------
@@ -189,7 +189,7 @@ echo ">>> pulling the product back over the serial console"
 mkdir -p "$OUT"
 IRIS_CI_BIN="$CI_BIN"
 export IRIS_CI_BIN
-for f in rustdesk_agent rustdesk_agent.idb rustdesk_agent.sw; do
+for f in r_deskvint_irix r_deskvint_irix.idb r_deskvint_irix.sw; do
 	guest_get "/tmp/gd/dist/$f" "$OUT/$f" ||
 		die "could not fetch /tmp/gd/dist/$f after three tries. iris-ci get needs
 a shell on the serial console -- 'iris-ci login root' first -- and see guest_get

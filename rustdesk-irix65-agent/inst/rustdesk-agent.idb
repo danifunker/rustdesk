@@ -1,8 +1,0 @@
-f 0644 root sys usr/lib/X11/app-chests/RustDesk.chest chest/RustDesk.chest rustdesk_agent.sw.@SUBSYS@
-d 0755 root sys usr/local/lib/rustdesk-agent lib rustdesk_agent.sw.@SUBSYS@
-f 0755 root sys usr/local/lib/rustdesk-agent/agent-helper.sh lib/agent-helper.sh rustdesk_agent.sw.@SUBSYS@
-f 0755 root sys usr/local/lib/rustdesk-agent/libgcc_s.so.1 lib/libgcc_s.so.1 rustdesk_agent.sw.@SUBSYS@
-f 0755 root sys usr/local/lib/rustdesk-agent/rustdesk_agent.init lib/rustdesk_agent.init rustdesk_agent.sw.@SUBSYS@
-f 0644 root sys usr/local/sbin/cacert.pem bin/cacert.pem rustdesk_agent.sw.@SUBSYS@
-f 0755 root sys usr/local/sbin/rustdesk-agent bin/rustdesk-agent rustdesk_agent.sw.@SUBSYS@
-f 0755 root sys usr/local/sbin/rustdesk-agent-gui bin/rustdesk-agent-gui rustdesk_agent.sw.@SUBSYS@

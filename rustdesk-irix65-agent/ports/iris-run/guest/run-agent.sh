@@ -10,7 +10,7 @@
 for p in `ps -e | grep rustdesk | awk '{print $1}'`; do kill -9 $p 2>/dev/null; done
 sleep 2
 cd /tmp
-DISPLAY=:0 LD_LIBRARYN32_PATH=/usr/sgug/lib32 nohup /tmp/rustdesk-agent -v \
+DISPLAY=:0 LD_LIBRARYN32_PATH=/usr/sgug/lib32 nohup /tmp/r-deskvint-irix -v \
     --listen 0.0.0.0 --port 21118 > /tmp/agent.log 2>&1 &
 sleep 10
 grep -E "agent listening|capture path|password" /tmp/agent.log | tail -3

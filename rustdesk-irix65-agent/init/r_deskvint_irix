@@ -6,7 +6,7 @@
 # Installed by `agent-helper.sh service install`, which also makes the rc
 # links and registers the chkconfig flag. Turn it on with:
 #
-#	chkconfig rustdesk_agent on
+#	chkconfig r_deskvint_irix on
 #
 # Ordering: S99 in rc2.d, after xdm at S98; K01 in rc0.d, before xdm at K02, so
 # the agent is down before the server it might be holding a connection to.
@@ -28,7 +28,7 @@
 # how they drift.
 
 IS_ON=/etc/chkconfig
-HELPER=/usr/local/lib/rustdesk-agent/agent-helper.sh
+HELPER=/usr/local/lib/r-deskvint-irix/agent-helper.sh
 
 if $IS_ON verbose; then
 	ECHO=echo
@@ -39,9 +39,9 @@ fi
 
 case "$1" in
 'start')
-	$IS_ON rustdesk_agent || exit 0
+	$IS_ON r_deskvint_irix || exit 0
 	if [ ! -x "$HELPER" ]; then
-		echo "rustdesk_agent: no helper at $HELPER; not starting."
+		echo "r_deskvint_irix: no helper at $HELPER; not starting."
 		exit 1
 	fi
 	$ECHO "Starting the RustDesk agent."
