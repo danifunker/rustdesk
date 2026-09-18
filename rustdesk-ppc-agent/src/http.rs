@@ -378,7 +378,8 @@ pub fn post_json(url: &Url, path: &str, body: &str, ca: Option<&CaBundle>) -> io
         url.prefix,
         path,
         url.host_header(),
-        env!("CARGO_PKG_VERSION"),
+        // The build's version when it was given one; see main.rs `version`.
+        option_env!("RD_VERSION").unwrap_or(env!("CARGO_PKG_VERSION")),
         body.len(),
         body
     );

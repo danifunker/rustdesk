@@ -16,6 +16,18 @@ const DEFAULT_PORT: u16 = 21118;
 /// install already refers to would buy nothing and break upgrades.
 const PRODUCT: &str = "R-DeskVint";
 
+/// Which build this is, for a person reading the banner or `--help`.
+///
+/// What the build says it is when it says: the IRIX pipeline passes
+/// `version_string` (scripts/ci-lib.sh) -- the commit's date and nine
+/// characters of its hash, `20260918-cf5c43c05` -- in RD_VERSION, the same
+/// string the package is named for. Otherwise Cargo's package version, which on
+/// IRIX is the crate's placeholder 0.1.0 and said the same thing of every build.
+/// A function rather than a const so mrustc has nothing to evaluate.
+fn version() -> &'static str {
+    option_env!("RD_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"))
+}
+
 /// Which machine this build serves. Four ports compile this same file, so the
 /// banner has to ask rather than assert -- before this it told an IRIX user and
 /// a Solaris user alike that they were running a PowerPC Mac.
@@ -131,7 +143,7 @@ OPTIONS:
 Use --log trace to see every frame and message during a handshake; that is the
 fastest way to find where a client diverges.",
         p,
-        env!("CARGO_PKG_VERSION"),
+        version(),
         PRODUCT,
         PLATFORM,
         DEFAULT_PORT,
@@ -511,7 +523,7 @@ fn main() {
         secure,
     };
     let server = cfg.rendezvous_server();
-    println!("{} {} on {}", PRODUCT, env!("CARGO_PKG_VERSION"), PLATFORM);
+    println!("{} {} on {}", PRODUCT, version(), PLATFORM);
     // Which file this came out of. There can be two now -- a machine-wide one
     // and a per-user one -- and "which settings am I actually running with" is
     // the first question anyone asks when the answer surprises them.
@@ -1289,7 +1301,15 @@ impl log::Log for StderrLogger {
         }
         // Seconds since start rather than wall-clock: no chrono, and elapsed
         // time is what matters when reading a handshake trace.
-        eprintln!("[{:>7.3}] {:<5} {}", since_start(), r.level(), r.args());
+        //
+        // Formatted whole, then written once. stderr is unbuffered, so
+        // `eprintln!` wrote every piece of the format separately: thirteen
+        // write(2) calls for one line, measured with `par` on IRIX, where the
+        // agent runs at debug level and logs every mouse event. And it panics
+        // if the write fails -- a full disk, a closed log -- which with
+        // panic=abort ends the agent over a log line. A lost line is better.
+        let line = format!("[{:>7.3}] {:<5} {}\n", since_start(), r.level(), r.args());
+        let _ = std::io::Write::write_all(&mut std::io::stderr().lock(), line.as_bytes());
     }
     fn flush(&self) {}
 }

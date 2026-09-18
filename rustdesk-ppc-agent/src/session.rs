@@ -1649,8 +1649,17 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
     #[cfg_attr(not(all(any(target_os = "macos", target_os = "irix"), not(no_vpx))), allow(unused_mut))]
     let mut idle_last_pass = true;
 
+    // Where the loop's time goes, reported at debug every LOOP_REPORT. Cheap
+    // enough to leave in: four clock reads a pass. What it answers is the
+    // question an agent that is slow but "idle" raises -- is the cost in this
+    // loop, or in another thread -- by setting the loop's own busy time beside
+    // the whole process's CPU.
+    let mut clock = LoopClock::new();
+
     loop {
+        let pass_start = std::time::Instant::now();
         pump_input!(idle_last_pass);
+        let after_wait = std::time::Instant::now();
         keep_alive!();
         #[cfg(all(any(target_os = "macos", target_os = "irix", target_os = "solaris"), not(no_vpx)))]
         {
@@ -1781,6 +1790,8 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
             }
         }
 
+        let after_video = std::time::Instant::now();
+
         // The screenshot the peer asked for. Outside the video block on purpose:
         // a session with no capture at all still has to answer, because
         // `ScreenshotResponse.msg` is documented as "empty if success", so a
@@ -1856,6 +1867,57 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
         // pointer themselves, and no input event announces that.
         #[cfg(any(target_os = "macos", target_os = "irix", target_os = "solaris"))]
         send_cursor_position(peer, &mut cursor_tracker, last_peer_input)?;
+
+        clock.pass(pass_start, after_wait, after_video);
+    }
+}
+
+/// How often the session loop reports where its time went.
+const LOOP_REPORT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The session loop's time, split three ways, and the process's CPU beside it.
+struct LoopClock {
+    since: std::time::Instant,
+    cpu_since: std::time::Duration,
+    passes: u32,
+    wait: std::time::Duration,
+    video: std::time::Duration,
+    rest: std::time::Duration,
+}
+
+impl LoopClock {
+    fn new() -> Self {
+        Self {
+            since: std::time::Instant::now(),
+            cpu_since: crate::sys::process_cpu(),
+            passes: 0,
+            wait: std::time::Duration::ZERO,
+            video: std::time::Duration::ZERO,
+            rest: std::time::Duration::ZERO,
+        }
+    }
+
+    fn pass(&mut self, start: std::time::Instant, after_wait: std::time::Instant, after_video: std::time::Instant) {
+        let end = std::time::Instant::now();
+        self.passes += 1;
+        self.wait += after_wait - start;
+        self.video += after_video - after_wait;
+        self.rest += end - after_video;
+        let span = self.since.elapsed();
+        if span >= LOOP_REPORT {
+            let cpu = crate::sys::process_cpu();
+            let ms = |d: std::time::Duration| d.as_millis();
+            log::debug!(
+                "loop: {} passes in {} ms -- waiting {} ms, video {} ms, rest {} ms; process cpu {} ms",
+                self.passes,
+                ms(span),
+                ms(self.wait),
+                ms(self.video),
+                ms(self.rest),
+                ms(cpu.saturating_sub(self.cpu_since))
+            );
+            *self = Self::new();
+        }
     }
 }
 

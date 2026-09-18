@@ -78,6 +78,15 @@ typedef Cardinal XtArgcType;
  * localise the panel from app-defaults without a rebuild -- the same reason
  * irixscsitb does it.
  */
+/* Which build this is: scripts/build.sh passes version_string (ci-lib.sh), the
+ * commit's date and nine characters of its hash -- the same string the package
+ * is named for -- through build-gui.sh. Shown in the title and the About box,
+ * because until it was, nothing a person could look at said which build was
+ * installed. */
+#ifndef RD_VERSION
+#define RD_VERSION "(development build)"
+#endif
+
 static String fallback_resources[] = {
 	"*useSchemes: all",
 	"*schemeFileList: SgiSpec",
@@ -85,7 +94,7 @@ static String fallback_resources[] = {
 	"*sgiMode: true",
 	/* The first component must be the application NAME (argv[0]) or its
 	 * CLASS, or the WM silently falls back to the bare binary name. */
-	"Rustdeskagentgui.title: R-DeskVint",
+	"Rustdeskagentgui.title: R-DeskVint " RD_VERSION,
 	"*logText.fontList: fixed",
 	"*logText.columns: 74",
 	"*logText.rows: 8",
@@ -546,7 +555,8 @@ static void about_cb(Widget w, XtPointer client, XtPointer call)
 {
 	(void)w; (void)client; (void)call;
 	show_msg("About",
-		 "R-DeskVint for IRIX\n\n"
+		 "R-DeskVint for IRIX\n"
+		 "Version " RD_VERSION "\n\n"
 		 "Screen sharing and remote control for SGI workstations,\n"
 		 "speaking the RustDesk protocol.\n\n"
 		 "This panel only sets what the agent's own command line sets;\n"

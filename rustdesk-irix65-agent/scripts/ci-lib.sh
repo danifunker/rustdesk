@@ -99,14 +99,29 @@ version_string() {
 # dist_version_from VERSION -- the numeric version inst wants.
 #
 # inst compares versions numerically to decide what is an upgrade, so a version
-# that starts with the date orders correctly for free. This keeps the first ten
-# digits of the version string: the eight of YYYYMMDD, then whatever two digits
-# fall out of the revision hash. Those two are arbitrary but deterministic --
-# the same commit always gives the same number -- so they break a same-day tie
-# consistently and never reorder two different days. `replaces self` in the spec
-# means an equal version still installs.
+# that starts with the date orders correctly for free. Ten digits: YYYYMMDD from
+# the version string, then two for WHEN IN THAT DAY the commit was made -- the
+# fraction of the UTC day gone, 00 to 99, about a quarter of an hour each.
+# `replaces self` in the spec means an equal version still installs.
+#
+# The two digits used to be whatever fell out of the revision hash: stable, but
+# arbitrary, so two commits on one day could order backwards -- cf5c43c05 was
+# 2026091854 and the ed74049 before it 2026091874, and inst would call the newer
+# build a downgrade. Time of day is monotonic. (And it clears both: a commit
+# made after 17:46 UTC on 2026-09-18, which is every one since, is 75 or more.)
+#
+# Only for this checkout's own version: anything else -- a --version given by
+# hand, a build with no git -- gets 00, which is still ordered by the date.
 dist_version_from() {
-	printf %s "$1" | tr -cd '0-9' | cut -c1-10
+	_dv_date=$(printf %s "$1" | cut -c1-8 | tr -cd '0-9')
+	_dv_frac=00
+	_dv_rev=$(printf %s "$1" | cut -d- -f2)
+	if [ -n "$_dv_rev" ] &&
+	   [ "$_dv_rev" = "$(git -C "$REPO" rev-parse HEAD 2>/dev/null | cut -c1-9)" ]; then
+		_dv_hm=$(TZ=UTC git -C "$REPO" log -1 --format=%cd --date=format-local:%H:%M HEAD)
+		_dv_frac=$(printf %s "$_dv_hm" | awk -F: '{ printf "%02d", int(($1 * 60 + $2) * 100 / 1440) }')
+	fi
+	printf '%s%s' "$_dv_date" "$_dv_frac"
 }
 
 # stage_inst_inputs FLAVOR DISTVER DESTDIR -- write the version-stamped,

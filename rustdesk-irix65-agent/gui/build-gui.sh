@@ -53,7 +53,17 @@ fi
 # no Sg* function, so linking it would only make the panel refuse to build on an
 # IRIX that has Motif without SGI's extensions. Add it back alongside an actual
 # use, not before. (The same reasoning, and the same wording, as irixscsitb's.)
+# The version the panel shows, when the caller has one (scripts/build.sh passes
+# version_string). A string literal, so only the characters version_string can
+# produce -- digits, letters, dashes -- are let through.
+VFLAG=""
+if [ -n "${RD_VERSION:-}" ]; then
+    case "$RD_VERSION" in
+        *[!A-Za-z0-9.-]*) echo "build-gui.sh: ignoring an odd RD_VERSION: $RD_VERSION" >&2 ;;
+        *) VFLAG="-DRD_VERSION=\"$RD_VERSION\"" ;;
+    esac
+fi
 set -x
-"$CC" -O2 -D_XmConst= -o "$OUT" "$SRC" -lXm -lXt -lXext -lX11 -lm
+"$CC" -O2 -D_XmConst= $VFLAG -o "$OUT" "$SRC" -lXm -lXt -lXext -lX11 -lm
 set +x
 echo "built $OUT"

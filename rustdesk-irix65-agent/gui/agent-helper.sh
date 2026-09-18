@@ -395,8 +395,16 @@ service)
             chkconfig -f r_deskvint_irix off 2>/dev/null || echo off > /etc/config/r_deskvint_irix
         fi
         echo "Installed $INIT, and the rc links."
-        echo "It is registered but OFF. To start it at every boot:"
-        echo "    chkconfig r_deskvint_irix on"
+        # What the flag IS, not what a fresh one would be: on a machine where
+        # it was already on -- a reinstall, an upgrade -- this used to say OFF
+        # and tell the admin to turn on something that was on.
+        if /etc/chkconfig r_deskvint_irix 2>/dev/null; then
+            echo "It is ON: it starts at every boot. To stop that:"
+            echo "    chkconfig r_deskvint_irix off"
+        else
+            echo "It is registered but OFF. To start it at every boot:"
+            echo "    chkconfig r_deskvint_irix on"
+        fi
         echo "and to start it now without rebooting:"
         echo "    $INIT start"
         ;;

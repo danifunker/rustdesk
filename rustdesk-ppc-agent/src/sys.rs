@@ -63,6 +63,22 @@ pub fn wait_readable_fd(fd: std::os::unix::io::RawFd, ms: u64) -> bool {
     n > 0 && (fds.revents & libc::POLLIN) != 0
 }
 
+/// CPU time this process has used, all threads, user plus system.
+///
+/// For the session loop's periodic breakdown: set against the loop's own
+/// busy time it says whether a cost is in the loop or in some other thread.
+#[cfg(unix)]
+pub fn process_cpu() -> std::time::Duration {
+    let mut ru: libc::rusage = unsafe { std::mem::zeroed() };
+    if unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut ru) } != 0 {
+        return std::time::Duration::ZERO;
+    }
+    let tv = |t: libc::timeval| {
+        std::time::Duration::from_secs(t.tv_sec as u64) + std::time::Duration::from_micros(t.tv_usec as u64)
+    };
+    tv(ru.ru_utime) + tv(ru.ru_stime)
+}
+
 /// Threads to give a job that can use more than one, leaving the machine
 /// responsive: never more than the cores present, and never more than `cap`.
 ///

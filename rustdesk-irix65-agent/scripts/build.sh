@@ -100,6 +100,12 @@ PPC="${PPC_AGENT_DIR:-$REPO/../rustdesk-ppc-agent}"
 The agent's portable modules are included from it by #[path]; the two trees must
 stay siblings. Set PPC_AGENT_DIR in ci/local.conf if it lives somewhere else."
 
+# What the agent's banner and --help, and the panel's title and About box, say
+# this build is: the string the package is named for. See main.rs `version`.
+RD_VERSION="${RD_VERSION:-$(version_string)}"
+export RD_VERSION
+echo ">>> version: $RD_VERSION"
+
 # ---- 1. the agent ------------------------------------------------------------
 if [ "$DO_AGENT" = 1 ]; then
 	# env.sh resolves its own location, so this works from any directory and
