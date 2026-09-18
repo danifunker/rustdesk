@@ -18,6 +18,7 @@
 #include <sys/types.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
+#include <sgidefs.h>    /* _MIPS_ISA_MIPS4 -- see RD_MIPS4 below */
 
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
@@ -914,6 +915,117 @@ static unsigned char clamp8(int v)
 #define V_OF(r, g, b, sh) \
     clamp8(((((112 * (r) - 94 * (g) - 18 * (b)) >> (sh)) + 128) >> 8) + 128)
 
+/* MIPS IV builds only: the same kernels with a word load per source pixel and
+ * a prefetch 256 bytes ahead on each source row.
+ *
+ * Conversion is memory-bound on the O2's R10000: the byte-load kernels below
+ * run at ~85 ns a source pixel at 1/2 scale against ~63 ns for a bare read of
+ * the same pixels (probes/convbench.c, on the O2). Prefetch -- MIPS IV's
+ * `pref` -- is what closes that gap; word loads alone are slightly SLOWER than
+ * byte loads, which is why a MIPS III build keeps the kernels below.
+ * Measured on the O2, a full 1280x1024 source: 1/2 scale 112 -> 84-88 ms, full
+ * scale 202 -> 175 ms. Output byte-identical to the byte-load kernels.
+ *
+ * ABGR words on this big-endian machine are A<<24 | B<<16 | G<<8 | R, so
+ * w & 0x00ff00ff holds B and R in separate 16-bit lanes, and up to sixteen of
+ * them sum without a carry crossing lanes (16 x 255 < 65536).
+ *
+ * <sgidefs.h> is included above on purpose. Without it _MIPS_ISA_MIPS4 is not
+ * defined, the test below compares 0 with 0, and a MIPS III build would get
+ * `pref` -- a SIGILL on an R4400. (build.sh's instruction scan would catch it.)
+ * `pref` never faults, so prefetching past the end of the canvas is harmless. */
+#if defined(_MIPS_ISA_MIPS4) && defined(_MIPS_ISA) && _MIPS_ISA == _MIPS_ISA_MIPS4
+#define RD_MIPS4 1
+#define RD_PREFETCH_AHEAD 256
+#define RD_PREF(p) __asm__ volatile("pref 0, 0(%0)" : : "r"(p))
+#define RD_BR(w) ((w) & 0x00ff00ffu)
+#define RD_GG(w) (((w) >> 8) & 0xffu)
+
+static void abgr_to_i420_f2_pref(const unsigned char *src, int src_stride,
+                                 unsigned char *yp, unsigned char *up, unsigned char *vp,
+                                 int dst_w, int chroma_stride,
+                                 int dx0, int dy0, int dx1, int dy1)
+{
+    int by, bx;
+    const int blocks = (dx1 - dx0) / 2;
+    for (by = dy0 / 2; by < dy1 / 2; by++) {
+        const unsigned int *s0 = (const unsigned int *)(src + (size_t)(by * 4) * src_stride
+                                                        + (size_t)dx0 * 8);
+        const unsigned int *s1 = (const unsigned int *)((const unsigned char *)s0 + src_stride);
+        const unsigned int *s2 = (const unsigned int *)((const unsigned char *)s1 + src_stride);
+        const unsigned int *s3 = (const unsigned int *)((const unsigned char *)s2 + src_stride);
+        unsigned char *ya = yp + (size_t)(by * 2) * dst_w + dx0;
+        unsigned char *yb = ya + dst_w;
+        unsigned char *ua = up + (size_t)by * chroma_stride + dx0 / 2;
+        unsigned char *va = vp + (size_t)by * chroma_stride + dx0 / 2;
+        for (bx = 0; bx < blocks; bx++) {
+            const int o = bx * 4;
+            unsigned int a, b, c, d, br0, br1, br2, br3, g0, g1, g2, g3;
+            if ((bx & 3) == 0) {    /* 64 bytes of each row every fourth block */
+                RD_PREF((const char *)(s0 + o) + RD_PREFETCH_AHEAD);
+                RD_PREF((const char *)(s1 + o) + RD_PREFETCH_AHEAD);
+                RD_PREF((const char *)(s2 + o) + RD_PREFETCH_AHEAD);
+                RD_PREF((const char *)(s3 + o) + RD_PREFETCH_AHEAD);
+            }
+            a = s0[o];     b = s0[o + 1]; c = s1[o];     d = s1[o + 1];
+            br0 = RD_BR(a) + RD_BR(b) + RD_BR(c) + RD_BR(d);
+            g0 = RD_GG(a) + RD_GG(b) + RD_GG(c) + RD_GG(d);
+            a = s0[o + 2]; b = s0[o + 3]; c = s1[o + 2]; d = s1[o + 3];
+            br1 = RD_BR(a) + RD_BR(b) + RD_BR(c) + RD_BR(d);
+            g1 = RD_GG(a) + RD_GG(b) + RD_GG(c) + RD_GG(d);
+            a = s2[o];     b = s2[o + 1]; c = s3[o];     d = s3[o + 1];
+            br2 = RD_BR(a) + RD_BR(b) + RD_BR(c) + RD_BR(d);
+            g2 = RD_GG(a) + RD_GG(b) + RD_GG(c) + RD_GG(d);
+            a = s2[o + 2]; b = s2[o + 3]; c = s3[o + 2]; d = s3[o + 3];
+            br3 = RD_BR(a) + RD_BR(b) + RD_BR(c) + RD_BR(d);
+            g3 = RD_GG(a) + RD_GG(b) + RD_GG(c) + RD_GG(d);
+            ya[bx * 2]     = Y_OF((int)(br0 & 0xffff), (int)g0, (int)(br0 >> 16), 2);
+            ya[bx * 2 + 1] = Y_OF((int)(br1 & 0xffff), (int)g1, (int)(br1 >> 16), 2);
+            yb[bx * 2]     = Y_OF((int)(br2 & 0xffff), (int)g2, (int)(br2 >> 16), 2);
+            yb[bx * 2 + 1] = Y_OF((int)(br3 & 0xffff), (int)g3, (int)(br3 >> 16), 2);
+            {
+                unsigned int br = br0 + br1 + br2 + br3, g = g0 + g1 + g2 + g3;
+                ua[bx] = U_OF((int)(br & 0xffff), (int)g, (int)(br >> 16), 4);
+                va[bx] = V_OF((int)(br & 0xffff), (int)g, (int)(br >> 16), 4);
+            }
+        }
+    }
+}
+
+static void abgr_to_i420_f1_pref(const unsigned char *src, int src_stride,
+                                 unsigned char *yp, unsigned char *up, unsigned char *vp,
+                                 int dst_w, int chroma_stride,
+                                 int dx0, int dy0, int dx1, int dy1)
+{
+    int by, bx;
+    for (by = dy0 / 2; by < dy1 / 2; by++) {
+        const unsigned int *s0 = (const unsigned int *)(src + (size_t)(by * 2) * src_stride);
+        const unsigned int *s1 = (const unsigned int *)((const unsigned char *)s0 + src_stride);
+        unsigned char *ya = yp + (size_t)(by * 2) * dst_w;
+        unsigned char *yb = ya + dst_w;
+        unsigned char *ua = up + (size_t)by * chroma_stride;
+        unsigned char *va = vp + (size_t)by * chroma_stride;
+        for (bx = dx0 / 2; bx < dx1 / 2; bx++) {
+            const int o = bx * 2;
+            unsigned int a, b, c, d, br, g;
+            if (((bx - dx0 / 2) & 7) == 0) {  /* 64 bytes of each row every eighth block */
+                RD_PREF((const char *)(s0 + o) + RD_PREFETCH_AHEAD);
+                RD_PREF((const char *)(s1 + o) + RD_PREFETCH_AHEAD);
+            }
+            a = s0[o]; b = s0[o + 1]; c = s1[o]; d = s1[o + 1];
+            ya[o]     = Y_OF((int)(a & 0xff), (int)((a >> 8) & 0xff), (int)((a >> 16) & 0xff), 0);
+            ya[o + 1] = Y_OF((int)(b & 0xff), (int)((b >> 8) & 0xff), (int)((b >> 16) & 0xff), 0);
+            yb[o]     = Y_OF((int)(c & 0xff), (int)((c >> 8) & 0xff), (int)((c >> 16) & 0xff), 0);
+            yb[o + 1] = Y_OF((int)(d & 0xff), (int)((d >> 8) & 0xff), (int)((d >> 16) & 0xff), 0);
+            br = RD_BR(a) + RD_BR(b) + RD_BR(c) + RD_BR(d);
+            g = RD_GG(a) + RD_GG(b) + RD_GG(c) + RD_GG(d);
+            ua[bx] = U_OF((int)(br & 0xffff), (int)g, (int)(br >> 16), 2);
+            va[bx] = V_OF((int)(br & 0xffff), (int)g, (int)(br >> 16), 2);
+        }
+    }
+}
+#endif /* RD_MIPS4 */
+
 int rd_abgr_to_i420_rect(const unsigned char *src, size_t src_len, int src_stride,
                          unsigned char *yp, unsigned char *up, unsigned char *vp,
                          int dst_w, int dst_h, int chroma_stride,
@@ -951,6 +1063,22 @@ int rd_abgr_to_i420_rect(const unsigned char *src, size_t src_len, int src_strid
      * if the display mode changes mid-frame, and a segfault is a worse outcome
      * than a skipped frame. */
     if (src_len < (size_t)src_stride * (size_t)(dy1 * factor)) return -1;
+
+#ifdef RD_MIPS4
+    /* Word loads want aligned rows; the canvas always is (shm, width*4). */
+    if (((size_t)src & 3) == 0 && (src_stride & 3) == 0) {
+        if (factor == 2) {
+            abgr_to_i420_f2_pref(src, src_stride, yp, up, vp, dst_w, chroma_stride,
+                                 dx0, dy0, dx1, dy1);
+            return 0;
+        }
+        if (factor == 1) {
+            abgr_to_i420_f1_pref(src, src_stride, yp, up, vp, dst_w, chroma_stride,
+                                 dx0, dy0, dx1, dy1);
+            return 0;
+        }
+    }
+#endif
 
     if (factor == 1) {
         /* No box to average: the common shape reduces to a plain converter,

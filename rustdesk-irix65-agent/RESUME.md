@@ -177,9 +177,31 @@ chosen mode before choosing the next, and when B_PRED won,
 `patches/libvpx-vp8-key-frame-bpred-once.patch` skips the repeat -- sixteen of
 the forty transforms per B_PRED macroblock, and on text B_PRED wins nearly
 everywhere. Bitstream unchanged (`encfloor verify`, 640x512, 300 frames:
-`af72aae3` with and without). Its speed on the O2 is NOT YET MEASURED: the
-emulator's key frame times ran 13-31 s for the same binary on a loaded host,
-too noisy to read; `encfloor 1280 1024 1` on the O2 says it.
+`af72aae3` with and without). **On the O2 it measured nothing** on
+`encfloor`'s synthetic key frame: 2388/2214 ms without, 2264/2236 with at
+1280x1024, and 760 against 888 at 640x512 -- noise either way. That image
+evidently chooses B_PRED rarely; on real text it should matter more, and that
+is unmeasured. Kept because it cannot change a byte.
+
+### 3b. Conversion was waiting on memory; MIPS IV prefetches
+
+`probes/convbench.c` on the O2, a full 1280x1024 source: a bare read of the
+pixels takes ~82 ms (the memory floor), the byte-load kernel 112 ms at 1/2
+scale and 202 at full scale. Word loads alone are slightly slower; word loads
+with MIPS IV `pref` 128-512 bytes ahead reach 84-88 ms at 1/2 and 175 at full.
+`capture_shim.c` now has those kernels for MIPS IV builds only (`RD_MIPS4`,
+which needs `<sgidefs.h>` -- without it the `#if` compares 0 with 0 and a
+MIPS III build would get `pref`); in the shim they measured 112 -> 92 ms and
+201 -> 183 ms, byte-identical on whole frames and on 200 random rectangles at
+each scale. Run-to-run variance on the O2 is large (one distance gave 85 ms in
+one run and 170 in the next): the console heartbeat's TLS handshake lands in
+some timing windows, and it still runs while the clock is wrong.
+
+**The O2's clock reset to 1995-12-31 during Dani's maintenance on
+2026-09-18** (it had been two days slow before). Every certificate is then
+"not yet valid", so the console heartbeat fails and the machine drops out of
+the device list; registration with hbbs is UDP and unaffected. Dani to set it
+(`date -u MMDDhhmmCCYY` as root); a flat clock battery would reset it again.
 
 ### 4. MIPS IV, beside MIPS III
 

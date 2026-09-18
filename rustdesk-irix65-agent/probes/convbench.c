@@ -60,6 +60,9 @@ static double now_ms(void)
     return tv.tv_sec * 1000.0 + tv.tv_usec / 1000.0;
 }
 
+#define BR(w) ((w) & 0x00ff00ffu)
+#define GG(w) (((w) >> 8) & 0xffu)
+
 /* Factor 2, whole frame, one load per source pixel. Big-endian ABGR words are
  * A<<24 | B<<16 | G<<8 | R, so w & 0x00ff00ff holds B and R in separate 16-bit
  * lanes: four of them sum without carrying (4 x 255), and so do sixteen. */
@@ -87,8 +90,6 @@ static void f2_words(const unsigned char *src, unsigned char *yp, unsigned char 
                 PREFETCH((const char *)(s2 + o) + pf);
                 PREFETCH((const char *)(s3 + o) + pf);
             }
-#define BR(w) ((w) & 0x00ff00ffu)
-#define GG(w) (((w) >> 8) & 0xffu)
             {
                 unsigned int a = s0[o], b = s0[o + 1], c = s1[o], d = s1[o + 1];
                 br0 = BR(a) + BR(b) + BR(c) + BR(d);
@@ -119,6 +120,38 @@ static void f2_words(const unsigned char *src, unsigned char *yp, unsigned char 
                 ua[bx] = U_OF(r, (int)g, bl, 4);
                 va[bx] = V_OF(r, (int)g, bl, 4);
             }
+        }
+    }
+}
+
+/* Factor 1, whole frame: each 2x2 source block is four Y and one U and V. */
+static void f1_words(const unsigned char *src, unsigned char *yp, unsigned char *up,
+                     unsigned char *vp, int pf)
+{
+    int by, bx;
+    for (by = 0; by < H / 2; by++) {
+        const unsigned int *s0 = (const unsigned int *)(src + (size_t)(by * 2) * STRIDE);
+        const unsigned int *s1 = s0 + STRIDE / 4;
+        unsigned char *ya = yp + (size_t)(by * 2) * W;
+        unsigned char *yb = ya + W;
+        unsigned char *ua = up + (size_t)by * (W / 2);
+        unsigned char *va = vp + (size_t)by * (W / 2);
+        for (bx = 0; bx < W / 2; bx++) {
+            const int o = bx * 2;
+            unsigned int a, b, c, d, br, g;
+            if (pf && (bx & 7) == 0) {
+                PREFETCH((const char *)(s0 + o) + pf);
+                PREFETCH((const char *)(s1 + o) + pf);
+            }
+            a = s0[o]; b = s0[o + 1]; c = s1[o]; d = s1[o + 1];
+            ya[o]     = Y_OF((int)(a & 0xff), (int)((a >> 8) & 0xff), (int)((a >> 16) & 0xff), 0);
+            ya[o + 1] = Y_OF((int)(b & 0xff), (int)((b >> 8) & 0xff), (int)((b >> 16) & 0xff), 0);
+            yb[o]     = Y_OF((int)(c & 0xff), (int)((c >> 8) & 0xff), (int)((c >> 16) & 0xff), 0);
+            yb[o + 1] = Y_OF((int)(d & 0xff), (int)((d >> 8) & 0xff), (int)((d >> 16) & 0xff), 0);
+            br = BR(a) + BR(b) + BR(c) + BR(d);
+            g = GG(a) + GG(b) + GG(c) + GG(d);
+            ua[bx] = U_OF((int)(br & 0xffff), (int)g, (int)(br >> 16), 2);
+            va[bx] = V_OF((int)(br & 0xffff), (int)g, (int)(br >> 16), 2);
         }
     }
 }
@@ -175,6 +208,59 @@ int main(int argc, char **argv)
         if (memcmp(out, ref, ysz2 + 2 * csz2) != 0) {
             printf("   ^ DIFFERS from the shipped kernel\n");
             return 1;
+        }
+    }
+    {
+        unsigned char *f1 = malloc(ysz1 + 2 * csz1);
+        int pf1[] = { 0, 256, 512 };
+        if (!f1) return 1;
+        for (k = 0; k < 3; k++) {
+            char label[32];
+            sprintf(label, pf1[k] ? "f1 words+pf %d" : "f1 words", pf1[k]);
+            memset(f1, 0, ysz1 + 2 * csz1);
+            TIME(label, f1_words(src, f1, f1 + ysz1, f1 + ysz1 + csz1, pf1[k]));
+            if (memcmp(f1, full, ysz1 + 2 * csz1) != 0) {
+                printf("   ^ DIFFERS from the shipped kernel\n");
+                return 1;
+            }
+        }
+    }
+    /* Rectangles, the way the agent converts damage: change random regions of
+     * the source, convert only those through the shim, and the planes must
+     * equal a full reference conversion of the changed source -- which checks
+     * the shim's offsets for dx0/dy0, not just a whole frame. */
+    {
+        int fac, n;
+        unsigned char *want = malloc(ysz1 + 2 * csz1), *have = malloc(ysz1 + 2 * csz1);
+        if (!want || !have) return 1;
+        for (fac = 1; fac <= 2; fac++) {
+            int dw = W / fac, dh = H / fac;
+            size_t ys = (size_t)dw * dh, cs = ys / 4;
+            if (fac == 2) f2_words(src, have, have + ys, have + ys + cs, dw, dh, 0);
+            else f1_words(src, have, have + ys, have + ys + cs, 0);
+            for (n = 0; n < 200; n++) {
+                int x, y, rw, rh, xx, yy;
+                seed = seed * 1103515245u + 12345u; x = (int)((seed >> 8) % (W - 64));
+                seed = seed * 1103515245u + 12345u; y = (int)((seed >> 8) % (H - 64));
+                seed = seed * 1103515245u + 12345u; rw = 1 + (int)((seed >> 8) % 63);
+                seed = seed * 1103515245u + 12345u; rh = 1 + (int)((seed >> 8) % 63);
+                for (yy = y; yy < y + rh; yy++)
+                    for (xx = x; xx < x + rw; xx++) {
+                        unsigned char *px = src + (size_t)yy * STRIDE + (size_t)xx * 4;
+                        px[1] ^= (unsigned char)(n * 7); px[2] += 13; px[3] ^= 0x5a;
+                    }
+                /* The session's rounding: framebuffer box to destination pixels, outward. */
+                rd_abgr_to_i420_rect(src, (size_t)STRIDE * H, STRIDE, have, have + ys, have + ys + cs,
+                    dw, dh, dw / 2, fac, x / fac, y / fac,
+                    (x + rw + fac - 1) / fac, (y + rh + fac - 1) / fac);
+            }
+            if (fac == 2) f2_words(src, want, want + ys, want + ys + cs, dw, dh, 0);
+            else f1_words(src, want, want + ys, want + ys + cs, 0);
+            if (memcmp(want, have, ys + 2 * cs) != 0) {
+                printf("rectangles, factor %d: DIFFER from a full conversion\n", fac);
+                return 1;
+            }
+            printf("rectangles, factor %d: 200 converted, identical to a full conversion\n", fac);
         }
     }
     printf("all variants byte-identical to the shipped kernel (sum %u)\n", sum);

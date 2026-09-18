@@ -51,7 +51,11 @@ picks by CPUARCH. Worth 3-6% on the O2.
    running, and idle together the agent used 230 ms of CPU per 10 s (RESUME
    §B, "Verified on the O2"). If a session ever freezes again, pcsample the
    agent first: a thread with CPU and no syscalls is the signature.
-2. **Measure two things on the O2 that could not be measured without it.**
+2. DONE on the O2 (RESUME §B 3a, 3b): the key-frame patch measured nothing
+   on a synthetic key frame; MIPS IV prefetch in the conversion took 1/2
+   scale 112 -> 92 ms and full scale 201 -> 183 ms, now in capture_shim.c.
+   The notes below are what that was.
+   **Measure two things on the O2 that could not be measured without it.**
    - `patches/libvpx-vp8-key-frame-bpred-once.patch`: a key frame no longer
      codes its B_PRED macroblocks twice. Bitstream-identical; the time is
      unknown (the emulator was too noisy). `encfloor 1280 1024 1` against
