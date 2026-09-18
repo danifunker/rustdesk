@@ -25,11 +25,13 @@ Two changes:
    not what it is. Placed here rather than inside the picker so it covers the RD
    path too.
 
-2. Seed the whole reconstruction buffer from the reference once per frame, in
+2. Seed the reconstruction buffer from the reference once per frame, in
    init_encode_frame_mb_context(), when an active map is in force -- and drop
-   the per-macroblock copy that becomes redundant. One contiguous copy of the
-   same bytes has the locality and none of the per-call overhead of 5120 small
-   scattered ones. Skipped on key frames, which code everything anyway.
+   the per-macroblock copy that becomes redundant. One pass over each plane, a
+   row at a time, has the locality and none of the per-call overhead of 5120
+   small scattered copies. The visible area only, and only when the two
+   buffers' dimensions agree. Skipped on key frames, which code everything
+   anyway.
 
 Measured on IRIX 6.5.22m / R5000 under IRIS, the cost of a frame whose active
 map selects *nothing at all* -- the floor under every frame however little
@@ -53,6 +55,18 @@ every large difference inside the one region (an xclock) that was still moving.
 A wrongly-skipped or wrongly-copied macroblock would show up there as a block of
 large differences and nowhere else.
 
+THIS FILE WAS CORRECTED ON 2026-09-18 TO MATCH WHAT WAS BUILT. Until then its
+part (2) called vp8_yv12_copy_frame(), but the libvpx.a in the development
+machine's staging tree -- the one every agent binary was linked against,
+including every measurement above and the build tested on a real O2 -- was not
+built from that. Rebuilding libvpx from source for CI and comparing it object
+by object found encodeframe.c different: the shipped init_encode_frame_mb_context
+copies the three planes row by row with memcpy and never calls
+vp8_yv12_copy_frame(). Part (2) below is that code, reconstructed from the
+shipped object and confirmed by compiling it: the resulting encodeframe.c.o is
+byte-identical to the one in the shipped archive. The vp8_yv12_copy_frame()
+version was never built into anything that was measured or tested.
+
 --- a/vp8/encoder/encodeframe.c
 +++ b/vp8/encoder/encodeframe.c
 @@ -32,6 +32,8 @@
@@ -64,19 +78,25 @@ large differences and nowhere else.
  #include "vpx_ports/vpx_timer.h"
  #if CONFIG_REALTIME_ONLY & CONFIG_ONTHEFLY_BITPACKING
  #include "bitstream.h"
-@@ -595,6 +597,28 @@
+@@ -595,6 +597,49 @@
    xd->pre = cm->yv12_fb[cm->lst_fb_idx];
    xd->dst = cm->yv12_fb[cm->new_fb_idx];
  
-+  /* When an active map is in force, seed the whole reconstruction buffer from
-+   * the reference in one go.
++  /* When an active map is in force, seed the reconstruction buffer from the
++   * reference, once per frame, before any macroblock is coded.
 +   *
 +   * Every macroblock the map excludes is coded as ZEROMV against LAST and
 +   * skipped, and the only thing that still had to happen for it was moving 384
 +   * bytes of reference pixels into the reconstruction buffer so the frame is
 +   * complete. Doing that per macroblock means thousands of small scattered
-+   * copies -- 5120 of them on a 1280x1024 frame -- where one contiguous copy of
-+   * the same bytes has the locality and none of the per-call overhead.
++   * copies -- 5120 of them on a 1280x1024 frame. Here it is one pass over each
++   * plane, a row at a time, which has the locality and none of the
++   * per-macroblock overhead.
++   *
++   * The visible area only, copied by hand: vp8_yv12_copy_frame() would also
++   * extend the borders of the whole frame. And only when the two buffers agree
++   * on their dimensions, so a copy can never be sized by one and strided by
++   * the other.
 +   *
 +   * Priced on IRIX 6.5 / R5000 by building a deliberately-wrong encoder that
 +   * simply omitted the per-macroblock copy: the cost of a frame whose map
@@ -87,13 +107,28 @@ large differences and nowhere else.
 +   * would be overwritten in full and there is no reference to take it from.
 +   */
 +  if (cpi->active_map_enabled && cm->frame_type != KEY_FRAME) {
-+    vp8_yv12_copy_frame(&cm->yv12_fb[cm->lst_fb_idx], &cm->yv12_fb[cm->new_fb_idx]);
++    const YV12_BUFFER_CONFIG *src = &cm->yv12_fb[cm->lst_fb_idx];
++    YV12_BUFFER_CONFIG *dst = &cm->yv12_fb[cm->new_fb_idx];
++    if (src->y_width == dst->y_width && src->y_height == dst->y_height &&
++        src->uv_width == dst->uv_width && src->uv_height == dst->uv_height) {
++      int row;
++      for (row = 0; row < src->y_height; ++row) {
++        memcpy(dst->y_buffer + row * dst->y_stride,
++               src->y_buffer + row * src->y_stride, src->y_width);
++      }
++      for (row = 0; row < src->uv_height; ++row) {
++        memcpy(dst->u_buffer + row * dst->uv_stride,
++               src->u_buffer + row * src->uv_stride, src->uv_width);
++        memcpy(dst->v_buffer + row * dst->uv_stride,
++               src->v_buffer + row * src->uv_stride, src->uv_width);
++      }
++    }
 +  }
 +
    /* set up frame for intra coded blocks */
    vp8_setup_intra_recon(&cm->yv12_fb[cm->new_fb_idx]);
  
-@@ -1122,6 +1146,61 @@
+@@ -1122,6 +1167,61 @@
  
    x->skip = 0;
  
