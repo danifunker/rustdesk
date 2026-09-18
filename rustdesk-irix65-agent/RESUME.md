@@ -35,13 +35,13 @@ Capture is built and verified on hardware, in C and in Rust. Rust std builds for
 `mips-sgi-irix6.5`, the whole agent compiles and links, and `rustdesk-agent`
 serves a real session at a rate a person could use.
 
-**A real login session is now proven, on hardware.** Every measurement in the
-emulator sections below was taken against a bare `Xsgi :0 -bs -c`, because
-starting xdm on the emulator wedges the X server. On a real O2 it simply does
-not: xdm, 4Dwm and the toolchest run, `xdpyinfo` answers before and after a full
-capture run, and the capture path works against that live desktop. See
-§REAL HARDWARE. The emulator wedge is an emulator bug, not ours —
-`docs/ISSUE-xdm-wedge.md` is still worth sending.
+**A logged-in session is proven on hardware; a logout is not.** Every
+measurement in the emulator sections below was taken against a bare
+`Xsgi :0 -bs -c`, because starting xdm on the emulator wedges the X server. On a
+real O2 a *logged-in* 4Dwm desktop is fine: xdm and the toolchest run,
+`xdpyinfo` answers before and after a full capture run, and capture works
+against it. **Logging out still wedges the server**, on real hardware, with the
+same frozen-CPU signature. See §REAL HARDWARE.
 
 ---
 
@@ -65,12 +65,26 @@ graphics, and ReadDisplay returns stride 5120 — 32 bpp despite the 8-bit
 screen, exactly as §Capture predicted, so the colormap path never engages.
 Nothing in the capture design needed changing for a different graphics family.
 
-**xdm does not wedge real hardware.** This was the number one open item. The O2
-runs xdm, `Xsgi`, 4Dwm and a toolchest, with the same argument list §A REAL
-LOGIN SESSION quotes and the same absent `-auth` — so the host-based
-`/etc/X0.hosts` finding holds on hardware too (`xhost` reports `LOCAL:`,
-`localhost.localdomain`, `sgio2`). `xdpyinfo` answered instantly before a full
-`--probe-display` run and again after it.
+**A logged-in desktop does not wedge; a logout still does.** The O2 runs xdm,
+`Xsgi`, 4Dwm and a toolchest, with the same argument list §A REAL LOGIN SESSION
+quotes and the same absent `-auth` — so the host-based `/etc/X0.hosts` finding
+holds on hardware too (`xhost` reports `LOCAL:`, `localhost.localdomain`,
+`sgio2`). `xdpyinfo` answered instantly before a full `--probe-display` run and
+again after it, and capture against that live desktop worked throughout.
+
+**But the wedge is not emulator-only, and this file said so for a few hours on
+the strength of the paragraph above.** Session captured, agent working, user
+logs out — and `Xsgi` is left with its CPU time frozen at 3:16 across ten
+seconds, answering nobody; `xdpyinfo` hangs rather than failing, and four of
+them stacked up before anyone noticed. That is the signature in
+`docs/ISSUE-xdm-wedge.md` exactly, on an O2 rather than under IRIS. What is
+proven on hardware is the *logged-in* case. The logout path is still the open
+one, and it is worse than it looked, because on the emulator it could be blamed
+on the emulator.
+
+**Anything that probes X must bound its wait.** A wedged server accepts the
+connection and never replies, so `xdpyinfo` does not fail, it hangs. The boot
+script's readiness probe learned this the hard way; §Mistakes not to repeat.
 
 ### The package did not work, and the install test could not have told us
 
@@ -1798,12 +1812,13 @@ Items 1 to 4 of the previous list are **done** — see §PERFORMANCE. What is le
    **This is now the only thing between the O2 and a real session** — it is
    installed there (id `vjlvjqcv5`) and has never had a peer connect.
 
-1. **~~Get a real login session working.~~ Done on hardware.** The O2 runs xdm,
-   4Dwm and a toolchest, `xdpyinfo` answers throughout, and `--probe-display`
-   captures that live desktop — see §REAL HARDWARE. The wedge is an emulator
-   bug, not ours. What still rides on it and is still open: the agent surviving
-   the server restart between logins (item 2), keyboard injection into somebody
-   else's application, and damage volume on a desktop actually in use.
+1. **Half done on hardware.** A *logged-in* desktop captures fine on the O2 —
+   xdm, 4Dwm, toolchest, `xdpyinfo` answering throughout, `--probe-display`
+   against the live screen. **Logging out still wedges the server**, on real
+   hardware and not only under IRIS, so the greeter and the login transition
+   remain uncaptured and `docs/ISSUE-xdm-wedge.md` describes something real.
+   Still open besides that: keyboard injection into somebody else's
+   application, and damage volume on a desktop actually in use.
 
 2. **The agent must survive its X server dying.** Already the open item in §The
    agent can crash when the server dies underneath it, and under xdm it stops
@@ -2100,6 +2115,19 @@ libvpx that staging was built from, so deleting it means re-applying
 ---
 
 ## Mistakes not to repeat
+
+**A wedged X server hangs, it does not fail.** It accepts the connection and
+never replies, so every naive readiness check waits for ever: `xdpyinfo` has no
+timeout of its own. The boot script's first readiness probe was
+`xdpyinfo -display :0 > /dev/null 2>&1` in a loop, and against a wedged server
+it started nothing at all and left a pile of stuck xdpyinfo processes behind.
+Bound every X probe. `/root/tmo 25 xdpyinfo` is the guest's version of the same
+lesson, further up this file.
+
+**`nohup` cannot see a shell function.** `nohup some_function &` silently does
+nothing -- no error, no process. A subshell inherits functions, so
+`( trap '' 1 2 3; some_function ) &` is the form that works in SVR4 sh.
+
 
 - **A wedged server looks exactly like a broken client.** Before blaming your own
   binary against any service, prove the service answers *someone*. `rawx.c` did
