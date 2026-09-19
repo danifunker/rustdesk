@@ -10,7 +10,7 @@ image and one repository secret serve both projects.
 
 | | | guest |
 |---|---|---|
-| `build.sh` | cross-build the agent, the panel; stage the install tree | no |
+| `build.sh` | cross-build the agent (MIPS III, and MIPS IV when the toolchain has it; `--isa`), the panel; stage the install tree; fail if the MIPS III agent holds a MIPS IV instruction | no |
 | `iris-gendist.sh` | run `gendist` in IRIX — the only step Linux cannot do | yes |
 | `package.sh` | the trio → `.tardist`, plus `.tar.gz` and checksums | no |
 | `release.sh` | all of the above, in order | with `--boot` |
@@ -45,14 +45,14 @@ scripts/iris-install-test.sh --boot [--tarball] [--remove]
 |---|---|
 | `ensure-rbcli.sh` | `rb-cli`, from PATH or a `danifunker/rusty-backup` release. Reads the image's XFS root with no emulator. |
 | `make-sysroot.sh` | the n32 sysroot, out of the image, into `build/irix-sysroot`, in about fifteen seconds. **Licensed** -- never cached, uploaded or committed. |
-| `toolchain.sh` | everything else the cross build needs, from pinned sources, into `build/toolchain`: mogrix, clang/LLD, the runtime objects, five static libraries, the patched nightly and registry. `--key` is its cache key; `IRIX_TOOLCHAIN` points a build at it. Reproduces the development machine's `/opt` toolchain (see `BUILD.md`). |
+| `toolchain.sh` | everything else the cross build needs, from pinned sources, into `build/toolchain`: mogrix, clang/LLD, the runtime objects, five static libraries (twice: MIPS III into `sgug`, MIPS IV into `sgug-mips4`), the patched nightly and registry. `--key` is its cache key; `IRIX_TOOLCHAIN` points a build at it. Reproduces the development machine's `/opt` toolchain (see `BUILD.md`). |
 
 ## The rest
 
 | | |
 |---|---|
 | `ci-lib.sh` | sourced by all of them. Config resolution, version stamping, the inst product templating, and `guest_run` — which is how anything automated talks to the guest, over the serial console. |
-| `install.sh` | ships **inside the tarball**. Installs by hand, honours a different prefix, `-u` removes. Not part of the pipeline; part of the product. |
+| `install.sh` | ships **inside the tarball**. Installs by hand -- the MIPS IV agent on an R5000 or later, by `hinv` -- honours a different prefix, `-u` removes. Not part of the pipeline; part of the product. |
 
 ## Three rules that are not style
 

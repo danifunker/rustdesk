@@ -9,14 +9,14 @@ included by `#[path]` rather than copied. What lives here is the part IRIX needs
 of its own — screen capture over SGI's X extensions, input injection over XTEST,
 and the toolchain and harness to build and test it.
 
-**Status: it works under emulation, and runs on a real O2.** Under emulation a
-peer connects over the real protocol, logs in, and receives VP8 video; mouse
-injection is verified. On a real O2 (IRIX 6.5.22m, R10000) the package installs
-with `inst`, the agent registers with an ID server and appears in a console's
-device list, peers connect and log in, and capture works against a logged-in
-4Dwm desktop -- but a full session with a picture on real hardware has not been
-recorded yet. See *What is known and what is not* below, and `RESUME.md`
-§REAL HARDWARE, before trusting any of it.
+**Status: in daily use on a real O2.** On an O2 (IRIX 6.5.22m, R10000) the
+package installs with `inst`, starts at boot, registers with an ID server,
+appears in a console's device list, and serves real sessions -- the login
+screen and a 4Dwm desktop, mouse and keyboard, two viewers at once. A pointer
+move costs about 46 ms of encoding at 1280x1024 and 16 ms at the default half
+size. The package carries a MIPS III build, for every IRIX 6.5 machine, and a
+MIPS IV build for R5000 and later, and installs the right one. See *What is
+known and what is not* below, and `RESUME.md` §B THE O2, MADE FAST.
 
 ## What it does
 
@@ -65,10 +65,20 @@ running it across a network you do not control.
 
 ## What is known and what is not
 
+Verified on a real O2 (IRIX 6.5.22m, R10000):
+
+| | |
+|---|---|
+| Sessions from macOS RustDesk clients, by ID and on the LAN, at the login screen and on a 4Dwm desktop | works, in daily use |
+| Two viewers at once | works (both stay live; each costs its own encode) |
+| The package installs with `inst`, picks the MIPS IV agent, starts at boot | works |
+| The package built by GitHub Actions, installed on the O2 | works |
+
 Verified on IRIX 6.5.22m under emulation:
 
 | | |
 |---|---|
+| The package picks MIPS III on an R4400, MIPS IV on an R5000 | works |
 | Protocol handshake, login, `PeerInfo` | works |
 | VP8 video delivered to a peer | works |
 | Mouse injection — absolute, relative, clamping | works |
@@ -80,18 +90,17 @@ Verified on IRIX 6.5.22m under emulation:
 
 Not established:
 
-- **Little run on real hardware.** One O2 so far (see Status). Most numbers
-  here are from an emulator, which is roughly 3x slower than a real R5000 and
-  is not a graphics-accurate model.
+- **One real machine.** An O2 only. Numbers not marked as the O2's are from
+  an emulator, which is roughly 3x slower than a real R5000 and is not a
+  graphics-accurate model. An Indy, an Octane or a Fuel has not run it.
 - **Everything was tested at depth 8.** An O2 or Octane is likely 24-bit.
   ReadDisplay should normalise that, but the fallback and the converters have
   only ever seen 8-bit.
-- **The agent crashes when its X server dies**, two different ways. On this
-  platform that is not an edge case; see `RESUME.md`.
-- **No login session.** Every measurement was taken against a bare
-  `Xsgi :0 -bs -c`; xdm's server wedges under the emulator, so a 4Dwm desktop
-  has never been captured. See `RESUME.md` §A REAL LOGIN SESSION — the
-  access-control question that worried us turned out fine.
+- **A logout on real hardware.** The capture and input connections both
+  survive a dead X connection now -- the input one used to exit the agent,
+  and `probes/xrace.c` cuts the socket to prove it does not -- but an actual
+  logout, where xdm restarts the server under a live session, has not been
+  tried on the O2.
 
 Since fixed and no longer on this list: the colours (they *were* swapped, and
 the check that proves they are not now is three coloured xterms decoded by a
@@ -130,7 +139,12 @@ it as `guest_run`.
 
 ## Installing it on a real machine
 
-There is a package now, and it installs the ordinary IRIX way:
+There is a package, and it installs the ordinary IRIX way. It carries two
+builds of the agent -- MIPS III, which every IRIX 6.5 machine runs, and MIPS
+IV for R5000, R8000, R10000 and later -- and `inst` installs the one this CPU
+takes, as `install.sh` does from `hinv`. The agent's banner and the settings
+panel's title say which build is installed (`20260918-430f9a50f`, the commit's
+date and hash).
 
 ```sh
 # Software Manager / inst
