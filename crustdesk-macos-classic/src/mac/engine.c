@@ -4,7 +4,9 @@
 #include <string.h>
 
 #define HEARTBEAT_MS 20
-#define SCAN_MS 60            /* start a frame at most this often */
+#define SCAN_MS 60            /* start a frame at most this often... */
+#define SCAN_IDLE_MS 250      /* ...or this often once the screen has been still */
+#define IDLE_AFTER 8          /* scans that found nothing before slowing down */
 #define REFRESH_MS 400        /* re-send one row of macroblocks this often */
 #define SLICE_TICKS 2         /* a slice ends after this many 60ths of a second */
 
@@ -24,8 +26,13 @@ void engine_log(const char *msg)
     unsigned w = logw;
     if (w - logr >= LOGN)
         return; /* the main loop is behind; drop rather than block */
-    strncpy(logbuf[w % LOGN], msg, sizeof logbuf[0] - 1);
-    logbuf[w % LOGN][sizeof logbuf[0] - 1] = 0;
+    {
+        size_t n = strlen(msg);
+        if (n > sizeof logbuf[0] - 1)
+            n = sizeof logbuf[0] - 1;
+        memcpy(logbuf[w % LOGN], msg, n);
+        logbuf[w % LOGN][n] = 0;
+    }
     logw = w + 1;
 }
 
@@ -53,10 +60,46 @@ static struct {
     int key, row, count, band;
     long clut_seen;
     uint32_t last, last_refresh;
-    int q;
+    int q, still;
     uint8_t *dst;
     size_t cap;
+    unsigned long t_start, t_scanned; /* ticks, for the timing log */
 } V;
+
+/* "key 1234 ms scan, 5678 ms encode, 99 KB" without printf. */
+static char *put_num(char *p, unsigned long v)
+{
+    char tmp[12];
+    int n = 0;
+    do
+        tmp[n++] = (char)('0' + v % 10);
+    while ((v /= 10) != 0);
+    while (n)
+        *p++ = tmp[--n];
+    return p;
+}
+
+static void log_timing(int key, unsigned long scan, unsigned long enc, unsigned long bytes, int mbs)
+{
+    char line[80], *p = line;
+    const char *k = key ? "key: " : "frame: ", *q;
+    for (q = k; *q; q++)
+        *p++ = *q;
+    p = put_num(p, (unsigned long)mbs);
+    for (q = " mb, scan "; *q; q++)
+        *p++ = *q;
+    p = put_num(p, scan * 50 / 3);
+    for (q = " ms, encode "; *q; q++)
+        *p++ = *q;
+    p = put_num(p, enc * 50 / 3);
+    for (q = " ms, "; *q; q++)
+        *p++ = *q;
+    p = put_num(p, bytes);
+    for (q = " bytes"; *q; q++)
+        *p++ = *q;
+    *p = 0;
+    engine_log(line);
+}
 
 static void video_reset(void)
 {
@@ -74,7 +117,11 @@ static void video_step(void)
     uint32_t now = now_ms();
 
     if (V.state == V_IDLE) {
-        if (now - V.last < SCAN_MS || X.sess->vstate != VID_FREE)
+        /* A still screen is scanned less often, which is most of the time: a
+         * full compare is tens of milliseconds on a 68040. Input from the
+         * peer is the best predictor of change, so it resets the pace. */
+        if (now - V.last < (V.still >= IDLE_AFTER ? SCAN_IDLE_MS : SCAN_MS) ||
+            X.sess->vstate != VID_FREE)
             return;
         V.last = now;
         V.key = cdv_take_refresh(X.sess);
@@ -90,20 +137,25 @@ static void video_step(void)
             V.last_refresh = now;
         }
         V.row = V.count = 0;
+        V.t_start = TickCount();
         V.state = V_SCAN;
     }
 
     if (V.state == V_SCAN) {
         while (V.row < scr->mbh && TickCount() - start < SLICE_TICKS) {
-            V.count += screen_scan_rows(scr, V.row, V.row + 1, V.band, V.key);
+            V.count += screen_scan_rows(scr, V.row, V.row + 1, V.band, V.key, vp8e_exact_map(X.enc));
             V.row++;
         }
         if (V.row < scr->mbh)
             return;
         if (!V.count) {
+            if (V.still < IDLE_AFTER)
+                V.still++;
             V.state = V_IDLE;
             return;
         }
+        V.still = 0;
+        V.t_scanned = TickCount();
         V.dst = cdv_video_begin(X.sess, &V.cap);
         {
             vp8e_src src;
@@ -139,8 +191,15 @@ static void video_step(void)
                 vp8e_set_q(X.enc, V.q);
                 X.sess->refresh = 1;
                 engine_log("frame too large; lowering quality");
+            } else if (!st.changed) {
+                /* Nothing the peer would see: the reconstruction is exactly
+                 * what it already has, so the frame need not go at all. */
+                cdv_video_abort(X.sess);
             } else {
                 cdv_video_commit(X.sess, len, st.key);
+                if (st.key || (eng.frames & 63) == 0)
+                    log_timing(st.key, V.t_scanned - V.t_start, TickCount() - V.t_scanned, len,
+                               st.mbs - st.skipped);
                 if (st.key && V.q != X.q) {
                     V.q = X.q;
                     vp8e_set_q(X.enc, V.q);
@@ -206,8 +265,10 @@ void engine_tick(void)
     if (net->state != NET_CONNECTED)
         return;
 
-    for (i = 0; i < 4 && net_recv(net, &data, &len); i++)
+    for (i = 0; i < 4 && net_recv(net, &data, &len); i++) {
         cdv_feed(X.sess, data, len);
+        V.still = 0; /* the peer is doing something: look sooner */
+    }
     len = net_sent(net);
     if (len)
         cdv_out_consume(X.sess, len);

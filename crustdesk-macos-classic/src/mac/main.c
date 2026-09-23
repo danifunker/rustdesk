@@ -56,6 +56,20 @@ static void draw_c(const char *s)
     DrawString(p);
 }
 
+/* Draw a line of text over whatever was there, without erasing first: the
+ * screen is being captured, and an erase-then-draw is two changes for the
+ * price of one -- worse, a change the capture can catch half-way. */
+static void draw_line(int y, const char *s)
+{
+    Rect r;
+    MoveTo(8, y);
+    draw_c(s);
+    SetRect(&r, qd.thePort->pnLoc.h, y - 9, win->portRect.right, y + 3);
+    EraseRect(&r);
+    SetRect(&r, 0, y - 9, 8, y + 3);
+    EraseRect(&r);
+}
+
 static void redraw(void)
 {
     GrafPtr old;
@@ -67,24 +81,19 @@ static void redraw(void)
     GetPort(&old);
     SetPort(win);
     r = win->portRect;
-    EraseRect(&r);
     TextFont(1); /* application font: Geneva */
     TextSize(9);
-    MoveTo(8, 14);
+    TextMode(srcCopy);
     TextFace(1); /* bold */
-    draw_c(addr_line);
+    draw_line(14, addr_line);
     TextFace(0);
-    MoveTo(8, 27);
     snprintf(line, sizeof line, "Password: %s", prefs.password);
-    draw_c(line);
-    MoveTo(8, 40);
-    draw_c(status);
+    draw_line(27, line);
+    draw_line(40, status);
     MoveTo(0, 46);
     LineTo(r.right, 46);
-    for (i = 0; i < nlog; i++) {
-        MoveTo(8, 58 + 11 * i);
-        draw_c(loglines[i]);
-    }
+    for (i = 0; i < LOG_LINES; i++)
+        draw_line(58 + 11 * i, i < nlog ? loglines[i] : "");
     SetPort(old);
 }
 
@@ -99,8 +108,54 @@ static void invalidate(void)
     SetPort(old);
 }
 
+/* The log also goes to "C-Desk-Vint Log" in the Preferences folder, so a
+ * machine nobody is watching still has a story to tell. Main loop only. */
+static short logref;
+
+static void log_open(void)
+{
+    short vref;
+    long dir;
+    FSSpec spec;
+    HParamBlockRec pb;
+    if (FindFolder(kOnSystemDisk, kPreferencesFolderType, 1, &vref, &dir) != noErr)
+        return;
+    FSMakeFSSpec(vref, dir, "\pC-Desk-Vint Log", &spec);
+    CDV_FSpCreate(&spec, 'ttxt', 'TEXT', 0);
+    memset(&pb, 0, sizeof pb);
+    pb.ioParam.ioNamePtr = (StringPtr) "\pC-Desk-Vint Log";
+    pb.ioParam.ioVRefNum = vref;
+    pb.fileParam.ioDirID = dir;
+    pb.ioParam.ioPermssn = fsWrPerm;
+    if (PBHOpenDFSync(&pb) != noErr)
+        return;
+    logref = pb.ioParam.ioRefNum;
+    SetEOF(logref, 0);
+}
+
+static void log_write(const char *msg)
+{
+    static unsigned long last_flush;
+    char line[100];
+    long len;
+    unsigned long t = TickCount() / 60;
+    if (!logref)
+        return;
+    len = snprintf(line, sizeof line, "%5lu:%02lu  %s\r", t / 60, t % 60, msg);
+    if (len > (long)sizeof line - 1)
+        len = sizeof line - 1;
+    FSWrite(logref, &len, line);
+    if (TickCount() - last_flush > 300) {
+        short vref;
+        if (GetVRefNum(logref, &vref) == noErr)
+            FlushVol(NULL, vref);
+        last_flush = TickCount();
+    }
+}
+
 static void say(const char *msg)
 {
+    log_write(msg);
     if (nlog == LOG_LINES) {
         memmove(loglines[0], loglines[1], sizeof loglines[0] * (LOG_LINES - 1));
         nlog--;
@@ -439,6 +494,7 @@ int main(void)
     win = NewWindow(NULL, &r, "\pC-Desk-Vint", 1, noGrowDocProc, (WindowPtr)-1, 0, 0);
 
     init_prefs();
+    log_open();
     strcpy(status, "Starting");
     strcpy(hostname, "Macintosh");
     ident.password = prefs.password;
@@ -506,5 +562,7 @@ int main(void)
          * without this leaves it writing into a heap that no longer exists. */
         net_shutdown(&net);
     }
+    if (logref)
+        FSClose(logref);
     return 0;
 }

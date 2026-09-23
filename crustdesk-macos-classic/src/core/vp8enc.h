@@ -69,10 +69,16 @@ void vp8e_abandon(vp8e *e);
 void vp8e_recon(const vp8e *e, const uint8_t **y, const uint8_t **u,
                 const uint8_t **v, int *ystride, int *uvstride);
 
+/* One byte per macroblock: nonzero where the peer's picture is exactly the
+ * source as last encoded. A periodic refresh need only revisit the rest. */
+const uint8_t *vp8e_exact_map(const vp8e *e);
+
 /* Counters from the last vp8e_encode, for logs and tuning. */
 typedef struct {
     int mbs, skipped, inter, intra;
     int key;   /* the frame was a keyframe, asked for or not */
+    int changed; /* macroblocks whose reconstruction changed; 0 means the
+                  * frame would show the peer nothing new */
 } vp8e_stats;
 void vp8e_last_stats(const vp8e *e, vp8e_stats *s);
 

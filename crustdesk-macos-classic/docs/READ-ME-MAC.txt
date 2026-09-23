@@ -1,0 +1,46 @@
+C-Desk-Vint -- RustDesk for classic Mac OS
+==========================================
+
+C-Desk-Vint lets a RustDesk client on a modern computer see and control
+this Macintosh.
+
+What it needs
+-------------
+- System 7.5.5 or later on a 68020, 68030 or 68040 Mac (it is tested on a
+  Quadra 800). A PowerPC build is to come.
+- MacTCP or Open Transport, set up and working (the Mac has an IP address).
+- 256 colours or fewer is fastest. Thousands and millions of colours work,
+  but are slower.
+- About 3 MB of free memory at 640x480.
+
+Starting it
+-----------
+Double-click C-Desk-Vint. Its window shows the address to connect to and
+the password. The first time it runs it makes up a password and saves it in
+"C-Desk-Vint Prefs" in the Preferences folder.
+
+To start it every time the Mac starts, put the application (or an alias to
+it) in the System Folder's Startup Items folder.
+
+Connecting
+----------
+In RustDesk on the other computer, type this Mac's IP address -- just the
+address, no port -- into the ID field and connect. Enter the password when
+asked.
+
+Settings
+--------
+"C-Desk-Vint Prefs" (Preferences folder) is a text file you can edit with
+SimpleText. Quit C-Desk-Vint first. Lines:
+
+    password=...      the password peers must give
+    port=21118        the TCP port to listen on
+    quality=16        0 (best) to 127 (smallest); 16 is a good start
+
+Things to know
+--------------
+- The connection is not encrypted. Use it on a network you trust.
+- The Mac has one mouse button: the other computer's right button gives a
+  Control-click.
+- There is no scroll wheel on this system; use the scroll bars.
+- Quit C-Desk-Vint from its File menu (Command-Q) to stop it.

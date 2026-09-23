@@ -52,11 +52,12 @@ OSErr screen_open(cdv_screen *s)
 
     s->shadow = (uint8_t *)NewPtrClear((long)s->rowbytes * s->height);
     s->Y = (uint8_t *)NewPtrClear(planes);
-    s->dirty = (uint8_t *)NewPtrClear((long)s->mbw * s->mbh);
+    s->dirty = (uint8_t *)NewPtrClear((long)s->mbw * s->mbh * 2);
     if (!s->shadow || !s->Y || !s->dirty) {
         screen_close(s);
         return memFullErr;
     }
+    s->stale = s->dirty + (long)s->mbw * s->mbh;
     s->U = s->Y + luma;
     s->V = s->U + (long)s->uvstride * s->mbh * 8;
     build_palette(s, &s->clut[0]);
@@ -79,7 +80,7 @@ void screen_close(cdv_screen *s)
         DisposePtr((Ptr)s->Y);
     if (s->dirty)
         DisposePtr((Ptr)s->dirty);
-    s->shadow = s->Y = s->dirty = NULL;
+    s->shadow = s->Y = s->dirty = s->stale = NULL;
 }
 
 int screen_geometry_changed(const cdv_screen *s)
@@ -104,12 +105,39 @@ void screen_check_palette(cdv_screen *s)
     s->clut_seq++;
 }
 
-int screen_scan_rows(cdv_screen *s, int my0, int my1, int band, int all)
+/* Which macroblock columns of one scanline differ from the shadow, as a
+ * bit per column in `diff`. Longwords, compared in place: a memcmp call per
+ * 16-pixel run was most of the cost of a scan on a 68040. */
+static void diff_line(const uint32_t *a, const uint32_t *b, int longs, int longs_per_mb,
+                      uint8_t *diff)
+{
+    int i = 0, mx = 0;
+    while (i < longs) {
+        int end = i + longs_per_mb;
+        if (end > longs)
+            end = longs;
+        if (!diff[mx]) {
+            for (; i < end; i++)
+                if (a[i] != b[i]) {
+                    diff[mx] = 1;
+                    break;
+                }
+        }
+        i = end;
+        mx++;
+    }
+}
+
+int screen_scan_rows(cdv_screen *s, int my0, int my1, int band, int all, const uint8_t *exact)
 {
     int bytes = s->depth * 16 / 8; /* one macroblock's width in bytes */
     int mx, my, count = 0;
     char mode = 1; /* true32b */
     int swapped = 0;
+    /* A macroblock is 2 bytes wide at 1 bit, 4 at 2: compare those depths a
+     * longword (several macroblocks) at a time and mark each one it covers. */
+    int longs = s->rowbytes / 4, lpm = bytes >= 4 ? bytes / 4 : 1;
+    int mbs_per_long = bytes >= 4 ? 1 : 4 / bytes;
 
     /* VRAM may sit above the 24-bit address space. */
     if (!LM_MMU32BIT) {
@@ -120,22 +148,40 @@ int screen_scan_rows(cdv_screen *s, int my0, int my1, int band, int all)
 
     for (my = my0; my < my1; my++) {
         int y0 = my * 16, rows = s->height - y0 < 16 ? s->height - y0 : 16;
-        int whole = all || my == band, n0 = count;
+        int n0 = count, y;
+        uint8_t *d = s->dirty + my * s->mbw, *st = s->stale + my * s->mbw;
+        static uint8_t cols[1024];
+
+        if (all) {
+            memset(d, 1, (size_t)s->mbw);
+            memset(st, 1, (size_t)s->mbw);
+        } else {
+            memset(cols, 0, (size_t)(longs / lpm + 1));
+            for (y = 0; y < rows; y++) {
+                long off = (long)(y0 + y) * s->rowbytes;
+                diff_line((const uint32_t *)(s->base + off), (const uint32_t *)(s->shadow + off),
+                          longs, lpm, cols);
+            }
+            for (mx = 0; mx < s->mbw; mx++) {
+                int changed = cols[mx / mbs_per_long];
+                int refine = my == band && st[mx] && !exact[my * s->mbw + mx];
+                d[mx] = (uint8_t)(changed || refine);
+                st[mx] = (uint8_t)(changed || (st[mx] && my != band));
+            }
+        }
         for (mx = 0; mx < s->mbw; mx++) {
-            long off = (long)y0 * s->rowbytes + (long)mx * bytes;
-            int n = mx == s->mbw - 1 ? s->rowbytes - mx * bytes : bytes, y, d = whole;
-            if (n > bytes)
-                n = bytes;
-            for (y = 0; y < rows && !d; y++)
-                d = memcmp(s->base + off + (long)y * s->rowbytes,
-                           s->shadow + off + (long)y * s->rowbytes, (size_t)n) != 0;
-            s->dirty[my * s->mbw + mx] = (uint8_t)d;
-            if (d) {
+            if (!d[mx])
+                continue;
+            {
+                long off = (long)y0 * s->rowbytes + (long)mx * bytes;
+                int n = mx == s->mbw - 1 ? s->rowbytes - mx * bytes : bytes;
+                if (n > bytes)
+                    n = bytes;
                 for (y = 0; y < rows; y++)
                     memcpy(s->shadow + off + (long)y * s->rowbytes,
                            s->base + off + (long)y * s->rowbytes, (size_t)n);
-                count++;
             }
+            count++;
         }
         if (count > n0)
             yuv_convert_rows(&s->fb, s->Y, s->U, s->V, s->ystride, s->uvstride, s->dirty, my,

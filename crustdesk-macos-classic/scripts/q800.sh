@@ -16,6 +16,10 @@
 # a PRAM image with 32-bit addressing on, and qm.py, the monitor client. See
 # docs/TESTING.md for where each came from.
 #
+# ICOUNT=5 paces the CPU at roughly a real 33 MHz 68040 (one instruction per
+# 32 ns), which is what makes timings mean anything; without it QEMU runs
+# several times faster than the hardware.
+#
 # QEMU's user networking gives the Mac 10.0.2.15 and forwards the host's
 # 127.0.0.1:$PORT to its 21118. SLIRP answers BOOTP, so MacTCP needs no setup.
 set -euo pipefail
@@ -53,7 +57,7 @@ start)
         -drive file=sys.hda,media=disk,format=raw,if=none,id=hd0 \
         -nic user,model=dp83932,hostfwd=tcp:127.0.0.1:$port-:21118 \
         -display none -vnc 127.0.0.1:${VNC:-23} \
-        -monitor unix:mon.sock,server,nowait \
+        -monitor unix:mon.sock,server,nowait ${ICOUNT:+-icount shift=$ICOUNT,align=off} \
         > qemu.log 2>&1 &
     echo $! > qemu.pid
     echo "booting (pid $(cat qemu.pid)); agent will be on 127.0.0.1:$port"

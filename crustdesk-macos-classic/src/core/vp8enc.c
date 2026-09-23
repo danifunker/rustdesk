@@ -22,87 +22,72 @@ enum { DC_PRED = 0, V_PRED = 1, H_PRED = 2, TM_PRED = 3, B_PRED = 4 };
 
 typedef struct {
     uint8_t *out, *start, *end;
-    uint32_t range, bottom;
-    int bit_count;
+    uint32_t range, low;
+    int count;
     int overflow;
 } bw;
 
-typedef struct {
-    short y2[16];
-    short y[16][16];
-    short uv[8][16];
-} mbcoef;
+/* How far to shift a range to bring it back to 128 or more. */
+static uint8_t norm[256];
 
-struct vp8e {
-    int w, h, mbw, mbh, q;
-    int have_ref;
-    uint8_t *ry, *ru, *rv;        /* reconstruction, macroblock aligned */
-    int rys, ruvs;
-    uint8_t *mbinfo;              /* mbw * mbh */
-    uint8_t *above_ctx;           /* mbw * 9: token contexts, section 13.3 */
-    uint8_t *p1;                  /* first partition is assembled here */
-    size_t p1cap;
-    int dq_y1[2], dq_y2[2], dq_uv[2];
-    vp8e_stats stats;
-
-    /* The frame in progress, between vp8e_begin and vp8e_end. */
-    int f_key, f_row;
-    const uint8_t *f_dirty;
-    vp8e_src f_src;
-    uint8_t *f_out;
-    size_t f_cap, f_hdr;
-    bw tb;
-    uint8_t left[9];
-    int nskip, nintra;
-
-    /* Scratch for one macroblock. Here rather than on the stack, because on
-     * the Mac the encoder runs at deferred-task time on whatever stack the
-     * interrupted code had. */
-    uint8_t sy[256], su[64], sv[64], py[256], pu[64], pv[64], cand[256], cu[64], cv[64];
-    mbcoef qc;
-};
+static void norm_init(void)
+{
+    int r;
+    if (norm[1])
+        return;
+    for (r = 1; r < 256; r++) {
+        int n = 0;
+        while ((r << n) < 128)
+            n++;
+        norm[r] = (uint8_t)n;
+    }
+}
 
 static void bw_init(bw *b, uint8_t *start, uint8_t *end)
 {
     b->out = b->start = start;
     b->end = end;
     b->range = 255;
-    b->bottom = 0;
-    b->bit_count = 24;
+    b->low = 0;
+    b->count = -24;
     b->overflow = 0;
 }
 
-static void bw_carry(bw *b)
-{
-    uint8_t *q = b->out;
-    while (q > b->start && *--q == 255)
-        *q = 0;
-    ++*q;
-}
-
+/* One bool, section 7.3, in libvpx's form: the renormalising shift comes from
+ * a table instead of a loop, and a byte is written once 8 bits are ready.
+ * This is the encoder's innermost call -- hundreds of times a macroblock. */
 static void bw_put(bw *b, int prob, int bit)
 {
     uint32_t split = 1 + (((b->range - 1) * (uint32_t)prob) >> 8);
+    uint32_t range = split, low = b->low;
+    int shift, count = b->count;
     if (bit) {
-        b->bottom += split;
-        b->range -= split;
-    } else {
-        b->range = split;
+        low += split;
+        range = b->range - split;
     }
-    while (b->range < 128) {
-        b->range <<= 1;
-        if (b->bottom & 0x80000000u)
-            bw_carry(b);
-        b->bottom <<= 1;
-        if (!--b->bit_count) {
-            if (b->out < b->end)
-                *b->out++ = (uint8_t)(b->bottom >> 24);
-            else
-                b->overflow = 1;
-            b->bottom &= 0xFFFFFF;
-            b->bit_count = 8;
+    shift = norm[range];
+    range <<= shift;
+    count += shift;
+    if (count >= 0) {
+        int offset = shift - count;
+        if ((low << (offset - 1)) & 0x80000000u) {
+            uint8_t *q = b->out;
+            while (q > b->start && *--q == 255)
+                *q = 0;
+            ++*q;
         }
+        if (b->out < b->end)
+            *b->out++ = (uint8_t)(low >> (24 - offset));
+        else
+            b->overflow = 1;
+        low <<= offset;
+        shift = count;
+        low &= 0xffffff;
+        count -= 8;
     }
+    b->low = low << shift;
+    b->count = count;
+    b->range = range;
 }
 
 static void bw_literal(bw *b, uint32_t v, int bits)
@@ -396,14 +381,68 @@ static void fwalsh(const short *in, short *out)
         }
 }
 
-static short quant(int x, int step)
+/* A quantiser step with its reciprocal: a 68040 divides in 44 cycles and
+ * this runs for every coefficient. Most coefficients of screen content
+ * quantise to zero, which is one compare. */
+typedef struct {
+    int step, half;
+    uint32_t recip; /* ceil(65536 / step) */
+} qstep;
+
+static void qstep_set(qstep *q, int step)
 {
-    int a = x < 0 ? -x : x;
-    int q = (a + (step >> 1)) / step;
+    q->step = step;
+    q->half = step >> 1;
+    q->recip = (65536u + (uint32_t)step - 1) / (uint32_t)step;
+}
+
+static short quant(int x, const qstep *qs)
+{
+    int a = x < 0 ? -x : x, q;
+    if (a < qs->step) /* (a + half) / step is 0 or 1 */
+        return (short)(a < qs->step - qs->half ? 0 : (x < 0 ? -1 : 1));
+    q = (int)(((uint32_t)(a + qs->half) * qs->recip) >> 16);
     if (q > 2048 + 66)
         q = 2048 + 66;
     return (short)(x < 0 ? -q : q);
 }
+
+typedef struct {
+    short y2[16];
+    short y[16][16];
+    short uv[8][16];
+} mbcoef;
+
+struct vp8e {
+    int w, h, mbw, mbh, q;
+    int have_ref;
+    uint8_t *ry, *ru, *rv;        /* reconstruction, macroblock aligned */
+    int rys, ruvs;
+    uint8_t *mbinfo;              /* mbw * mbh */
+    uint8_t *exact;               /* mbw * mbh: reconstruction == source */
+    uint8_t *above_ctx;           /* mbw * 9: token contexts, section 13.3 */
+    uint8_t *p1;                  /* first partition is assembled here */
+    size_t p1cap;
+    int dq_y1[2], dq_y2[2], dq_uv[2];
+    qstep qs_y1[2], qs_y2[2], qs_uv[2];
+    vp8e_stats stats;
+
+    /* The frame in progress, between vp8e_begin and vp8e_end. */
+    int f_key, f_row;
+    const uint8_t *f_dirty;
+    vp8e_src f_src;
+    uint8_t *f_out;
+    size_t f_cap, f_hdr;
+    bw tb;
+    uint8_t left[9];
+    int nskip, nintra, nchanged;
+
+    /* Scratch for one macroblock. Here rather than on the stack, because on
+     * the Mac the encoder runs at deferred-task time on whatever stack the
+     * interrupted code had. */
+    uint8_t sy[256], su[64], sv[64], py[256], pu[64], pv[64], cand[256], cu[64], cv[64];
+    mbcoef qc;
+};
 
 /* ---- setup ---------------------------------------------------------------- */
 
@@ -417,7 +456,7 @@ size_t vp8e_mem_size(int w, int h)
     size_t mbw = (size_t)(w + 15) / 16, mbh = (size_t)(h + 15) / 16;
     size_t mbs = mbw * mbh;
     return align4(sizeof(struct vp8e)) + align4(mbw * 16 * mbh * 16) +
-           2 * align4(mbw * 8 * mbh * 8) + align4(mbs) + align4(mbw * 9) +
+           2 * align4(mbw * 8 * mbh * 8) + 2 * align4(mbs) + align4(mbw * 9) +
            align4(256 + mbs * 12);
 }
 
@@ -439,6 +478,14 @@ void vp8e_set_q(vp8e *e, int q)
     uvdc = vp8_dc_qlookup[q];
     e->dq_uv[0] = uvdc > 132 ? 132 : uvdc;
     e->dq_uv[1] = vp8_ac_qlookup[q];
+    {
+        int i;
+        for (i = 0; i < 2; i++) {
+            qstep_set(&e->qs_y1[i], e->dq_y1[i]);
+            qstep_set(&e->qs_y2[i], e->dq_y2[i]);
+            qstep_set(&e->qs_uv[i], e->dq_uv[i]);
+        }
+    }
 }
 
 vp8e *vp8e_init(void *mem, int w, int h, int q)
@@ -449,6 +496,7 @@ vp8e *vp8e_init(void *mem, int w, int h, int q)
     if (w < 16 || h < 16 || w > 16383 || h > 16383)
         return NULL;
     memset(e, 0, sizeof *e);
+    norm_init();
     e->w = w;
     e->h = h;
     e->mbw = (w + 15) / 16;
@@ -465,6 +513,8 @@ vp8e *vp8e_init(void *mem, int w, int h, int q)
     p += align4((size_t)e->ruvs * e->mbh * 8);
     e->mbinfo = p;
     p += align4(mbs);
+    e->exact = p;
+    p += align4(mbs);
     e->above_ctx = p;
     p += align4((size_t)e->mbw * 9);
     e->p1 = p;
@@ -474,6 +524,7 @@ vp8e *vp8e_init(void *mem, int w, int h, int q)
 }
 
 int vp8e_mb_cols(const vp8e *e) { return e->mbw; }
+const uint8_t *vp8e_exact_map(const vp8e *e) { return e->exact; }
 int vp8e_mb_rows(const vp8e *e) { return e->mbh; }
 
 void vp8e_recon(const vp8e *e, const uint8_t **y, const uint8_t **u,
@@ -598,13 +649,13 @@ static int quantise_mb(const vp8e *e, const uint8_t *sy, const uint8_t *py, cons
         dcs[b] = c[0];
         qc->y[b][0] = 0;
         for (k = 1; k < 16; k++) {
-            qc->y[b][k] = quant(c[zigzag[k]], e->dq_y1[1]);
+            qc->y[b][k] = quant(c[zigzag[k]], &e->qs_y1[1]);
             any |= qc->y[b][k];
         }
     }
     fwalsh(dcs, w);
     for (k = 0; k < 16; k++) {
-        qc->y2[k] = quant(w[zigzag[k]], e->dq_y2[k ? 1 : 0]);
+        qc->y2[k] = quant(w[zigzag[k]], &e->qs_y2[k ? 1 : 0]);
         any |= qc->y2[k];
     }
     for (b = 0; b < 8; b++) {
@@ -613,7 +664,7 @@ static int quantise_mb(const vp8e *e, const uint8_t *sy, const uint8_t *py, cons
         residual4(s, p, 8, (b & 1) * 4, ((b & 3) >> 1) * 4, d);
         fdct4x4(d, c);
         for (k = 0; k < 16; k++) {
-            qc->uv[b][k] = quant(c[zigzag[k]], e->dq_uv[k ? 1 : 0]);
+            qc->uv[b][k] = quant(c[zigzag[k]], &e->qs_uv[k ? 1 : 0]);
             any |= qc->uv[b][k];
         }
     }
@@ -784,7 +835,7 @@ int vp8e_begin(vp8e *e, const vp8e_src *src, const uint8_t *dirty, int key, uint
     e->f_out = out;
     e->f_cap = cap;
     e->f_row = 0;
-    e->nskip = e->nintra = 0;
+    e->nskip = e->nintra = e->nchanged = 0;
     bw_init(&e->tb, out + e->f_hdr + e->p1cap, out + cap);
     memset(e->above_ctx, 0, (size_t)e->mbw * 9);
     return 1;
@@ -869,8 +920,25 @@ int vp8e_rows(vp8e *e, int nrows)
 
             coded = quantise_mb(e, sy, py, su, pu, sv, pv, qc);
             reconstruct_mb(e, c, r, py, pu, pv, qc, coded);
+            {
+                /* Did the peer get the source exactly? (Edge macroblocks
+                 * compare their padding too, and may never say yes; the
+                 * refresh just keeps visiting them.) */
+                uint8_t *ex = e->exact + r * e->mbw + c;
+                int j, same = 1;
+                load_rec(e->ry, e->rys, c * 16, r * 16, 16, e->cand);
+                same = !memcmp(e->cand, sy, 256);
+                for (j = 0; j < 8 && same; j++)
+                    same = !memcmp(e->ru + (r * 8 + j) * e->ruvs + c * 8, su + j * 8, 8) &&
+                           !memcmp(e->rv + (r * 8 + j) * e->ruvs + c * 8, sv + j * 8, 8);
+                *ex = (uint8_t)same;
+            }
             *info = (uint8_t)((inter ? MB_INTER : 0) | (coded ? 0 : MB_SKIP) |
                               (bestmode << 1) | (uvmode << 4));
+            /* Only an inter macroblock with nothing coded is a straight copy
+             * of what the peer already has. */
+            if (coded || !inter)
+                e->nchanged++;
             if (coded) {
                 put_mb_tokens(&e->tb, qc, above, left);
             } else {
@@ -930,6 +998,7 @@ size_t vp8e_end(vp8e *e)
     e->stats.intra = e->nintra;
     e->stats.inter = total - e->nintra;
     e->stats.key = key;
+    e->stats.changed = key ? total : e->nchanged;
     return hdr + p1len + p2len;
 }
 

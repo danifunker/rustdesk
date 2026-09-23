@@ -36,6 +36,7 @@ typedef struct {
     uint8_t *Y, *U, *V;       /* the whole frame, kept current */
     int ystride, uvstride;
     uint8_t *dirty;           /* one byte per macroblock */
+    uint8_t *stale;           /* changed since its refinement pass */
     int mbw, mbh;
 } cdv_screen;
 
@@ -46,9 +47,11 @@ int screen_geometry_changed(const cdv_screen *s);
 /* Rebuild and publish the colour table if it changed. */
 void screen_check_palette(cdv_screen *s);
 
-/* Engine. Compare macroblock rows [my0, my1), mark what changed (or all of
- * them, or the one row `band`, which heals rounding left by earlier frames),
- * copy it into the shadow and convert it. Returns how many were marked. */
-int screen_scan_rows(cdv_screen *s, int my0, int my1, int band, int all);
+/* Engine. Compare macroblock rows [my0, my1) and mark what changed, or all of
+ * them. In the one row `band`, also mark what changed since that row was last
+ * refined and is not already exact: coding it again against the peer's
+ * picture heals most of the rounding the first pass left, once. Marked
+ * macroblocks are copied into the shadow and converted. Returns how many. */
+int screen_scan_rows(cdv_screen *s, int my0, int my1, int band, int all, const uint8_t *exact);
 
 #endif
