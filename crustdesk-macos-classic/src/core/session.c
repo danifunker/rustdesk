@@ -2,7 +2,6 @@
 #include "pb.h"
 #include "sha256.h"
 
-#include <stdio.h>
 #include <string.h>
 
 /* What we tell the peer we are. A version is a capability claim, not a label:
@@ -31,6 +30,26 @@ static void say(cdv_session *s, const char *msg)
         s->hooks->log(s->hooks->user, msg);
 }
 
+/* No printf: on the Mac this runs at deferred-task time, on whatever stack
+ * was interrupted, and newlib's formatter wants more of it than is polite. */
+static void say3(cdv_session *s, const char *a, const char *b, const char *c)
+{
+    char line[96];
+    size_t n = 0;
+    const char *parts[3];
+    int i;
+    parts[0] = a;
+    parts[1] = b;
+    parts[2] = c;
+    for (i = 0; i < 3; i++) {
+        const char *p = parts[i];
+        while (p && *p && n < sizeof line - 1)
+            line[n++] = *p++;
+    }
+    line[n] = 0;
+    say(s, line);
+}
+
 static uint32_t rnd(cdv_session *s)
 {
     s->rng ^= s->rng << 13;
@@ -45,8 +64,13 @@ void cdv_init(cdv_session *s, uint8_t *out, size_t outcap, uint8_t *in, size_t i
     memset(s, 0, sizeof *s);
     s->hooks = hooks;
     s->id = id;
+    /* A sixteenth of the space, at least 4 KB, for control messages. */
+    s->ctlcap = outcap / 16 < 4096 ? 4096 : outcap / 16;
+    if (s->ctlcap > outcap / 2)
+        s->ctlcap = outcap / 2;
     s->out = out;
-    s->outcap = outcap;
+    s->vid = out + s->ctlcap;
+    s->vidcap = outcap - s->ctlcap;
     s->in = in;
     s->incap = incap;
     s->rng = seed ? seed : 0x2545F491u;
@@ -71,9 +95,9 @@ static size_t frame_header(uint8_t *h, size_t n)
  * front. Returns 0 if there was no room, and queues nothing. */
 static int msg_begin(cdv_session *s, pbw *w)
 {
-    if (s->state == CDV_CLOSED || s->outcap - s->olen < 8)
+    if (s->state == CDV_CLOSED || s->ctlcap - s->olen < 8)
         return 0;
-    pbw_init(w, s->out + s->olen + 4, s->outcap - s->olen - 4);
+    pbw_init(w, s->out + s->olen + 4, s->ctlcap - s->olen - 4);
     return 1;
 }
 
@@ -93,17 +117,44 @@ static int msg_end(cdv_session *s, pbw *w)
     return 1;
 }
 
-const uint8_t *cdv_out_peek(const cdv_session *s, size_t *n)
+/* Peeking claims the queue it returns: bytes handed to the platform must be
+ * consumed from the same queue, even if the other fills up meanwhile. */
+const uint8_t *cdv_out_peek(cdv_session *s, size_t *n)
 {
-    *n = s->olen - s->ooff;
-    return s->out + s->ooff;
+    int src;
+    if (!s->sending)
+        s->sending = s->olen > s->ooff ? 1 : s->vstate == VID_READY ? 2 : 0;
+    src = s->sending;
+    if (src == 1) {
+        *n = s->olen - s->ooff;
+        return s->out + s->ooff;
+    }
+    if (src == 2) {
+        *n = s->vlen - s->voff;
+        return s->vid + s->voff;
+    }
+    *n = 0;
+    return s->out;
 }
 
 void cdv_out_consume(cdv_session *s, size_t n)
 {
-    s->ooff += n;
-    if (s->ooff >= s->olen)
-        s->ooff = s->olen = 0;
+    if (!n || !s->sending)
+        return;
+    if (s->sending == 1) {
+        s->ooff += n;
+        if (s->ooff >= s->olen) {
+            s->ooff = s->olen = 0;
+            s->sending = 0;
+        }
+    } else {
+        s->voff += n;
+        if (s->voff >= s->vlen) {
+            s->voff = s->vlen = 0;
+            s->vstate = VID_FREE;
+            s->sending = 0;
+        }
+    }
 }
 
 static void send_login_error(cdv_session *s, const char *err)
@@ -205,10 +256,17 @@ void cdv_start(cdv_session *s, uint32_t now_ms)
 
 uint8_t *cdv_video_begin(cdv_session *s, size_t *cap)
 {
-    if (s->state != CDV_LIVE || s->olen != 0 || s->outcap < VIDEO_PREFIX + VIDEO_SUFFIX + 64)
+    if (s->state != CDV_LIVE || s->vstate != VID_FREE || s->vidcap < VIDEO_PREFIX + VIDEO_SUFFIX + 64)
         return NULL;
-    *cap = s->outcap - VIDEO_PREFIX - VIDEO_SUFFIX;
-    return s->out + VIDEO_PREFIX;
+    s->vstate = VID_ENCODING;
+    *cap = s->vidcap - VIDEO_PREFIX - VIDEO_SUFFIX;
+    return s->vid + VIDEO_PREFIX;
+}
+
+void cdv_video_abort(cdv_session *s)
+{
+    if (s->vstate == VID_ENCODING)
+        s->vstate = VID_FREE;
 }
 
 /* Message{video_frame: VideoFrame{vp8s: VP9s{frames: [VP9{data, key, pts}]}}},
@@ -217,7 +275,7 @@ uint8_t *cdv_video_begin(cdv_session *s, size_t *cap)
  * skipped by starting the queue past it. */
 void cdv_video_commit(cdv_session *s, size_t len, int key)
 {
-    uint8_t *data = s->out + VIDEO_PREFIX, *p, pre[VIDEO_PREFIX];
+    uint8_t *data = s->vid + VIDEO_PREFIX, *p, pre[VIDEO_PREFIX];
     size_t suffix, l3, l2, l1, l0, n = 0;
     p = data + len;
     if (key) {
@@ -245,8 +303,9 @@ void cdv_video_commit(cdv_session *s, size_t len, int key)
     n += pb_put_varint(pre + n, len);
 
     memcpy(data - n, pre, n);
-    s->ooff = VIDEO_PREFIX - n;
-    s->olen = (size_t)(p - s->out);
+    s->voff = VIDEO_PREFIX - n;
+    s->vlen = (size_t)(p - s->vid);
+    s->vstate = VID_READY;
 }
 
 int cdv_take_refresh(cdv_session *s)
@@ -263,7 +322,6 @@ static void login(cdv_session *s, const uint8_t *b, size_t n)
     pbr r;
     const uint8_t *pw = NULL;
     size_t pwlen = 0;
-    char line[160];
 
     pbr_init(&r, b, n);
     while (pbr_next(&r)) {
@@ -316,8 +374,7 @@ static void login(cdv_session *s, const uint8_t *b, size_t n)
         for (i = 0; i < 32; i++)
             diff |= (uint8_t)(h2[i] ^ pw[i]);
         if (diff) {
-            snprintf(line, sizeof line, "wrong password from '%s'", s->peer_name);
-            say(s, line);
+            say3(s, "wrong password from '", s->peer_name, "'");
             send_login_error(s, "Wrong Password");
             return;
         }
@@ -325,9 +382,8 @@ static void login(cdv_session *s, const uint8_t *b, size_t n)
     send_peer_info(s);
     s->state = CDV_LIVE;
     s->refresh = 1;
-    snprintf(line, sizeof line, "'%s' logged in (client %s)", s->peer_name,
-             s->peer_version[0] ? s->peer_version : "unknown");
-    say(s, line);
+    say3(s, s->peer_name, " logged in, client ",
+         s->peer_version[0] ? s->peer_version : "unknown");
 }
 
 static int modifier_bit(uint64_t ck)

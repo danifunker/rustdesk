@@ -194,7 +194,16 @@ int main(int argc, char **argv)
                 dirty[(f % mbh) * mbw + i] = 1;
         }
 
-        n = vp8e_encode(e, &src, f ? dirty : NULL, key, out, cap);
+        if (getenv("SLICE")) { /* the way the Mac drives it: a few rows at a time */
+            n = 0;
+            if (vp8e_begin(e, &src, f ? dirty : NULL, key, out, cap)) {
+                while (!vp8e_rows(e, atoi(getenv("SLICE"))))
+                    ;
+                n = vp8e_end(e);
+            }
+        } else {
+            n = vp8e_encode(e, &src, f ? dirty : NULL, key, out, cap);
+        }
         if (!n) {
             printf("frame %d: encoder overflow\n", f);
             return 1;

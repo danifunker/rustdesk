@@ -36,6 +36,10 @@ typedef struct {
 void yuv_convert(const yuv_fb *fb, uint8_t *Y, uint8_t *U, uint8_t *V, int ystride,
                  int uvstride, const uint8_t *dirty);
 
+/* The same, for macroblock rows [my0, my1) only. */
+void yuv_convert_rows(const yuv_fb *fb, uint8_t *Y, uint8_t *U, uint8_t *V, int ystride,
+                      int uvstride, const uint8_t *dirty, int my0, int my1);
+
 /* 8-bit shorthand used by the host tests. */
 void yuv_from_indexed(const yuv_clut *c, const uint8_t *fb, int rowbytes, int w, int h,
                       uint8_t *Y, uint8_t *U, uint8_t *V, int ystride, int uvstride,

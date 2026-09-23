@@ -1,12 +1,12 @@
 /* One listening TCP stream over MacTCP, driven by polling.
  *
- * Every call is asynchronous and nothing runs at interrupt time: the main
- * loop looks at each parameter block's ioResult, which MacTCP sets from
- * `inProgress` (1) to the result when the call finishes. That keeps all the
- * work in ordinary application context, where the Memory Manager and the
- * session code are safe to use. The cost is that nothing moves while another
- * application holds the machine; MiniVNC's interrupt-time chaining is the
- * remedy when that matters, and this layout leaves room for it.
+ * No completion routines: whoever drives it -- the engine, at deferred-task
+ * time -- looks at each parameter block's ioResult, which MacTCP moves from
+ * `inProgress` (1) to the result when the call finishes. Everything the engine
+ * calls here is asynchronous, including dropping a connection and listening
+ * again, so a peer can reconnect while the application is stuck behind a
+ * menu. net_init, net_reset and net_shutdown make synchronous calls and
+ * belong to the main loop.
  */
 #ifndef CDV_NET_H
 #define CDV_NET_H
@@ -16,7 +16,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-enum { NET_DOWN, NET_LISTENING, NET_CONNECTED };
+enum { NET_DOWN, NET_LISTENING, NET_CONNECTED, NET_RESETTING };
 
 typedef struct {
     short refnum;
@@ -27,7 +27,7 @@ typedef struct {
     ip_addr local, remote;
     OSErr err;
 
-    TCPiopb open_pb, rcv_pb, snd_pb;
+    TCPiopb open_pb, rcv_pb, snd_pb, abort_pb;
     int rcv_busy, snd_busy;
     size_t snd_len;
     wdsEntry wds[2];
@@ -53,13 +53,15 @@ size_t net_sent(cdv_net *n);
 
 int net_send_idle(const cdv_net *n);
 
-/* Drop the connection and listen again. */
+/* Drop the connection and listen again: synchronously (main loop), or as an
+ * asynchronous abort that net_accepted finishes (engine). */
 void net_reset(cdv_net *n);
+void net_reset_async(cdv_net *n);
 
 /* Abort and release the stream. Before quitting, always. */
 void net_shutdown(cdv_net *n);
 
-/* Nonzero if the connection failed (the caller should reset). */
+/* Nonzero if the connection or the listen failed (the caller should reset). */
 int net_failed(const cdv_net *n);
 
 void net_addr_string(ip_addr a, char *out);

@@ -11,7 +11,7 @@ static PixMapHandle main_pixmap(void)
     return (**gd).gdPMap;
 }
 
-static void read_palette(cdv_screen *s)
+static void build_palette(cdv_screen *s, yuv_clut *dst)
 {
     PixMapHandle pm = main_pixmap();
     CTabHandle ct = (**pm).pmTable;
@@ -30,7 +30,7 @@ static void read_palette(cdv_screen *s)
         }
         s->ctseed = (**ct).ctSeed;
     }
-    yuv_clut_build(&s->clut, (const uint8_t(*)[3])rgb, n);
+    yuv_clut_build(dst, (const uint8_t(*)[3])rgb, n);
 }
 
 OSErr screen_open(cdv_screen *s)
@@ -59,14 +59,15 @@ OSErr screen_open(cdv_screen *s)
     }
     s->U = s->Y + luma;
     s->V = s->U + (long)s->uvstride * s->mbh * 8;
-    read_palette(s);
+    build_palette(s, &s->clut[0]);
+    s->clut_cur = 0;
 
     s->fb.base = s->base;
     s->fb.rowbytes = s->rowbytes;
     s->fb.depth = s->depth;
     s->fb.width = s->width;
     s->fb.height = s->height;
-    s->fb.clut = &s->clut;
+    s->fb.clut = &s->clut[0];
     return noErr;
 }
 
@@ -90,17 +91,20 @@ int screen_geometry_changed(const cdv_screen *s)
            (uint8_t *)(**pm).baseAddr != s->base;
 }
 
-int screen_palette_changed(cdv_screen *s)
+void screen_check_palette(cdv_screen *s)
 {
     PixMapHandle pm = main_pixmap();
     CTabHandle ct = (**pm).pmTable;
+    int spare;
     if (s->depth > 8 || !ct || (**ct).ctSeed == s->ctseed)
-        return 0;
-    read_palette(s);
-    return 1;
+        return;
+    spare = !s->clut_cur;
+    build_palette(s, &s->clut[spare]);
+    s->clut_cur = spare;
+    s->clut_seq++;
 }
 
-int screen_scan(cdv_screen *s, int refresh, int all)
+int screen_scan_rows(cdv_screen *s, int my0, int my1, int band, int all)
 {
     int bytes = s->depth * 16 / 8; /* one macroblock's width in bytes */
     int mx, my, count = 0;
@@ -112,13 +116,14 @@ int screen_scan(cdv_screen *s, int refresh, int all)
         SwapMMUMode((Byte *)&mode);
         swapped = 1;
     }
+    s->fb.clut = &s->clut[s->clut_cur];
 
-    for (my = 0; my < s->mbh; my++) {
+    for (my = my0; my < my1; my++) {
         int y0 = my * 16, rows = s->height - y0 < 16 ? s->height - y0 : 16;
-        int band = refresh && my == s->band;
+        int whole = all || my == band, n0 = count;
         for (mx = 0; mx < s->mbw; mx++) {
             long off = (long)y0 * s->rowbytes + (long)mx * bytes;
-            int n = mx == s->mbw - 1 ? s->rowbytes - mx * bytes : bytes, y, d = all || band;
+            int n = mx == s->mbw - 1 ? s->rowbytes - mx * bytes : bytes, y, d = whole;
             if (n > bytes)
                 n = bytes;
             for (y = 0; y < rows && !d; y++)
@@ -132,12 +137,11 @@ int screen_scan(cdv_screen *s, int refresh, int all)
                 count++;
             }
         }
+        if (count > n0)
+            yuv_convert_rows(&s->fb, s->Y, s->U, s->V, s->ystride, s->uvstride, s->dirty, my,
+                             my + 1);
     }
-    if (count)
-        yuv_convert(&s->fb, s->Y, s->U, s->V, s->ystride, s->uvstride, s->dirty);
     if (swapped)
         SwapMMUMode((Byte *)&mode);
-    if (refresh)
-        s->band = (s->band + 1) % s->mbh;
     return count;
 }

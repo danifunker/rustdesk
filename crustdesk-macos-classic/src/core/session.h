@@ -9,9 +9,13 @@
  * encrypted -- the same as upstream's direct server, and what the other
  * vintage agents do on the LAN.
  *
- * Buffers are the caller's and are never reallocated. `out` is a queue with a
- * fixed base: bytes handed to the platform stay where they are until the whole
- * queue has been sent, which is what lets MacTCP send straight out of it.
+ * Buffers are the caller's and are never reallocated. `out` is split in two:
+ * a small queue for control messages at the front, and room for one video
+ * frame behind it. A frame can be encoded -- a few rows at a time, on the Mac
+ * -- while keepalives and replies keep flowing, and messages never interleave
+ * on the wire: whichever queue starts sending finishes before the other goes.
+ * Bytes handed to the platform stay where they are until they are consumed,
+ * which is what lets MacTCP send straight out of them.
  */
 #ifndef SESSION_H
 #define SESSION_H
@@ -79,8 +83,12 @@ typedef struct {
     int attempts;
     uint32_t rng;
 
-    uint8_t *out;
-    size_t outcap, ooff, olen;
+    uint8_t *out;            /* control queue: out[0 .. ctlcap) */
+    size_t ctlcap, ooff, olen;
+    uint8_t *vid;            /* one video frame */
+    size_t vidcap, voff, vlen;
+    int vstate;              /* VID_FREE, VID_ENCODING, VID_READY */
+    int sending;             /* which queue is mid-message: 0 none, 1 control, 2 video */
 
     uint8_t *in;
     size_t incap, ilen, skip;
@@ -107,14 +115,18 @@ int cdv_feed(cdv_session *s, const uint8_t *data, size_t n);
 /* Timers: keepalive. Call every pass of the main loop. */
 void cdv_tick(cdv_session *s, uint32_t now_ms);
 
-/* The bytes waiting to go out, and how many of them the platform sent. */
-const uint8_t *cdv_out_peek(const cdv_session *s, size_t *n);
+/* The bytes waiting to go out, and how many of them the platform sent.
+ * Always consume what was peeked before peeking something new. */
+const uint8_t *cdv_out_peek(cdv_session *s, size_t *n);
 void cdv_out_consume(cdv_session *s, size_t n);
 
-/* Video. Only when the queue is empty: a slow line then paces the encoder
- * instead of frames piling up. vp8 data is written at the returned pointer. */
+/* Video. One frame at a time: a new one can begin once the last has been
+ * sent, so a slow line paces the encoder instead of frames piling up. vp8
+ * data is written at the returned pointer; commit or abort it. */
+enum { VID_FREE, VID_ENCODING, VID_READY };
 uint8_t *cdv_video_begin(cdv_session *s, size_t *cap);
 void cdv_video_commit(cdv_session *s, size_t len, int key);
+void cdv_video_abort(cdv_session *s);
 
 /* The peer's refresh button: nonzero once, then cleared. */
 int cdv_take_refresh(cdv_session *s);

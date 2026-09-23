@@ -72,20 +72,40 @@ OSErr net_init(cdv_net *n, unsigned short port)
     return noErr;
 }
 
+void net_reset_async(cdv_net *n)
+{
+    TCPiopb *pb = &n->abort_pb;
+    if (n->state == NET_RESETTING)
+        return;
+    pb_prep(n, pb, TCPAbort);
+    pb->ioResult = inProgress;
+    PBControlAsync((ParmBlkPtr)pb);
+    n->state = NET_RESETTING;
+}
+
 int net_accepted(cdv_net *n)
 {
     short r;
+    if (n->state == NET_RESETTING) {
+        /* The abort completes every call in flight with an error; once all
+         * of them are back, listen again. */
+        if (n->abort_pb.ioResult == inProgress ||
+            (n->rcv_busy && n->rcv_pb.ioResult == inProgress) ||
+            (n->snd_busy && n->snd_pb.ioResult == inProgress) ||
+            n->open_pb.ioResult == inProgress)
+            return 0;
+        listen_async(n);
+        return 0;
+    }
     if (n->state != NET_LISTENING)
         return 0;
     r = n->open_pb.ioResult;
     if (r == inProgress)
         return 0;
     if (r != noErr) {
-        /* A listen that failed (or timed out) just listens again. */
-        TCPiopb pb;
-        pb_prep(n, &pb, TCPAbort);
-        PBControlSync((ParmBlkPtr)&pb);
-        listen_async(n);
+        /* A listen that failed (or timed out). Resetting takes synchronous
+         * calls, which only the main loop may make. */
+        n->err = r;
         return 0;
     }
     n->remote = n->open_pb.csParam.open.remoteHost;
@@ -175,7 +195,7 @@ int net_send_idle(const cdv_net *n)
 
 int net_failed(const cdv_net *n)
 {
-    return n->state == NET_CONNECTED && n->err != noErr;
+    return n->err != noErr;
 }
 
 void net_reset(cdv_net *n)

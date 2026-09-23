@@ -8,7 +8,7 @@
 # FPU-less 68LC040 and a 68030 alike. PowerPC comes later (see README).
 
 cmake_minimum_required(VERSION 3.13)
-project(CDeskVint C)
+project(CDeskVint C ASM)
 
 set(CDV_CPU "68020" CACHE STRING "Target CPU passed to -m (68020, 68030, 68040)")
 
@@ -17,6 +17,8 @@ add_application(C-Desk-Vint
     src/mac/net.c
     src/mac/screen.c
     src/mac/input.c
+    src/mac/engine.c
+    src/mac/glue.s
     src/core/session.c
     src/core/pb.c
     src/core/sha256.c
@@ -31,4 +33,7 @@ target_compile_options(C-Desk-Vint PRIVATE
     -Wall -Wno-multichar -Wno-unused-parameter
     -Wno-array-bounds  # low-memory globals are fixed addresses
     -ffunction-sections)
-target_link_options(C-Desk-Vint PRIVATE -m${CDV_CPU} -msoft-float -Wl,-gc-sections)
+# One CODE segment: the engine runs at interrupt time, where the Segment
+# Loader must never be asked to bring anything in.
+target_link_options(C-Desk-Vint PRIVATE -m${CDV_CPU} -msoft-float -Wl,-gc-sections
+    -Wl,--mac-single)

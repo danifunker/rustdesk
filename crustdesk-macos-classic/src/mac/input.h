@@ -17,7 +17,11 @@
 
 #include "../core/session.h"
 
+#include <Multiverse.h>
+
 void input_init(int screen_w, int screen_h);
+/* The KCHR to translate keycodes with; the main loop keeps it current. */
+void input_set_kchr(Ptr kchr);
 void input_mouse(int mask, int x, int y);
 void input_key(const cdv_key *k);
 /* Let go of everything the peer held down. */

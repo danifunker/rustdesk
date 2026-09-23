@@ -17,6 +17,22 @@ enum { DC_PRED = 0, V_PRED = 1, H_PRED = 2, TM_PRED = 3, B_PRED = 4 };
 #define MB_YMODE(i)   (((i) >> 1) & 7)
 #define MB_UVMODE(i)  (((i) >> 4) & 7)
 
+
+/* ---- boolean entropy encoder, section 7.3 ------------------------------- */
+
+typedef struct {
+    uint8_t *out, *start, *end;
+    uint32_t range, bottom;
+    int bit_count;
+    int overflow;
+} bw;
+
+typedef struct {
+    short y2[16];
+    short y[16][16];
+    short uv[8][16];
+} mbcoef;
+
 struct vp8e {
     int w, h, mbw, mbh, q;
     int have_ref;
@@ -28,16 +44,23 @@ struct vp8e {
     size_t p1cap;
     int dq_y1[2], dq_y2[2], dq_uv[2];
     vp8e_stats stats;
+
+    /* The frame in progress, between vp8e_begin and vp8e_end. */
+    int f_key, f_row;
+    const uint8_t *f_dirty;
+    vp8e_src f_src;
+    uint8_t *f_out;
+    size_t f_cap, f_hdr;
+    bw tb;
+    uint8_t left[9];
+    int nskip, nintra;
+
+    /* Scratch for one macroblock. Here rather than on the stack, because on
+     * the Mac the encoder runs at deferred-task time on whatever stack the
+     * interrupted code had. */
+    uint8_t sy[256], su[64], sv[64], py[256], pu[64], pv[64], cand[256], cu[64], cv[64];
+    mbcoef qc;
 };
-
-/* ---- boolean entropy encoder, section 7.3 ------------------------------- */
-
-typedef struct {
-    uint8_t *out, *start, *end;
-    uint32_t range, bottom;
-    int bit_count;
-    int overflow;
-} bw;
 
 static void bw_init(bw *b, uint8_t *start, uint8_t *end)
 {
@@ -548,11 +571,8 @@ static void load_rec(const uint8_t *rec, int stride, int x, int y, int n, uint8_
 
 /* ---- one macroblock ------------------------------------------------------- */
 
-typedef struct {
-    short y2[16];
-    short y[16][16];
-    short uv[8][16];
-} mbcoef;
+
+
 
 /* Residual of one 4x4 block at (bx, by) inside an n-wide block. */
 static void residual4(const uint8_t *src, const uint8_t *pred, int n, int bx, int by, short *d)
@@ -750,41 +770,50 @@ static void put_modes(vp8e *e, bw *b, int key, int p_skip, int p_intra)
         }
 }
 
-size_t vp8e_encode(vp8e *e, const vp8e_src *src, const uint8_t *dirty, int key,
-                   uint8_t *out, size_t cap)
+int vp8e_begin(vp8e *e, const vp8e_src *src, const uint8_t *dirty, int key, uint8_t *out,
+               size_t cap)
 {
-    const int cw = (e->w + 1) / 2, ch = (e->h + 1) / 2;
-    size_t hdr, reserve, p1len, p2len;
-    int r, c, nskip = 0, nintra = 0, total = e->mbw * e->mbh, p_skip, p_intra;
-    uint8_t left[9];
-    bw tb, pb;
-    static const int ymodes[4] = { DC_PRED, V_PRED, H_PRED, TM_PRED };
-
     if (!e->have_ref)
         key = 1;
-    hdr = key ? 10 : 3;
-    reserve = e->p1cap;
-    if (cap < hdr + reserve + 64)
+    e->f_key = key;
+    e->f_hdr = key ? 10 : 3;
+    if (cap < e->f_hdr + e->p1cap + 64)
         return 0;
-    bw_init(&tb, out + hdr + reserve, out + cap);
+    e->f_src = *src;
+    e->f_dirty = dirty;
+    e->f_out = out;
+    e->f_cap = cap;
+    e->f_row = 0;
+    e->nskip = e->nintra = 0;
+    bw_init(&e->tb, out + e->f_hdr + e->p1cap, out + cap);
     memset(e->above_ctx, 0, (size_t)e->mbw * 9);
+    return 1;
+}
 
-    for (r = 0; r < e->mbh; r++) {
-        memset(left, 0, sizeof left);
+int vp8e_rows(vp8e *e, int nrows)
+{
+    static const int ymodes[4] = { DC_PRED, V_PRED, H_PRED, TM_PRED };
+    const vp8e_src *src = &e->f_src;
+    const int cw = (e->w + 1) / 2, ch = (e->h + 1) / 2, key = e->f_key;
+    uint8_t *left = e->left, *sy = e->sy, *su = e->su, *sv = e->sv;
+    uint8_t *py = e->py, *pu = e->pu, *pv = e->pv, *cand = e->cand;
+    mbcoef *qc = &e->qc;
+    int c;
+
+    for (; nrows > 0 && e->f_row < e->mbh; nrows--, e->f_row++) {
+        int r = e->f_row;
+        memset(left, 0, 9);
         for (c = 0; c < e->mbw; c++) {
             uint8_t *above = e->above_ctx + c * 9;
             uint8_t *info = e->mbinfo + r * e->mbw + c;
-            uint8_t sy[256], su[64], sv[64];
-            uint8_t py[256], pu[64], pv[64], cand[256];
-            mbcoef qc;
             int best, bestmode, inter = 0, m, coded, uvmode = DC_PRED;
 
-            if (!key && dirty && !dirty[r * e->mbw + c]) {
+            if (!key && e->f_dirty && !e->f_dirty[r * e->mbw + c]) {
                 /* Unchanged: copy from the last frame, nothing coded. */
                 *info = MB_INTER | MB_SKIP;
                 memset(above, 0, 9);
                 memset(left, 0, 9);
-                nskip++;
+                e->nskip++;
                 continue;
             }
 
@@ -820,50 +849,58 @@ size_t vp8e_encode(vp8e *e, const vp8e_src *src, const uint8_t *dirty, int key,
                 load_rec(e->ru, e->ruvs, c * 8, r * 8, 8, pu);
                 load_rec(e->rv, e->ruvs, c * 8, r * 8, 8, pv);
             } else {
-                uint8_t cu[64], cv[64];
                 int bestuv = 0x7fffffff;
                 for (m = 0; m < 4; m++) {
                     int mode = ymodes[m], s;
                     if ((mode == V_PRED && r == 0) || (mode == H_PRED && c == 0) ||
                         (mode == TM_PRED && (r == 0 || c == 0)))
                         continue;
-                    intra_pred(e->ru, e->ruvs, c * 8, r * 8, 8, mode, cu);
-                    intra_pred(e->rv, e->ruvs, c * 8, r * 8, 8, mode, cv);
-                    s = sad(su, cu, 64) + sad(sv, cv, 64);
+                    intra_pred(e->ru, e->ruvs, c * 8, r * 8, 8, mode, e->cu);
+                    intra_pred(e->rv, e->ruvs, c * 8, r * 8, 8, mode, e->cv);
+                    s = sad(su, e->cu, 64) + sad(sv, e->cv, 64);
                     if (s < bestuv) {
                         bestuv = s;
                         uvmode = mode;
-                        memcpy(pu, cu, 64);
-                        memcpy(pv, cv, 64);
+                        memcpy(pu, e->cu, 64);
+                        memcpy(pv, e->cv, 64);
                     }
                 }
             }
 
-            coded = quantise_mb(e, sy, py, su, pu, sv, pv, &qc);
-            reconstruct_mb(e, c, r, py, pu, pv, &qc, coded);
+            coded = quantise_mb(e, sy, py, su, pu, sv, pv, qc);
+            reconstruct_mb(e, c, r, py, pu, pv, qc, coded);
             *info = (uint8_t)((inter ? MB_INTER : 0) | (coded ? 0 : MB_SKIP) |
                               (bestmode << 1) | (uvmode << 4));
             if (coded) {
-                put_mb_tokens(&tb, &qc, above, left);
+                put_mb_tokens(&e->tb, qc, above, left);
             } else {
                 memset(above, 0, 9);
                 memset(left, 0, 9);
-                nskip++;
+                e->nskip++;
             }
             if (!inter)
-                nintra++;
+                e->nintra++;
         }
     }
-    p2len = bw_finish(&tb);
+    return e->f_row >= e->mbh;
+}
 
-    p_skip = prob_of(total - nskip, total);
-    p_intra = prob_of(nintra, total);
+size_t vp8e_end(vp8e *e)
+{
+    uint8_t *out = e->f_out;
+    size_t hdr = e->f_hdr, p1len, p2len;
+    int total = e->mbw * e->mbh, key = e->f_key, p_skip, p_intra;
+    bw pb;
+
+    p2len = bw_finish(&e->tb);
+    p_skip = prob_of(total - e->nskip, total);
+    p_intra = prob_of(e->nintra, total);
     bw_init(&pb, e->p1, e->p1 + e->p1cap);
     put_header(e, &pb, key, p_skip, p_intra);
     put_modes(e, &pb, key, p_skip, p_intra);
     p1len = bw_finish(&pb);
 
-    if (tb.overflow || pb.overflow || p1len >= (1u << 19)) {
+    if (e->tb.overflow || pb.overflow || p1len >= (1u << 19)) {
         e->have_ref = 0;
         return 0;
     }
@@ -885,13 +922,28 @@ size_t vp8e_encode(vp8e *e, const vp8e_src *src, const uint8_t *dirty, int key,
         out[9] = (uint8_t)(e->h >> 8);
     }
     memcpy(out + hdr, e->p1, p1len);
-    memmove(out + hdr + p1len, out + hdr + reserve, p2len);
+    memmove(out + hdr + p1len, out + hdr + e->p1cap, p2len);
 
     e->have_ref = 1;
     e->stats.mbs = total;
-    e->stats.skipped = nskip;
-    e->stats.intra = nintra;
-    e->stats.inter = total - nintra;
+    e->stats.skipped = e->nskip;
+    e->stats.intra = e->nintra;
+    e->stats.inter = total - e->nintra;
     e->stats.key = key;
     return hdr + p1len + p2len;
+}
+
+void vp8e_abandon(vp8e *e)
+{
+    /* The reconstruction is part-way into a frame the peer never saw. */
+    e->have_ref = 0;
+}
+
+size_t vp8e_encode(vp8e *e, const vp8e_src *src, const uint8_t *dirty, int key,
+                   uint8_t *out, size_t cap)
+{
+    if (!vp8e_begin(e, src, dirty, key, out, cap))
+        return 0;
+    vp8e_rows(e, e->mbh);
+    return vp8e_end(e);
 }

@@ -80,9 +80,15 @@ static void row_yuv(const yuv_fb *fb, int y, int x0, int x1, uint8_t *yo, uint8_
 void yuv_convert(const yuv_fb *fb, uint8_t *Y, uint8_t *U, uint8_t *V, int ys, int uvs,
                  const uint8_t *dirty)
 {
-    int mbw = (fb->width + 15) / 16, mbh = (fb->height + 15) / 16, mx, my;
+    yuv_convert_rows(fb, Y, U, V, ys, uvs, dirty, 0, (fb->height + 15) / 16);
+}
+
+void yuv_convert_rows(const yuv_fb *fb, uint8_t *Y, uint8_t *U, uint8_t *V, int ys, int uvs,
+                      const uint8_t *dirty, int my0, int my1)
+{
+    int mbw = (fb->width + 15) / 16, mx, my;
     uint8_t u0[16], v0[16], u1[16], v1[16];
-    for (my = 0; my < mbh; my++)
+    for (my = my0; my < my1; my++)
         for (mx = 0; mx < mbw; mx++) {
             int x0 = mx * 16, y0 = my * 16, x1 = x0 + 16, y1 = y0 + 16, y;
             if (dirty && !dirty[my * mbw + mx])

@@ -6,6 +6,12 @@
  * column checksums are cheaper but blind to some changes. A VBL-time checksum
  * pass can replace it later; the rest of the pipeline only sees the dirty map.
  *
+ * Two contexts touch this. The main loop opens it, and watches the GDevice for
+ * a new size, depth or colour table -- the only parts that read Toolbox
+ * handles. The engine, at deferred-task time, scans and converts using only
+ * what was cached here. A new colour table is built into the spare of two and
+ * then published by bumping clut_seq, so the engine never sees half a table.
+ *
  * The pointer on most Mac video hardware is drawn into VRAM by software, so it
  * is part of the picture (DisplayInfo.cursor_embedded).
  */
@@ -21,7 +27,9 @@ typedef struct {
     int width, height, depth, rowbytes;
     uint8_t *base;
     long ctseed;
-    yuv_clut clut;
+    yuv_clut clut[2];
+    volatile int clut_cur;    /* which of the two is published */
+    volatile long clut_seq;   /* bumped on every publish */
     yuv_fb fb;
 
     uint8_t *shadow;          /* rowbytes * height: the pixels last encoded */
@@ -29,24 +37,18 @@ typedef struct {
     int ystride, uvstride;
     uint8_t *dirty;           /* one byte per macroblock */
     int mbw, mbh;
-    int band;                 /* next macroblock row for the rolling refresh */
 } cdv_screen;
 
-/* Size up the main screen and allocate for it. */
+/* Main loop only. */
 OSErr screen_open(cdv_screen *s);
 void screen_close(cdv_screen *s);
-
-/* Nonzero if the main screen's size or depth is no longer what was opened. */
 int screen_geometry_changed(const cdv_screen *s);
+/* Rebuild and publish the colour table if it changed. */
+void screen_check_palette(cdv_screen *s);
 
-/* Nonzero if the colour table changed; the table is rebuilt, and every
- * macroblock is marked for conversion. */
-int screen_palette_changed(cdv_screen *s);
-
-/* Compare, mark, and convert what changed. With `refresh` one extra row of
- * macroblocks is converted and marked whether or not it changed, which heals
- * rounding left behind by earlier frames. `all` marks everything (keyframes).
- * Returns how many macroblocks are marked. */
-int screen_scan(cdv_screen *s, int refresh, int all);
+/* Engine. Compare macroblock rows [my0, my1), mark what changed (or all of
+ * them, or the one row `band`, which heals rounding left by earlier frames),
+ * copy it into the shadow and convert it. Returns how many were marked. */
+int screen_scan_rows(cdv_screen *s, int my0, int my1, int band, int all);
 
 #endif

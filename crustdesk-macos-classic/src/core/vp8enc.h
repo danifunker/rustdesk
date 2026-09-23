@@ -52,6 +52,18 @@ int vp8e_mb_rows(const vp8e *e);
 size_t vp8e_encode(vp8e *e, const vp8e_src *src, const uint8_t *dirty, int key,
                    uint8_t *out, size_t cap);
 
+/* The same, a few macroblock rows at a time, for a caller that cannot hold
+ * the processor for a whole frame. vp8e_begin returns 0 if `cap` is too small;
+ * vp8e_rows returns nonzero once every row is done; vp8e_end then assembles
+ * the frame and returns its length (0: it did not fit). The source planes and
+ * dirty map must not change until vp8e_end. A frame that is begun and never
+ * ended must be vp8e_abandon'ed: the next one is then a keyframe. */
+int vp8e_begin(vp8e *e, const vp8e_src *src, const uint8_t *dirty, int key, uint8_t *out,
+               size_t cap);
+int vp8e_rows(vp8e *e, int nrows);
+size_t vp8e_end(vp8e *e);
+void vp8e_abandon(vp8e *e);
+
 /* The encoder's reconstruction: exactly what a decoder shows after the last
  * frame. Tests compare it against libvpx. */
 void vp8e_recon(const vp8e *e, const uint8_t **y, const uint8_t **u,

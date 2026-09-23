@@ -49,9 +49,22 @@ static int modifier_for(int code)
     }
 }
 
+/* The current keyboard layout. Looked up by the main loop, because the
+ * Script Manager is not to be called at interrupt time; KeyTranslate is --
+ * the keyboard driver itself uses it there. */
+static Ptr kchr_ptr;
+
+void input_set_kchr(Ptr p)
+{
+    if (p != kchr_ptr) {
+        kchr_ptr = p;
+        legacy_ready = 0;
+    }
+}
+
 static Ptr kchr(void)
 {
-    return (Ptr)GetScriptManagerVariable(smKCHRCache);
+    return kchr_ptr;
 }
 
 static void build_legacy(void)
@@ -78,7 +91,6 @@ void input_init(int w, int h)
     scr_h = h;
     buttons = mods = right_ctrl = 0;
     memset(held, 0, sizeof held);
-    legacy_ready = 0;
 }
 
 static void move_to(int x, int y)
@@ -115,13 +127,10 @@ static OSErr ppost(short what, long message, EvQElPtr *q)
     return (OSErr)d0;
 }
 
-int input_last_post_err;
-
 static void post(short what, long message)
 {
     EvQElPtr q = NULL;
-    input_last_post_err = ppost(what, message, &q);
-    if (input_last_post_err == noErr && q)
+    if (ppost(what, message, &q) == noErr && q)
         q->evtQModifiers = (INTEGER)(mods | (right_ctrl ? M_CONTROL : 0) |
                                      (buttons ? 0 : 0x0080 /* btnState: up */));
 }

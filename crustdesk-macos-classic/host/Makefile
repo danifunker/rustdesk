@@ -27,6 +27,7 @@ test: all
 	$(B)/test_core
 	$(B)/test_vp8 16 | tail -1
 	$(B)/test_vp8 0 | tail -1
+	SLICE=3 $(B)/test_vp8 16 | tail -1
 
 clean:
 	rm -rf $(B)
