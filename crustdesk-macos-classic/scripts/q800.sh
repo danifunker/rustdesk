@@ -7,6 +7,7 @@
 #             with a prefs file whose password is $CDV_PASSWORD (default
 #             "classic")
 #   start     install, then boot headless; the agent is on 127.0.0.1:$PORT
+#             (NOINSTALL=1: a clean system disk; DISK2=x.hda: a second SCSI disk)
 #   shot NAME save the screen to $ENV/NAME.png
 #   stop      power off
 #
@@ -49,12 +50,23 @@ install)
     install
     ;;
 start)
-    install
+    if [ -n "${NOINSTALL:-}" ]; then
+        cp "$env/sys755-net-base.hda" "$env/sys.hda"
+        cp "$env/pram-32bit.img" "$env/pram.img"
+    else
+        install
+    fi
+    extra=()
+    if [ -n "${DISK2:-}" ]; then
+        cp "$DISK2" "$env/disk2.hda"
+        extra=(-device scsi-hd,scsi-id=1,drive=hd1
+               -drive file=disk2.hda,media=disk,format=raw,if=none,id=hd1)
+    fi
     cd "$env"
     "$qemu" -M q800 -m "${MEM:-64}" -bios f1acad13.rom -g "${GFX:-640x480x8}" \
         -drive file=pram.img,format=raw,if=mtd \
         -device scsi-hd,scsi-id=0,drive=hd0 \
-        -drive file=sys.hda,media=disk,format=raw,if=none,id=hd0 \
+        -drive file=sys.hda,media=disk,format=raw,if=none,id=hd0 "${extra[@]}" \
         -nic user,model=dp83932,hostfwd=tcp:127.0.0.1:$port-:21118 \
         -display none -vnc 127.0.0.1:${VNC:-23} \
         -monitor unix:mon.sock,server,nowait ${ICOUNT:+-icount shift=$ICOUNT,align=off} \
