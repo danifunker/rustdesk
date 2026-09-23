@@ -10,6 +10,12 @@
  *
  * Pixels are read as bytes, so the same code is right on the Mac and on the
  * little-endian machines the tests run on.
+ *
+ * Gamma: a Mac's framebuffer holds the colours QuickDraw meant, and the video
+ * hardware passes every one through the driver's gamma table on the way to
+ * the monitor -- that is what the person at the Mac sees, and midtones come
+ * out markedly brighter than the table's numbers. The caller folds the gamma
+ * into the colour table for indexed depths and hands it over for direct ones.
  */
 #ifndef YUV_H
 #define YUV_H
@@ -29,6 +35,7 @@ typedef struct {
     int depth;             /* 1, 2, 4, 8, 16 or 32 */
     int width, height;
     const yuv_clut *clut;  /* indexed depths only */
+    const uint8_t *gamma;  /* direct depths: R, G, B tables of 256, or NULL */
 } yuv_fb;
 
 /* Convert the macroblocks marked in `dirty` (all of them if NULL) into the

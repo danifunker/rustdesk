@@ -11,6 +11,45 @@ static PixMapHandle main_pixmap(void)
     return (**gd).gdPMap;
 }
 
+/* The driver's current gamma table (cscGetGamma), as three 8-bit tables.
+ * Identity if the driver will not say. */
+static void read_gamma(cdv_screen *s)
+{
+    struct {
+        short gVersion, gType, gFormulaSize, gChanCnt, gDataCnt, gDataWidth;
+    } *g;
+    CntrlParam pb;
+    Ptr rec = NULL; /* VDGammaRecord: the driver writes csGTable here */
+    int ch, i;
+    for (ch = 0; ch < 3; ch++)
+        for (i = 0; i < 256; i++)
+            s->gamma[ch][i] = (uint8_t)i;
+    memset(&pb, 0, sizeof pb);
+    pb.ioCRefNum = s->refnum;
+    pb.csCode = 8; /* cscGetGamma: csParam points at a VDGammaRecord */
+    {
+        Ptr *recp = &rec;
+        memcpy(pb.csParam, &recp, sizeof recp);
+    }
+    s->gamma_err = PBStatusSync((ParmBlkPtr)&pb);
+    if (s->gamma_err != noErr)
+        return;
+    g = (void *)rec;
+    if (g) {
+        s->gamma_info[0] = g->gChanCnt;
+        s->gamma_info[1] = g->gDataCnt;
+        s->gamma_info[2] = g->gDataWidth;
+        s->gamma_info[3] = g->gFormulaSize;
+    }
+    if (!g || g->gDataCnt != 256 || g->gDataWidth != 8 || (g->gChanCnt != 1 && g->gChanCnt != 3))
+        return;
+    {
+        const uint8_t *data = (const uint8_t *)(g + 1) + g->gFormulaSize;
+        for (ch = 0; ch < 3; ch++)
+            memcpy(s->gamma[ch], data + (g->gChanCnt == 3 ? ch * 256 : 0), 256);
+    }
+}
+
 static void build_palette(cdv_screen *s, yuv_clut *dst)
 {
     PixMapHandle pm = main_pixmap();
@@ -24,9 +63,9 @@ static void build_palette(cdv_screen *s, yuv_clut *dst)
         for (i = 0; i < n; i++) {
             /* On a device's table, entry i is pixel value i. */
             const RGBColor *c = &(**ct).ctTable[i].rgb;
-            rgb[i][0] = (uint8_t)(c->red >> 8);
-            rgb[i][1] = (uint8_t)(c->green >> 8);
-            rgb[i][2] = (uint8_t)(c->blue >> 8);
+            rgb[i][0] = s->gamma[0][c->red >> 8];
+            rgb[i][1] = s->gamma[1][c->green >> 8];
+            rgb[i][2] = s->gamma[2][c->blue >> 8];
         }
         s->ctseed = (**ct).ctSeed;
     }
@@ -38,6 +77,8 @@ OSErr screen_open(cdv_screen *s)
     PixMapHandle pm = main_pixmap();
     long planes, luma;
     memset(s, 0, sizeof *s);
+    s->refnum = (**GetMainDevice()).gdRefNum;
+    read_gamma(s);
     s->width = (**pm).bounds.right - (**pm).bounds.left;
     s->height = (**pm).bounds.bottom - (**pm).bounds.top;
     s->depth = (**pm).pixelSize;
@@ -69,6 +110,7 @@ OSErr screen_open(cdv_screen *s)
     s->fb.width = s->width;
     s->fb.height = s->height;
     s->fb.clut = &s->clut[0];
+    s->fb.gamma = s->depth > 8 ? &s->gamma[0][0] : NULL;
     return noErr;
 }
 

@@ -516,6 +516,13 @@ int main(void)
     } else {
         snprintf(line, sizeof line, "screen %dx%d, %d bits", scr.width, scr.height, scr.depth);
         say(line);
+        if (scr.gamma_info[0])
+            snprintf(line, sizeof line, "gamma from the driver (%d-channel), mid-grey %d -> %d",
+                     scr.gamma_info[0], 128, scr.gamma[1][128]);
+        else
+            snprintf(line, sizeof line, "no gamma table from the driver (%d); colours as drawn",
+                     scr.gamma_err);
+        say(line);
         err = net_init(&net, prefs.port);
         if (err != noErr) {
             snprintf(line, sizeof line, "MacTCP did not open (%d)", err);

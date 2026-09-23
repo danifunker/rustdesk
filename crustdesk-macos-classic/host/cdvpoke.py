@@ -18,6 +18,8 @@ Steps:
     sleep SECONDS
     refresh           ask for a keyframe
     frames SECONDS    just watch, and report what arrives
+    save FILE         from now on, append every VP8 frame to FILE (4-byte
+                      big-endian length, then the data) for host/build/vp8dump
 
 Only the handful of protobuf fields involved are encoded, by hand.
 """
@@ -106,6 +108,7 @@ class Peer:
         self.s = socket.create_connection((host, int(port)), timeout=10)
         self.buf = b''
         self.frames = self.keyframes = self.bytes = 0
+        self.save = None
 
     def send(self, body):
         self.s.sendall(frame(body))
@@ -142,6 +145,8 @@ class Peer:
                 enc = parse((vf.get(12) or vf.get(6))[0])
                 one = parse(enc[1][0])
                 self.bytes += len(one[1][0])
+                if self.save:
+                    self.save.write(struct.pack('>I', len(one[1][0])) + one[1][0])
                 if one.get(2, [0])[0]:
                     self.keyframes += 1
             if 5 in m:  # test_delay: answer it as a client does
@@ -222,6 +227,9 @@ def main():
             i += 1
         elif op == 'sleep':
             p.pump(float(args[i]))
+            i += 1
+        elif op == 'save':
+            p.save = open(args[i], 'wb')
             i += 1
         elif op == 'refresh':
             p.send(field(19, 2, field(10, 0, 1)))

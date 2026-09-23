@@ -27,6 +27,9 @@ typedef struct {
     int width, height, depth, rowbytes;
     uint8_t *base;
     long ctseed;
+    short refnum;             /* the video driver, for its gamma table */
+    uint8_t gamma[3][256];    /* what the hardware does to each channel */
+    short gamma_err, gamma_info[4];
     yuv_clut clut[2];
     volatile int clut_cur;    /* which of the two is published */
     volatile long clut_seq;   /* bumped on every publish */

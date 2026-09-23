@@ -85,6 +85,7 @@ int main(void)
             fb.width = 2;
             fb.height = 1;
             fb.clut = &t;
+            fb.gamma = NULL;
             memset(Y, 0, sizeof Y);
             yuv_convert(&fb, Y, U, V, 16, 8, NULL);
             CHECK(Y[0] == 235 && Y[1] == 16);

@@ -61,6 +61,11 @@ static void row_yuv(const yuv_fb *fb, int y, int x0, int x1, uint8_t *yo, uint8_
             r = r << 3 | r >> 2;
             g = g << 3 | g >> 2;
             b = b << 3 | b >> 2;
+            if (fb->gamma) {
+                r = fb->gamma[r];
+                g = fb->gamma[256 + g];
+                b = fb->gamma[512 + b];
+            }
             *yo++ = to_y(r, g, b);
             *uo++ = to_u(r, g, b);
             *vo++ = to_v(r, g, b);
@@ -69,9 +74,15 @@ static void row_yuv(const yuv_fb *fb, int y, int x0, int x1, uint8_t *yo, uint8_
     default: /* 32 */
         for (x = x0; x < x1; x++) {
             const uint8_t *p = row + 4 * x;
-            *yo++ = to_y(p[1], p[2], p[3]);
-            *uo++ = to_u(p[1], p[2], p[3]);
-            *vo++ = to_v(p[1], p[2], p[3]);
+            int r = p[1], g = p[2], b = p[3];
+            if (fb->gamma) {
+                r = fb->gamma[r];
+                g = fb->gamma[256 + g];
+                b = fb->gamma[512 + b];
+            }
+            *yo++ = to_y(r, g, b);
+            *uo++ = to_u(r, g, b);
+            *vo++ = to_v(r, g, b);
         }
         break;
     }
@@ -126,5 +137,6 @@ void yuv_from_indexed(const yuv_clut *c, const uint8_t *fbp, int rowbytes, int w
     fb.width = w;
     fb.height = h;
     fb.clut = c;
+    fb.gamma = NULL;
     yuv_convert(&fb, Y, U, V, ys, uvs, dirty);
 }

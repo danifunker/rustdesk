@@ -9,7 +9,7 @@ CORE    := ../src/core
 CORESRC := $(CORE)/vp8enc.c $(CORE)/pb.c $(CORE)/sha256.c $(CORE)/session.c $(CORE)/yuv.c
 B       := build
 
-all: $(B)/test_vp8 $(B)/hostagent $(B)/test_core
+all: $(B)/test_vp8 $(B)/hostagent $(B)/test_core $(B)/vp8dump
 
 $(B):
 	mkdir -p $(B)
@@ -22,6 +22,9 @@ $(B)/hostagent: hostagent.c $(CORESRC) | $(B)
 
 $(B)/test_core: test_core.c $(CORESRC) | $(B)
 	$(CC) $(CFLAGS) -o $@ test_core.c $(CORESRC)
+
+$(B)/vp8dump: vp8dump.c | $(B)
+	$(CC) $(CFLAGS) -I$(VPXINC) -o $@ vp8dump.c $(LIBVPX)
 
 test: all
 	$(B)/test_core
