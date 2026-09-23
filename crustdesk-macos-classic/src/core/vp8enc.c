@@ -10,6 +10,23 @@
 
 enum { DC_PRED = 0, V_PRED = 1, H_PRED = 2, TM_PRED = 3, B_PRED = 4 };
 
+/* Where the time goes, by phase, when built with VP8E_PROFILE and a platform
+ * clock: 0 mode search, 1 transform and quantise, 2 reconstruct, 3 the
+ * exactness check, 4 tokens. */
+#ifdef VP8E_PROFILE
+uint32_t vp8e_clock(void);
+#define PROF_START uint32_t prof_t = vp8e_clock()
+#define PROF(slot)                                                                             \
+    do {                                                                                       \
+        uint32_t prof_n = vp8e_clock();                                                        \
+        e->prof[slot] += prof_n - prof_t;                                                      \
+        prof_t = prof_n;                                                                       \
+    } while (0)
+#else
+#define PROF_START
+#define PROF(slot)
+#endif
+
 /* Per-macroblock record kept for the whole frame, because the first partition
  * (modes) is written after every macroblock has been decided. */
 #define MB_INTER 0x01
@@ -56,7 +73,7 @@ static void bw_init(bw *b, uint8_t *start, uint8_t *end)
 /* One bool, section 7.3, in libvpx's form: the renormalising shift comes from
  * a table instead of a loop, and a byte is written once 8 bits are ready.
  * This is the encoder's innermost call -- hundreds of times a macroblock. */
-static void bw_put(bw *b, int prob, int bit)
+static inline __attribute__((always_inline)) void bw_put(bw *b, int prob, int bit)
 {
     uint32_t split = 1 + (((b->range - 1) * (uint32_t)prob) >> 8);
     uint32_t range = split, low = b->low;
@@ -153,7 +170,8 @@ static const uint8_t pcat4[] = { 176, 155, 140, 135 };
 static const uint8_t pcat5[] = { 180, 157, 141, 134, 130 };
 static const uint8_t pcat6[] = { 254, 254, 243, 230, 196, 177, 153, 140, 133, 130, 129 };
 
-static void put_extra(bw *b, const uint8_t *p, int bits, int v)
+static inline __attribute__((always_inline)) void put_extra(bw *b, const uint8_t *p, int bits,
+                                                              int v)
 {
     int i;
     for (i = 0; i < bits; i++)
@@ -162,8 +180,11 @@ static void put_extra(bw *b, const uint8_t *p, int bits, int v)
 
 /* Code one block's tokens. `qc` is in zigzag order. Returns whether anything
  * nonzero was coded, which is the context its neighbours see. */
-static int put_block(bw *b, const short *qc, int type, int first, int ctx)
+static int put_block(bw *bp, const short *qc, int type, int first, int ctx)
 {
+    /* The coder's state in a local, so it can live in registers for the
+     * block instead of going through memory on every bool. */
+    bw local = *bp, *b = &local;
     int last = -1, c, skip_eob = 0;
     for (c = 15; c >= first; c--)
         if (qc[c]) {
@@ -239,6 +260,7 @@ static int put_block(bw *b, const short *qc, int type, int first, int ctx)
         bw_put(b, 128, v < 0);
         skip_eob = 0;
     }
+    *bp = local;
     return last >= first;
 }
 
@@ -413,6 +435,21 @@ typedef struct {
     short uv[8][16];
 } mbcoef;
 
+/* A keyframe macroblock's whole outcome is fixed by its source pixels and the
+ * reconstructed edges its intra predictors read. When both match one coded a
+ * moment ago -- a dithered desktop is the same 16x16 block a thousand times,
+ * a window fill the same flat one -- the mode, the coefficients and the
+ * reconstruction are the same, and only the tokens need writing again. */
+#define IC_ENTRIES 4
+#define IC_KEY (384 + 1 + 17 + 16 + 2 * (9 + 8))
+typedef struct {
+    int valid;
+    uint8_t key[IC_KEY];
+    uint8_t mode, uvmode, coded, exact;
+    mbcoef qc;
+    uint8_t ry[256], ru[64], rv[64];
+} icache_entry;
+
 struct vp8e {
     int w, h, mbw, mbh, q;
     int have_ref;
@@ -426,6 +463,7 @@ struct vp8e {
     int dq_y1[2], dq_y2[2], dq_uv[2];
     qstep qs_y1[2], qs_y2[2], qs_uv[2];
     vp8e_stats stats;
+    uint32_t prof[5];
 
     /* The frame in progress, between vp8e_begin and vp8e_end. */
     int f_key, f_row;
@@ -442,6 +480,10 @@ struct vp8e {
      * interrupted code had. */
     uint8_t sy[256], su[64], sv[64], py[256], pu[64], pv[64], cand[256], cu[64], cv[64];
     mbcoef qc;
+
+    icache_entry ic[IC_ENTRIES];
+    int ic_next;
+    uint8_t ickey[IC_KEY];
 };
 
 /* ---- setup ---------------------------------------------------------------- */
@@ -525,6 +567,15 @@ vp8e *vp8e_init(void *mem, int w, int h, int q)
 
 int vp8e_mb_cols(const vp8e *e) { return e->mbw; }
 const uint8_t *vp8e_exact_map(const vp8e *e) { return e->exact; }
+
+void vp8e_profile(vp8e *e, uint32_t out[5])
+{
+    int i;
+    for (i = 0; i < 5; i++) {
+        out[i] = e->prof[i];
+        e->prof[i] = 0;
+    }
+}
 int vp8e_mb_rows(const vp8e *e) { return e->mbh; }
 
 void vp8e_recon(const vp8e *e, const uint8_t **y, const uint8_t **u,
@@ -821,6 +872,71 @@ static void put_modes(vp8e *e, bw *b, int key, int p_skip, int p_intra)
         }
 }
 
+/* The intra cache key: source, availability, and every reconstructed pixel an
+ * intra predictor of this macroblock could read. */
+static void ic_make_key(vp8e *e, int r, int c)
+{
+    uint8_t *k = e->ickey;
+    int j;
+    memcpy(k, e->sy, 256);
+    memcpy(k + 256, e->su, 64);
+    memcpy(k + 320, e->sv, 64);
+    k += 384;
+    memset(k, 0, IC_KEY - 384);
+    *k++ = (uint8_t)((r > 0) | (c > 0) << 1);
+    if (r > 0) {
+        const uint8_t *a = e->ry + (r * 16 - 1) * e->rys + c * 16;
+        k[0] = c > 0 ? a[-1] : 0;
+        memcpy(k + 1, a, 16);
+    }
+    k += 17;
+    if (c > 0)
+        for (j = 0; j < 16; j++)
+            k[j] = e->ry[(r * 16 + j) * e->rys + c * 16 - 1];
+    k += 16;
+    {
+        const uint8_t *planes[2];
+        int pl;
+        planes[0] = e->ru;
+        planes[1] = e->rv;
+        for (pl = 0; pl < 2; pl++) {
+            if (r > 0) {
+                const uint8_t *a = planes[pl] + (r * 8 - 1) * e->ruvs + c * 8;
+                k[0] = c > 0 ? a[-1] : 0;
+                memcpy(k + 1, a, 8);
+            }
+            k += 9;
+            if (c > 0)
+                for (j = 0; j < 8; j++)
+                    k[j] = planes[pl][(r * 8 + j) * e->ruvs + c * 8 - 1];
+            k += 8;
+        }
+    }
+}
+
+static void recon_block(vp8e *e, int r, int c, uint8_t *y, uint8_t *u, uint8_t *v, int store)
+{
+    int j;
+    for (j = 0; j < 16; j++) {
+        uint8_t *row = e->ry + (r * 16 + j) * e->rys + c * 16;
+        if (store)
+            memcpy(y + j * 16, row, 16);
+        else
+            memcpy(row, y + j * 16, 16);
+    }
+    for (j = 0; j < 8; j++) {
+        uint8_t *ru = e->ru + (r * 8 + j) * e->ruvs + c * 8;
+        uint8_t *rv = e->rv + (r * 8 + j) * e->ruvs + c * 8;
+        if (store) {
+            memcpy(u + j * 8, ru, 8);
+            memcpy(v + j * 8, rv, 8);
+        } else {
+            memcpy(ru, u + j * 8, 8);
+            memcpy(rv, v + j * 8, 8);
+        }
+    }
+}
+
 int vp8e_begin(vp8e *e, const vp8e_src *src, const uint8_t *dirty, int key, uint8_t *out,
                size_t cap)
 {
@@ -836,6 +952,11 @@ int vp8e_begin(vp8e *e, const vp8e_src *src, const uint8_t *dirty, int key, uint
     e->f_cap = cap;
     e->f_row = 0;
     e->nskip = e->nintra = e->nchanged = 0;
+    {
+        int i;
+        for (i = 0; i < IC_ENTRIES; i++)
+            e->ic[i].valid = 0;
+    }
     bw_init(&e->tb, out + e->f_hdr + e->p1cap, out + cap);
     memset(e->above_ctx, 0, (size_t)e->mbw * 9);
     return 1;
@@ -857,7 +978,8 @@ int vp8e_rows(vp8e *e, int nrows)
         for (c = 0; c < e->mbw; c++) {
             uint8_t *above = e->above_ctx + c * 9;
             uint8_t *info = e->mbinfo + r * e->mbw + c;
-            int best, bestmode, inter = 0, m, coded, uvmode = DC_PRED;
+            int best, bestuv, bestmode, inter = 0, m, coded, uvmode = DC_PRED;
+            PROF_START;
 
             if (!key && e->f_dirty && !e->f_dirty[r * e->mbw + c]) {
                 /* Unchanged: copy from the last frame, nothing coded. */
@@ -871,6 +993,34 @@ int vp8e_rows(vp8e *e, int nrows)
             load_src(src->y, src->ystride, e->w, e->h, c * 16, r * 16, 16, sy);
             load_src(src->u, src->uvstride, cw, ch, c * 8, r * 8, 8, su);
             load_src(src->v, src->uvstride, cw, ch, c * 8, r * 8, 8, sv);
+
+            if (key) {
+                icache_entry *hit = NULL;
+                int i;
+                ic_make_key(e, r, c);
+                for (i = 0; i < IC_ENTRIES; i++)
+                    if (e->ic[i].valid && !memcmp(e->ic[i].key, e->ickey, IC_KEY)) {
+                        hit = &e->ic[i];
+                        break;
+                    }
+                if (hit) {
+                    recon_block(e, r, c, hit->ry, hit->ru, hit->rv, 0);
+                    e->exact[r * e->mbw + c] = hit->exact;
+                    *info = (uint8_t)((hit->coded ? 0 : MB_SKIP) | (hit->mode << 1) |
+                                      (hit->uvmode << 4));
+                    e->nchanged++;
+                    e->nintra++;
+                    if (hit->coded) {
+                        put_mb_tokens(&e->tb, &hit->qc, above, left);
+                    } else {
+                        memset(above, 0, 9);
+                        memset(left, 0, 9);
+                        e->nskip++;
+                    }
+                    PROF(4);
+                    continue;
+                }
+            }
 
             /* Luma: the closest of the last frame and the intra modes whose
              * edges exist. Ties go to the last frame, which is cheaper. */
@@ -896,11 +1046,13 @@ int vp8e_rows(vp8e *e, int nrows)
                 }
             }
 
+            bestuv = 0x7fffffff;
             if (inter) {
                 load_rec(e->ru, e->ruvs, c * 8, r * 8, 8, pu);
                 load_rec(e->rv, e->ruvs, c * 8, r * 8, 8, pv);
+                if (!best)
+                    bestuv = sad(su, pu, 64) + sad(sv, pv, 64);
             } else {
-                int bestuv = 0x7fffffff;
                 for (m = 0; m < 4; m++) {
                     int mode = ymodes[m], s;
                     if ((mode == V_PRED && r == 0) || (mode == H_PRED && c == 0) ||
@@ -918,8 +1070,13 @@ int vp8e_rows(vp8e *e, int nrows)
                 }
             }
 
-            coded = quantise_mb(e, sy, py, su, pu, sv, pv, qc);
+            PROF(0);
+            /* A prediction that is already exact leaves nothing to code, and
+             * the transforms would only prove it. */
+            coded = best || bestuv ? quantise_mb(e, sy, py, su, pu, sv, pv, qc) : 0;
+            PROF(1);
             reconstruct_mb(e, c, r, py, pu, pv, qc, coded);
+            PROF(2);
             {
                 /* Did the peer get the source exactly? (Edge macroblocks
                  * compare their padding too, and may never say yes; the
@@ -932,6 +1089,20 @@ int vp8e_rows(vp8e *e, int nrows)
                     same = !memcmp(e->ru + (r * 8 + j) * e->ruvs + c * 8, su + j * 8, 8) &&
                            !memcmp(e->rv + (r * 8 + j) * e->ruvs + c * 8, sv + j * 8, 8);
                 *ex = (uint8_t)same;
+            }
+            PROF(3);
+            if (key) {
+                icache_entry *slot = &e->ic[e->ic_next];
+                e->ic_next = (e->ic_next + 1) % IC_ENTRIES;
+                memcpy(slot->key, e->ickey, IC_KEY);
+                slot->mode = (uint8_t)bestmode;
+                slot->uvmode = (uint8_t)uvmode;
+                slot->coded = (uint8_t)coded;
+                slot->exact = e->exact[r * e->mbw + c];
+                if (coded)
+                    slot->qc = *qc;
+                recon_block(e, r, c, slot->ry, slot->ru, slot->rv, 1);
+                slot->valid = 1;
             }
             *info = (uint8_t)((inter ? MB_INTER : 0) | (coded ? 0 : MB_SKIP) |
                               (bestmode << 1) | (uvmode << 4));
@@ -948,6 +1119,7 @@ int vp8e_rows(vp8e *e, int nrows)
             }
             if (!inter)
                 e->nintra++;
+            PROF(4);
         }
     }
     return e->f_row >= e->mbh;

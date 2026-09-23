@@ -73,6 +73,10 @@ void vp8e_recon(const vp8e *e, const uint8_t **y, const uint8_t **u,
  * source as last encoded. A periodic refresh need only revisit the rest. */
 const uint8_t *vp8e_exact_map(const vp8e *e);
 
+/* With VP8E_PROFILE: time spent per phase since the last call (mode search,
+ * transform+quantise, reconstruct, exactness, tokens), in vp8e_clock units. */
+void vp8e_profile(vp8e *e, uint32_t out[5]);
+
 /* Counters from the last vp8e_encode, for logs and tuning. */
 typedef struct {
     int mbs, skipped, inter, intra;

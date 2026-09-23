@@ -11,6 +11,7 @@ cmake_minimum_required(VERSION 3.13)
 project(CDeskVint C ASM)
 
 set(CDV_CPU "68020" CACHE STRING "Target CPU passed to -m (68020, 68030, 68040)")
+option(CDV_PROFILE "Log where the encoder's time goes, per phase" OFF)
 
 add_application(C-Desk-Vint
     src/mac/main.c
@@ -28,6 +29,9 @@ add_application(C-Desk-Vint
     CREATOR CDVt
     TYPE APPL)
 
+if(CDV_PROFILE)
+    target_compile_definitions(C-Desk-Vint PRIVATE VP8E_PROFILE)
+endif()
 target_compile_options(C-Desk-Vint PRIVATE
     -m${CDV_CPU} -mtune=68040 -msoft-float -O2 -std=gnu99
     -Wall -Wno-multichar -Wno-unused-parameter

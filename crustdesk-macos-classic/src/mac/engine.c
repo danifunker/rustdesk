@@ -79,6 +79,35 @@ static char *put_num(char *p, unsigned long v)
     return p;
 }
 
+#ifdef VP8E_PROFILE
+/* _Microseconds: A0 high word, D0 low word. The low word is enough here. */
+uint32_t vp8e_clock(void)
+{
+    register long d0 __asm__("d0");
+    register long a0 __asm__("a0");
+    __asm__ volatile(".short 0xA193" : "=d"(d0), "=a"(a0) : : "d1", "d2", "a1", "cc", "memory");
+    (void)a0;
+    return (uint32_t)d0;
+}
+
+static void log_profile(void)
+{
+    static const char *names[5] = { "mode ", " quant ", " recon ", " exact ", " tokens " };
+    uint32_t t[5];
+    char line[80], *p = line;
+    int i;
+    vp8e_profile(X.enc, t);
+    for (i = 0; i < 5; i++) {
+        const char *q;
+        for (q = names[i]; *q; q++)
+            *p++ = *q;
+        p = put_num(p, t[i] / 1000);
+    }
+    *p = 0;
+    engine_log(line);
+}
+#endif
+
 static void log_timing(int key, unsigned long scan, unsigned long enc, unsigned long bytes, int mbs)
 {
     char line[80], *p = line;
@@ -197,9 +226,13 @@ static void video_step(void)
                 cdv_video_abort(X.sess);
             } else {
                 cdv_video_commit(X.sess, len, st.key);
-                if (st.key || (eng.frames & 63) == 0)
+                if (st.key || (eng.frames & 63) == 0) {
                     log_timing(st.key, V.t_scanned - V.t_start, TickCount() - V.t_scanned, len,
                                st.mbs - st.skipped);
+#ifdef VP8E_PROFILE
+                    log_profile();
+#endif
+                }
                 if (st.key && V.q != X.q) {
                     V.q = X.q;
                     vp8e_set_q(X.enc, V.q);
