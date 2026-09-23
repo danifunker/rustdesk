@@ -8,6 +8,7 @@
  * of key=value lines (password, port, quality). The first run writes one with
  * a random password, which the window shows.
  */
+#include "cursor.h"
 #include "engine.h"
 #include "input.h"
 #include "traps.h"
@@ -35,6 +36,7 @@ static struct {
     unsigned short port;
     int q;
     int gamma; /* apply the video driver's gamma table (default on) */
+    int cursor_separate; /* send the pointer's shape even if it is in VRAM */
 } prefs;
 
 static WindowPtr win;
@@ -194,6 +196,8 @@ static void parse_prefs(char *text)
                 prefs.q = atoi(eq);
             else if (!strcmp(line, "gamma"))
                 prefs.gamma = atoi(eq);
+            else if (!strcmp(line, "cursor"))
+                prefs.cursor_separate = !strcmp(eq, "separate");
         }
         line = next;
     }
@@ -294,6 +298,7 @@ static void hook_mouse(void *u, int mask, int x, int y)
 {
     (void)u;
     input_mouse(mask, x, y);
+    engine_peer_moved_pointer();
 }
 
 static void hook_key(void *u, const cdv_key *k)
@@ -327,6 +332,8 @@ static OSErr open_video(void)
     enc = vp8e_init(encmem, scr.width, scr.height, prefs.q);
     ident.width = scr.width;
     ident.height = scr.height;
+    /* A hardware cursor is not in the framebuffer: send it separately. */
+    ident.cursor_embedded = !prefs.cursor_separate && !cursor_is_hardware(scr.refnum);
     input_init(scr.width, scr.height);
     return enc ? noErr : paramErr;
 }
@@ -498,12 +505,16 @@ int main(void)
 
     init_prefs();
     log_open();
+#if defined(__powerpc__) || defined(__ppc__)
+    say(APP_NAME " 0.1d, native PowerPC");
+#else
+    say(APP_NAME " 0.1d, 68k");
+#endif
     strcpy(status, "Starting");
     strcpy(hostname, "Macintosh");
     ident.password = prefs.password;
     ident.salt = "cdeskvint";
     ident.hostname = hostname;
-    ident.cursor_embedded = 1;
 
     inq = (uint8_t *)NewPtr(INQ_SIZE);
     err = inq ? open_video() : memFullErr;
@@ -517,7 +528,8 @@ int main(void)
         snprintf(line, sizeof line, "not enough memory for this screen (%d)", err);
         say(line);
     } else {
-        snprintf(line, sizeof line, "screen %dx%d, %d bits", scr.width, scr.height, scr.depth);
+        snprintf(line, sizeof line, "screen %dx%d, %d bits, %s cursor", scr.width, scr.height,
+                 scr.depth, ident.cursor_embedded ? "software" : "hardware");
         say(line);
         if (scr.gamma_info[0])
             snprintf(line, sizeof line, "gamma from the driver (%d-channel), mid-grey %d -> %d",

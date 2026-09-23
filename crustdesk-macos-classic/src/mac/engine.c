@@ -1,4 +1,5 @@
 #include "engine.h"
+#include "cursor.h"
 #include "input.h"
 #include "traps.h"
 
@@ -241,6 +242,39 @@ static void video_step(void)
     }
 }
 
+/* ---- the pointer, when the picture does not have it ----------------------- */
+
+static struct {
+    uint32_t sum;
+    int x, y;
+    unsigned long quiet_until; /* ticks: the peer is moving it; do not echo */
+} C;
+
+static void cursor_step(void)
+{
+    static uint8_t rgba[16 * 16 * 4];
+    int hx, hy, x, y;
+    uint32_t sum;
+    if (X.ident->cursor_embedded)
+        return;
+    sum = cursor_shape(rgba, &hx, &hy);
+    if (sum != C.sum) {
+        C.sum = sum;
+        cdv_send_cursor(X.sess, sum, hx, hy, 16, 16, rgba);
+    }
+    cursor_where(&x, &y);
+    if ((x != C.x || y != C.y) && TickCount() >= C.quiet_until) {
+        cdv_send_cursor_pos(X.sess, x, y);
+    }
+    C.x = x;
+    C.y = y;
+}
+
+void engine_peer_moved_pointer(void)
+{
+    C.quiet_until = TickCount() + 20; /* a third of a second */
+}
+
 /* ---- the tick ------------------------------------------------------------- */
 
 void engine_setup(const engine_ctx *ctx)
@@ -287,6 +321,8 @@ void engine_tick(void)
         cdv_init(X.sess, X.outq, X.outcap, X.inq, X.incap, X.hooks, X.ident,
                  TickCount() ^ (conn_count << 16));
         cdv_start(X.sess, now_ms());
+        memset(&C, 0, sizeof C);
+        C.sum = 0xFFFFFFFF;
         memset(&V, 0, sizeof V);
         V.q = X.q;
         vp8e_abandon(X.enc); /* the first frame of a session is a keyframe */
@@ -311,6 +347,7 @@ void engine_tick(void)
             X.sess->refresh = 1;
         }
         video_step();
+        cursor_step();
     }
     if (net_send_idle(net)) {
         const uint8_t *o = cdv_out_peek(X.sess, &len);

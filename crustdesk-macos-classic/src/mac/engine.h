@@ -64,6 +64,10 @@ void engine_stop(void);
 /* One slice of work. Deferred-task time. */
 void engine_tick(void);
 
+/* The peer moved the pointer: hold back position reports for a moment, so
+ * they do not fight the peer's own. */
+void engine_peer_moved_pointer(void);
+
 /* Log lines the engine produced, for the main loop to show. Returns NULL
  * when there are none. */
 const char *engine_next_log(void);

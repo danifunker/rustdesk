@@ -109,6 +109,7 @@ class Peer:
         self.buf = b''
         self.frames = self.keyframes = self.bytes = 0
         self.save = None
+        self.cursors, self.positions = [], []
 
     def send(self, body):
         self.s.sendall(frame(body))
@@ -149,6 +150,13 @@ class Peer:
                     self.save.write(struct.pack('>I', len(one[1][0])) + one[1][0])
                 if one.get(2, [0])[0]:
                     self.keyframes += 1
+            if 12 in m:  # cursor_data
+                cd = parse(m[12][0])
+                self.cursors.append(cd)
+            if 13 in m:  # cursor_position
+                cp = parse(m[13][0])
+                un = lambda v: (v >> 1) ^ -(v & 1)
+                self.positions.append((un(cp.get(1, [0])[0]), un(cp.get(2, [0])[0])))
             if 5 in m:  # test_delay: answer it as a client does
                 td = parse(m[5][0])
                 if not td.get(2, [0])[0]:
@@ -244,6 +252,14 @@ def main():
             raise SystemExit('unknown step %s' % op)
         p.pump(0.05)
     print('total: %d frames (%d key), %d bytes' % (p.frames, p.keyframes, p.bytes))
+    if p.cursors or p.positions:
+        print('cursor shapes: %d, positions: %s' % (len(p.cursors), p.positions[-3:]))
+        if p.cursors:
+            cd = p.cursors[-1]
+            open('/tmp/cdv-cursor.zst', 'wb').write(cd[6][0])
+            un = lambda v: (v >> 1) ^ -(v & 1)
+            print('last shape: %dx%d, hot %d,%d, %d bytes of zstd' % (
+                cd[4][0], cd[5][0], un(cd.get(2, [0])[0]), un(cd.get(3, [0])[0]), len(cd[6][0])))
 
 
 if __name__ == '__main__':

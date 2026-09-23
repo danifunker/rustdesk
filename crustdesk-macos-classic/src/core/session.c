@@ -220,6 +220,73 @@ void cdv_send_display(cdv_session *s, int wd, int ht)
     msg_end(s, &w);
 }
 
+/* CursorData.colors is not raw pixels on the wire: the client runs it through
+ * zstd. A zstd frame may be made of Raw blocks, which hold literal bytes, so a
+ * valid frame needs no compressor (RFC 8878 3.1; rustdesk-ppc-agent's
+ * zstd_frame.rs has the story of finding that out). Single segment, content
+ * size given, no checksum. */
+static size_t zstd_raw(uint8_t *out, const uint8_t *data, size_t n)
+{
+    size_t o = 0, off = 0;
+    out[o++] = 0x28; /* magic 0xFD2FB528, little-endian */
+    out[o++] = 0xB5;
+    out[o++] = 0x2F;
+    out[o++] = 0xFD;
+    if (n < 256) {
+        out[o++] = 0x20;
+        out[o++] = (uint8_t)n;
+    } else {
+        out[o++] = 0x60; /* two-byte size, stored minus 256 */
+        out[o++] = (uint8_t)(n - 256);
+        out[o++] = (uint8_t)((n - 256) >> 8);
+    }
+    do {
+        size_t len = n - off > 65536 ? 65536 : n - off;
+        uint32_t h = (uint32_t)len << 3 | (off + len == n); /* Raw block, last? */
+        out[o++] = (uint8_t)h;
+        out[o++] = (uint8_t)(h >> 8);
+        out[o++] = (uint8_t)(h >> 16);
+        memcpy(out + o, data + off, len);
+        o += len;
+        off += len;
+    } while (off < n);
+    return o;
+}
+
+void cdv_send_cursor(cdv_session *s, uint32_t id, int hotx, int hoty, int w, int h,
+                     const uint8_t *rgba)
+{
+    static uint8_t z[64 * 64 * 4 + 32];
+    size_t zn;
+    pbw m;
+    if (s->state != CDV_LIVE || w <= 0 || h <= 0 || w > 64 || h > 64)
+        return;
+    zn = zstd_raw(z, rgba, (size_t)w * h * 4);
+    if (!msg_begin(s, &m))
+        return;
+    pbw_begin(&m, M_CURSOR_DATA);
+    pbw_varint(&m, 1, id);
+    pbw_sint(&m, 2, hotx);
+    pbw_sint(&m, 3, hoty);
+    pbw_varint(&m, 4, (uint32_t)w);
+    pbw_varint(&m, 5, (uint32_t)h);
+    pbw_bytes(&m, 6, z, zn);
+    pbw_end(&m);
+    msg_end(s, &m);
+}
+
+void cdv_send_cursor_pos(cdv_session *s, int x, int y)
+{
+    pbw m;
+    if (s->state != CDV_LIVE || !msg_begin(s, &m))
+        return;
+    pbw_begin(&m, M_CURSOR_POSITION);
+    pbw_sint(&m, 1, x);
+    pbw_sint(&m, 2, y);
+    pbw_end(&m);
+    msg_end(s, &m);
+}
+
 void cdv_close(cdv_session *s, const char *reason)
 {
     pbw w;

@@ -13,7 +13,13 @@
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")/.." && pwd)
+# The fat application if the PowerPC half is built, else the 68k one.
 app="$here/build-m68k/C-Desk-Vint.bin"
+if [ -f "$here/build-ppc/C-Desk-Vint.bin" ]; then
+    python3 "$here/tools/fatmerge.py" "$here/build-m68k/C-Desk-Vint.bin" \
+        "$here/build-ppc/C-Desk-Vint.bin" "$here/build-m68k/C-Desk-Vint-fat.bin"
+    app="$here/build-m68k/C-Desk-Vint-fat.bin"
+fi
 out="$here/build-m68k/C-Desk-Vint.hda"
 size=8M
 
@@ -33,7 +39,8 @@ rb() { rb-cli --progress never -q "$@"; }
 
 flat="$work/flat.hfs"
 rb new --fs hfs --size "$size" --name C-Desk-Vint "$flat"
-rb put-macbinary "$flat" "$app"
+python3 "$here/tools/mbrename.py" "$app" "$work/app.bin" "C-Desk-Vint"
+rb put-macbinary "$flat" "$work/app.bin"
 
 # The Read Me, as a SimpleText document: Mac line endings, Mac Roman.
 python3 - "$here/docs/READ-ME-MAC.txt" "$work/Read Me" <<'EOF'

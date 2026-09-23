@@ -134,6 +134,12 @@ int cdv_take_refresh(cdv_session *s);
 /* Send a SwitchDisplay: the screen changed size or depth. */
 void cdv_send_display(cdv_session *s, int w, int h);
 
+/* The pointer, for when it is not part of the picture: its shape as RGBA
+ * (w x h, at most 64 x 64) and where it is. */
+void cdv_send_cursor(cdv_session *s, uint32_t id, int hotx, int hoty, int w, int h,
+                     const uint8_t *rgba);
+void cdv_send_cursor_pos(cdv_session *s, int x, int y);
+
 /* Close with a reason the client displays. */
 void cdv_close(cdv_session *s, const char *reason);
 

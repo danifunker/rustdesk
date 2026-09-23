@@ -38,8 +38,8 @@ install() {
     cp "$env/sys755-net-base.hda" "$env/sys.hda"
     cp "$env/pram-32bit.img" "$env/pram.img"
     rb put-macbinary --dst-dir "/System Folder/Startup Items" "$env/sys.hda@1" "$app" >/dev/null
-    printf 'password=%s\rport=21118\rquality=%s\r' "$password" "${CDV_QUALITY:-16}" \
-        > "$env/C-Desk-Vint Prefs"
+    printf 'password=%s\rport=21118\rquality=%s\r%s' "$password" "${CDV_QUALITY:-16}" \
+        "${CDV_PREFS_EXTRA:-}" > "$env/C-Desk-Vint Prefs"
     rb put "$env/sys.hda@1" "$env/C-Desk-Vint Prefs" "/System Folder/Preferences/C-Desk-Vint Prefs" >/dev/null
     rb chmeta "$env/sys.hda@1" "/System Folder/Preferences/C-Desk-Vint Prefs" --type TEXT --creator ttxt >/dev/null
     echo "installed $(basename "$app") into Startup Items"

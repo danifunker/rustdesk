@@ -64,6 +64,24 @@ averages more than one cycle an instruction and multiplies and divides cost
 more, so treat them as optimistic). The guest clock runs ahead of wall time --
 frames per second counted on the host mean nothing in this mode.
 
+### Mac OS 9 on QEMU's mac99
+
+```sh
+scripts/mac99.sh start         # fresh overlay on $OS9_DISK, app on a CD image
+scripts/mac99.sh launch        # after ~2 minutes: open the CD and the app
+scripts/mac99.sh shot NAME
+scripts/mac99.sh stop
+```
+
+`$OS9_DISK` defaults to `~/MacOS9-2-2 UTM.qcow2`, a UTM install of 9.2.2; it is
+only ever the backing file of a qcow2 overlay made fresh each start, so it is
+never written. The application arrives on an HFS CD image because rb-cli
+writes HFS, not the HFS+ of the system disk. The first run makes up a
+password: read it from a screenshot. The agent is on `127.0.0.1:31129`.
+
+QEMU's mac99 display ignores the gamma table in direct-colour modes, where a
+real card applies it; so a decoded peer picture is lighter than QEMU's own.
+
 ## 3. Driving it
 
 `host/cdvpoke.py HOST:PORT PASSWORD steps...` logs in like a client and plays
@@ -76,6 +94,11 @@ example, a menu drag:
 host/cdvpoke.py 127.0.0.1:31119 classic move 22 10 sleep 1 down 22 10 \
     sleep 1 move 40 60 sleep 1 up 40 60 sleep 2
 ```
+
+It also prints any `CursorData`/`CursorPosition` it received and leaves the
+last shape's zstd frame in `/tmp/cdv-cursor.zst` (`zstd -d` must accept it).
+`CDV_PREFS_EXTRA=$'cursor=separate\r' scripts/q800.sh start` makes the agent
+send the pointer separately even though it is in the picture.
 
 `../rustdesk-ppc-agent/target/debug/examples/probe_client HOST:PORT PASSWORD`
 is the other agents' protocol probe and works here too.

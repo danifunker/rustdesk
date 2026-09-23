@@ -40,15 +40,12 @@ Mac's screen. Thousands of colours (16-bit) is untried on a Mac -- QEMU's
 Quadra does not offer it -- and the gamma handling there expands 5-bit
 components to 8 before the lookup, which is a guess at what the hardware does.
 
-## 4. PowerPC and a fat binary
+## 4. PowerPC on real hardware
 
-Retro68 builds PowerPC (PEF, InterfaceLib); `mactcp.h` already packs to 68k
-alignment there. The engine's glue is 68k assembly and the heartbeat is the
-Time Manager: on PowerPC, a Time Manager task and deferred task are both
-available through Mixed Mode, or the engine can run from the event loop plus
-a Thread Manager thread. Then combine the 68k CODE and the PEF into one file.
-Mac OS 8.6+ may draw the pointer in hardware: then it is not in VRAM, and
-the agent must send CursorData.
+Done in QEMU: the fat application runs natively on Mac OS 9.2.2 (mac99, G4).
+Untested: a real G3/G4, Mac OS 8.x, and a real hardware cursor -- the path
+that sends the pointer separately has only run forced (`cursor=separate`).
+Worth a look on a G4: whether AltiVec is worth it for the transforms.
 
 ## 5. Open Transport, natively
 

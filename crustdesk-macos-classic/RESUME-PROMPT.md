@@ -3,9 +3,10 @@ Continue the classic Mac OS RustDesk agent, C-Desk-Vint. Read
 the source of truth for what is built, what is measured, and the traps that
 cost time once. Do not re-derive anything it records.
 
-**It works in the emulator.** QEMU's Quadra 800 under System 7.5.5 serves a
-stock RustDesk client: picture, pointer, menus, keys, reconnects. Nothing has
-run on real hardware yet; the user has a Quadra 800 and a BlueSCSI, and
+**It works in the emulators.** One fat application: the 68k half on QEMU's
+Quadra 800 under System 7.5.5, the native PowerPC half on QEMU's mac99 under
+Mac OS 9.2.2. Picture, pointer, menus, keys, reconnects, every depth. Nothing
+has run on real hardware yet; the user has a Quadra 800 and a BlueSCSI, and
 `scripts/make-disk.sh` makes the disk image for it.
 
 Priorities, in order:
@@ -14,15 +15,15 @@ Priorities, in order:
    everything below. "C-Desk-Vint Log" in the Preferences folder has the
    engine's story, keyframe timings included.
 
-2. **Keyframe speed** (docs/BACKLOG.md item 2). About 4 s of 68040 time for
-   the default desktop, on every connect and refresh. Flat macroblocks first,
-   then 68k assembly for the transforms. Measure under `ICOUNT=5` before and
+2. **Keyframe speed** (docs/BACKLOG.md item 2). 2.1 s of 68040 time for the
+   default desktop, on every connect and refresh, half of it tokens. 68k
+   assembly for the token loop and transforms next. Measure under `ICOUNT=5` before and
    after, and keep `make -C host test` passing: it is the proof that the
    bitstream is still exactly what libvpx decodes.
 
-3. **PowerPC** and a fat binary, then Open Transport natively. (Depths are
-   done: 1, 4, 8 and 32 bits switched live in Monitors and checked by
-   decoding the peer's stream; 16-bit has host tests only.)
+3. **A real hardware cursor** (G3/G4 with an ATI card): the separate-pointer
+   path has only run forced. Then encryption and rendezvous by ID, as the
+   other vintage agents do.
 
 Boundaries: the user's toolchain and the DOOM port's emulator workspace are
 shared -- read them, do not change them. MPW's headers are reference only.

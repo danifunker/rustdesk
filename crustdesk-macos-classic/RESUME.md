@@ -11,11 +11,13 @@ is next.
 ## 1. Where it stands
 
 C-Desk-Vint serves a stock RustDesk client from QEMU's Quadra 800 (System
-7.5.5, MacTCP 2.0.6, 640x480x8): login with the empty-password probe, the
-picture in the right colours with the pointer in it, clicks, press-drag-
-release through a menu, keys in Map and Legacy modes, reconnects. The user
-has a real Quadra 800 and a BlueSCSI; `scripts/make-disk.sh` makes the disk
-for it. **It has not run on real hardware yet.**
+7.5.5, MacTCP 2.0.6) and, as the native half of the same fat application,
+from QEMU's mac99 G4 (Mac OS 9.2.2, Open Transport): login with the
+empty-password probe, the picture in the colours the Mac's user sees, the
+pointer, clicks, double-clicks, press-drag-release through a menu, keys in
+Map and Legacy modes, reconnects, and every depth switched live (1, 4, 8, 32
+bits). The user has a real Quadra 800 and a BlueSCSI; `scripts/make-disk.sh`
+makes the disk for it. **It has not run on real hardware yet.**
 
 User decisions that shape it: target System 7.5.5 first, then MacTCP-era
 systems; the MacTCP interface first (it also runs under Open Transport's
@@ -52,7 +54,9 @@ Under `ICOUNT=5` (QEMU paced ~a 33 MHz 68040; guest time, see TESTING.md):
 
 | | |
 |---|---|
-| keyframe, default 7.5.5 desktop (1047 of 1200 macroblocks coded) | scan 350 ms, encode 3.9 s, 157 KB |
+| keyframe, default 7.5.5 desktop (1047 of 1200 macroblocks coded) | scan 350 ms, encode 2.1 s (was 3.9 s), 157 KB |
+| where it goes (CDV_PROFILE=ON), after the intra cache | mode 252, quant 201, recon 141, tokens 1089 ms |
+| OS 9 on mac99 (G4, not paced): keyframe 800x600x32 | 116 ms |
 | a small change (a few macroblocks) | 50-70 ms scan to send, 60-250 bytes |
 | a still screen | scanned every 250 ms; nothing sent once refined |
 
@@ -62,6 +66,12 @@ bytes 5x and the time 25%.
 
 ## 4. Traps
 
+- **Colour is after gamma.** The framebuffer holds what QuickDraw meant; the
+  card's gamma table (cscGetGamma -- csParam *points at* the record) is what
+  the monitor gets. Without it midtones reached the peer ~30 levels dark.
+  QEMU's q800 display applies it in 8-bit; mac99 skips it in direct colour.
+- **A fresh OS 9 overlay starts the Setup Assistant**, which eats keystrokes;
+  `scripts/mac99.sh launch` quits it first.
 - **`_PPostEvent` takes the event code in A0 and the message in D0.** Swapped,
   it posts null events and returns noErr. Apple's Events.h:
   `#pragma parameter __D0 PPostEvent(__A0, __D0, __A1)`.
@@ -88,6 +98,8 @@ bytes 5x and the time 25%.
 
 ## 5. Environment
 
+- Mac OS 9.2.2: `~/MacOS9-2-2 UTM.qcow2` (UTM install), used only as the
+  backing file of an overlay in `~/cdv-testenv`.
 - Retro68 at `~/repos/Retro68-build/toolchain` (Multiversal Interfaces; the
   DOOM port uses the same). MPW-GM is in `~/Downloads/MPW-GM.img.bin`, and
   `/tmp/mpw-gm/ref/` has Apple's MacTCP.h, Events.h, LowMem.h, Retrace.h,
