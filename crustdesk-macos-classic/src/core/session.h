@@ -1,0 +1,128 @@
+/* One RustDesk peer session, as a state machine with no I/O of its own.
+ *
+ * Classic Mac OS has no threads and no blocking sockets worth the name, so the
+ * session never waits: the platform feeds it whatever bytes arrived, drains
+ * whatever it queued, and asks it for a video buffer when the line is free.
+ * The same file runs under a POSIX test harness on Linux.
+ *
+ * Direct-IP mode only for now: no key exchange, so the session is not
+ * encrypted -- the same as upstream's direct server, and what the other
+ * vintage agents do on the LAN.
+ *
+ * Buffers are the caller's and are never reallocated. `out` is a queue with a
+ * fixed base: bytes handed to the platform stay where they are until the whole
+ * queue has been sent, which is what lets MacTCP send straight out of it.
+ */
+#ifndef SESSION_H
+#define SESSION_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+/* RustDesk's ControlKey values the platform needs to name. */
+enum {
+    CK_ALT = 1, CK_BACKSPACE = 2, CK_CAPSLOCK = 3, CK_CONTROL = 4, CK_DELETE = 5,
+    CK_DOWN = 6, CK_END = 7, CK_ESCAPE = 8, CK_F1 = 9, CK_F10 = 10, CK_F11 = 11,
+    CK_F12 = 12, CK_F2 = 13, CK_F3 = 14, CK_F4 = 15, CK_F5 = 16, CK_F6 = 17,
+    CK_F7 = 18, CK_F8 = 19, CK_F9 = 20, CK_HOME = 21, CK_LEFT = 22, CK_META = 23,
+    CK_OPTION = 24, CK_PAGEDOWN = 25, CK_PAGEUP = 26, CK_RETURN = 27, CK_RIGHT = 28,
+    CK_SHIFT = 29, CK_SPACE = 30, CK_TAB = 31, CK_UP = 32, CK_NUMPAD0 = 33,
+    CK_NUMPAD9 = 42, CK_CLEAR = 44, CK_HELP = 59, CK_RWIN = 64, CK_MULTIPLY = 66,
+    CK_ADD = 67, CK_SUBTRACT = 68, CK_DECIMAL = 69, CK_DIVIDE = 70, CK_EQUALS = 71,
+    CK_NUMPAD_ENTER = 72, CK_RSHIFT = 73, CK_RCONTROL = 74, CK_RALT = 75
+};
+
+/* Modifier bits in cdv_key.mods. */
+enum { MOD_SHIFT = 1, MOD_CONTROL = 2, MOD_OPTION = 4, MOD_COMMAND = 8, MOD_CAPS = 16 };
+
+/* What a KeyEvent carried. */
+enum { KEY_NONE, KEY_CONTROL, KEY_CHR, KEY_UNICODE, KEY_SEQ };
+/* KeyboardMode: in MAP and TRANSLATE a KEY_CHR is a Mac virtual keycode,
+ * because we tell the peer we are "Mac OS"; in LEGACY it is a character. */
+enum { KMODE_LEGACY = 0, KMODE_MAP = 1, KMODE_TRANSLATE = 2, KMODE_AUTO = 3 };
+
+typedef struct {
+    int down, press;      /* press: a down and an up together */
+    int kind;             /* KEY_* */
+    uint32_t value;       /* ControlKey, chr, or unicode */
+    const char *seq;      /* KEY_SEQ, UTF-8, not terminated */
+    size_t seqlen;
+    int mods;             /* MOD_* */
+    int mode;             /* KMODE_* */
+} cdv_key;
+
+typedef struct {
+    /* mask: low 3 bits 0 move, 1 down, 2 up, 3 wheel, 4 trackpad, 5 relative;
+     * above them the button, 1 left, 2 right, 4 middle. */
+    void (*mouse)(void *user, int mask, int x, int y);
+    void (*key)(void *user, const cdv_key *k);
+    void (*clipboard)(void *user, const char *utf8, size_t n);
+    void (*log)(void *user, const char *msg);
+    void *user;
+} cdv_hooks;
+
+typedef struct {
+    const char *password;   /* empty: refuse every login */
+    const char *salt;
+    const char *hostname;
+    int width, height;
+    int cursor_embedded;    /* the pointer is drawn into the captured picture */
+} cdv_ident;
+
+enum { CDV_WAIT_LOGIN, CDV_LIVE, CDV_CLOSED };
+
+typedef struct {
+    int state;
+    const cdv_hooks *hooks;
+    const cdv_ident *id;
+    char challenge[8];
+    int attempts;
+    uint32_t rng;
+
+    uint8_t *out;
+    size_t outcap, ooff, olen;
+
+    uint8_t *in;
+    size_t incap, ilen, skip;
+
+    uint32_t now;             /* ms, as last told by cdv_tick */
+    uint32_t delay_sent;
+    int delay_outstanding;
+    int refresh;              /* the peer asked for a keyframe */
+    uint32_t pts;
+
+    char peer_name[64];
+    char peer_version[16];
+} cdv_session;
+
+void cdv_init(cdv_session *s, uint8_t *out, size_t outcap, uint8_t *in, size_t incap,
+              const cdv_hooks *hooks, const cdv_ident *id, uint32_t seed);
+
+/* Queue the opening message. Call once the connection is up. */
+void cdv_start(cdv_session *s, uint32_t now_ms);
+
+/* Bytes from the peer. Returns -1 once the session should be closed. */
+int cdv_feed(cdv_session *s, const uint8_t *data, size_t n);
+
+/* Timers: keepalive. Call every pass of the main loop. */
+void cdv_tick(cdv_session *s, uint32_t now_ms);
+
+/* The bytes waiting to go out, and how many of them the platform sent. */
+const uint8_t *cdv_out_peek(const cdv_session *s, size_t *n);
+void cdv_out_consume(cdv_session *s, size_t n);
+
+/* Video. Only when the queue is empty: a slow line then paces the encoder
+ * instead of frames piling up. vp8 data is written at the returned pointer. */
+uint8_t *cdv_video_begin(cdv_session *s, size_t *cap);
+void cdv_video_commit(cdv_session *s, size_t len, int key);
+
+/* The peer's refresh button: nonzero once, then cleared. */
+int cdv_take_refresh(cdv_session *s);
+
+/* Send a SwitchDisplay: the screen changed size or depth. */
+void cdv_send_display(cdv_session *s, int w, int h);
+
+/* Close with a reason the client displays. */
+void cdv_close(cdv_session *s, const char *reason);
+
+#endif
