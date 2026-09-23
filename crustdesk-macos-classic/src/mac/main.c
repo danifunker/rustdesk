@@ -14,6 +14,7 @@
 #include "traps.h"
 #include "net.h"
 #include "screen.h"
+#include "../core/macroman.h"
 #include "../core/session.h"
 #include "../core/vp8enc.h"
 
@@ -307,13 +308,26 @@ static void hook_key(void *u, const cdv_key *k)
     input_key(k);
 }
 
+/* Deferred-task time: park the text for the main loop, which owns the scrap. */
+static void hook_clipboard(void *u, const char *utf8, size_t n)
+{
+    (void)u;
+    if (clip_in.ready)
+        return; /* the last one is not in yet; the newer can wait for another copy */
+    if (n > CLIP_MAX)
+        n = CLIP_MAX;
+    memcpy(clip_in.text, utf8, n);
+    clip_in.len = n;
+    clip_in.ready = 1;
+}
+
 static void hook_log(void *u, const char *m)
 {
     (void)u;
     engine_log(m); /* the engine's context: no drawing from here */
 }
 
-static const cdv_hooks hooks = { hook_mouse, hook_key, NULL, hook_log, NULL };
+static const cdv_hooks hooks = { hook_mouse, hook_key, hook_clipboard, hook_log, NULL };
 
 /* Room for a keyframe of a busy screen: about a byte a pixel at q 16. */
 static size_t queue_size(const cdv_screen *s)
@@ -378,6 +392,113 @@ static void screen_changed(void)
     eng.suspend_req = 0;
 }
 
+/* Most System 7 programs keep a private scrap (TextEdit's) and trade it with
+ * the desk scrap only when they are switched out and back in: out, they
+ * export theirs; in, they import the desk's. So the agent comes to the front
+ * for a moment and hands it back, and does its own part in between -- once
+ * the other program has exported, before it re-imports:
+ *   - text from the peer goes onto the desk scrap then, not before, or the
+ *     program's export on the way out would overwrite it;
+ *   - after the peer pressed Command-C, the program's export is exactly what
+ *     the poll then picks up. */
+static struct {
+    int state; /* 0 idle, 1 coming forward, 2 give the front back */
+    ProcessSerialNumber front;
+    unsigned long at;
+} bounce;
+
+static uint8_t mr[CLIP_MAX];
+static short last_count = -32768;
+
+static void put_peer_text(void)
+{
+    size_t n = utf8_to_macroman((const uint8_t *)clip_in.text, clip_in.len, mr, sizeof mr);
+    ZeroScrap();
+    PutScrap((long)n, 'TEXT', (Ptr)mr);
+    last_count = InfoScrap()->scrapCount;
+    clip_in.ready = 0;
+    say("clipboard from the peer");
+}
+
+/* Returns nonzero if a switch began; zero if we are in front already. */
+static int bounce_start(void)
+{
+    ProcessSerialNumber me;
+    Boolean same = 0;
+    if (bounce.state)
+        return 1;
+    if (cdv_get_front_process(&bounce.front) != noErr || GetCurrentProcess(&me) != noErr)
+        return 0;
+    SameProcess(&bounce.front, &me, &same);
+    if (same)
+        return 0;
+    SetFrontProcess(&me);
+    bounce.state = 1;
+    bounce.at = TickCount();
+    return 1;
+}
+
+static void bounce_step(void)
+{
+    if (bounce.state == 1 && TickCount() - bounce.at > 15) {
+        /* In front, and the other program has exported. */
+        if (clip_in.ready)
+            put_peer_text();
+        bounce.state = 2;
+        bounce.at = TickCount();
+    } else if (bounce.state == 2 && TickCount() - bounce.at > 5) {
+        SetFrontProcess(&bounce.front);
+        bounce.state = 0;
+    }
+}
+
+/* The Scrap Manager, both ways. A copy on the Mac goes to the peer, and so
+ * does whatever is on the clipboard when a peer logs in; text from the peer
+ * goes onto the scrap, and its scrapCount is then taken as ours so it does
+ * not bounce straight back. */
+static void clipboard_chores(void)
+{
+    static int was_live;
+    static unsigned long last_poll, copy_at;
+    int just_live = eng.live && !was_live;
+    was_live = eng.live;
+
+    if (clip_in.ready && !bounce.state && !bounce_start())
+        put_peer_text(); /* already in front: nothing to trade with */
+    bounce_step();
+    if (input_take_copy())
+        copy_at = TickCount() + 30; /* give the program time to copy */
+    if (copy_at && TickCount() >= copy_at) {
+        copy_at = 0;
+        bounce_start();
+    }
+
+    if (!eng.live || clip_out.ready || bounce.state ||
+        (!just_live && TickCount() - last_poll < 30))
+        return;
+    last_poll = TickCount();
+    if (InfoScrap()->scrapCount == last_count && !just_live)
+        return;
+    last_count = InfoScrap()->scrapCount;
+    {
+        Handle h = NewHandle(0);
+        long off = 0, len;
+        if (!h)
+            return;
+        len = GetScrap(h, 'TEXT', &off);
+        if (len > 0) {
+            if (len > (long)sizeof mr)
+                len = sizeof mr;
+            HLock(h);
+            clip_out.len = macroman_to_utf8((const uint8_t *)*h, (size_t)len,
+                                            (uint8_t *)clip_out.text, CLIP_MAX);
+            HUnlock(h);
+            clip_out.ready = 1;
+        }
+        DisposeHandle(h);
+    }
+}
+
 /* Main-loop chores: everything the engine may not do itself. */
 static void chores(void)
 {
@@ -388,6 +509,7 @@ static void chores(void)
 
     while ((m = engine_next_log()) != NULL)
         say(m);
+    clipboard_chores();
 
     if (eng.need_reset) {
         net_reset(&net);

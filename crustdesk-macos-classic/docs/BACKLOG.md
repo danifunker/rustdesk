@@ -58,7 +58,10 @@ declarations of the OT calls used.
 - Encryption: the signed_id/public_key exchange and secretbox, as the other
   agents do. X25519 and Ed25519 in portable C; benchmark on the 68040 first.
 - Rendezvous (by ID through hbbs/hbbr) and LAN discovery (UDP 21119).
-- Clipboard: Scrap Manager TEXT <-> UTF-8 via Mac Roman.
+- Clipboard, peer to Mac: needs a zstd decoder, because clients compress
+  clipboard text whenever that is smaller. A decoder for the frames a client
+  sends (one frame, no dictionary) is a few hundred lines of C; the official
+  single-file decoder is far more than this needs.
 - Screenshots (a PNG of the shadow), a cursor shape when the pointer is not
   embedded.
 

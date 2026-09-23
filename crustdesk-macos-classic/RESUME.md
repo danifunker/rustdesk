@@ -70,6 +70,12 @@ bytes 5x and the time 25%.
   card's gamma table (cscGetGamma -- csParam *points at* the record) is what
   the monitor gets. Without it midtones reached the peer ~30 levels dark.
   QEMU's q800 display applies it in 8-bit; mac99 skips it in direct colour.
+- **Programs keep a private scrap** and trade it with the desk scrap only on
+  suspend/resume. The agent comes to the front for a moment to make that
+  happen -- and must put the peer's text on the desk scrap *after* the other
+  program's suspend-time export, or that export overwrites it.
+- **`GetFrontProcess` pushes a -1 longword before its selector**
+  (FIVEWORDINLINE); the three-word guess unbalanced the stack: bus error.
 - **A fresh OS 9 overlay starts the Setup Assistant**, which eats keystrokes;
   `scripts/mac99.sh launch` quits it first.
 - **`_PPostEvent` takes the event code in A0 and the message in D0.** Swapped,

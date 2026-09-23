@@ -101,6 +101,7 @@ typedef struct {
 
     char peer_name[64];
     char peer_version[16];
+    char peer_platform[16];
 } cdv_session;
 
 void cdv_init(cdv_session *s, uint8_t *out, size_t outcap, uint8_t *in, size_t incap,
@@ -133,6 +134,10 @@ int cdv_take_refresh(cdv_session *s);
 
 /* Send a SwitchDisplay: the screen changed size or depth. */
 void cdv_send_display(cdv_session *s, int w, int h);
+
+/* Text the Mac's user copied, as UTF-8. Sent uncompressed, in whichever
+ * message the peer's version reads. */
+void cdv_send_clipboard(cdv_session *s, const char *utf8, size_t n);
 
 /* The pointer, for when it is not part of the picture: its shape as RGBA
  * (w x h, at most 64 x 64) and where it is. */

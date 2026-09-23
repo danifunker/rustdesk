@@ -35,6 +35,7 @@ add_application(C-Desk-Vint
     src/core/pb.c
     src/core/sha256.c
     src/core/yuv.c
+    src/core/macroman.c
     src/core/vp8enc.c
     rsrc/cdeskvint.r
     CREATOR CDVt

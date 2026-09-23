@@ -20,6 +20,7 @@ OSErr cdv_ppost_event(short what, long message, EvQElPtr *q);
 OSErr cdv_dt_install(void *task);
 void cdv_ins_xtime(void *task);
 uint32_t cdv_microseconds(void);
+OSErr cdv_get_front_process(ProcessSerialNumber *psn);
 OSErr cdv_fsp_create(const FSSpec *spec, OSType creator, OSType type, short script);
 
 #endif

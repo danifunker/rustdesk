@@ -68,6 +68,17 @@ void engine_tick(void);
  * they do not fight the peer's own. */
 void engine_peer_moved_pointer(void);
 
+/* The clipboard, across the two contexts: the main loop owns the Scrap
+ * Manager, the engine owns the session. Each buffer has one writer. */
+#define CLIP_MAX 16384
+typedef struct {
+    char text[CLIP_MAX];
+    volatile size_t len;
+    volatile int ready;
+} engine_clip;
+extern engine_clip clip_out; /* main -> peer */
+extern engine_clip clip_in;  /* peer -> main */
+
 /* Log lines the engine produced, for the main loop to show. Returns NULL
  * when there are none. */
 const char *engine_next_log(void);

@@ -118,6 +118,7 @@ the rows marked OS 9 on QEMU's mac99 G4, Mac OS 9.2.2, 800x600 millions):
 | OS 9: the native PowerPC half of the fat application serves a peer, picture checked by decoding | works |
 | The fat application on the 68k Quadra (its CODE half) | works |
 | The pointer sent separately (forced with `cursor=separate`): shape decodes with real zstd, position arrives | works |
+| Clipboard both ways with SimpleText: peer text pasted (Mac Roman), a Mac copy arriving as UTF-8 | works |
 
 Not established:
 
@@ -130,4 +131,8 @@ Not established:
   bits, so the 16-bit path has only host tests.
 - **A hardware cursor for real.** Neither emulator draws one; the detection
   (`cscGetHardwareCursorDrawState`) has only ever said no.
-- Open Transport natively, encryption, rendezvous by ID, clipboard: not yet.
+- **Clipboard from a client that compresses it**: a client zstd-compresses
+  clipboard text whenever that is smaller, which is most text, and the agent
+  has no zstd decoder yet -- so text copied on the peer reaches the Mac only
+  when it is short. Mac to peer is unaffected (sent uncompressed).
+- Open Transport natively, encryption, rendezvous by ID: not yet.

@@ -23,6 +23,7 @@ static int right_ctrl;    /* a right click is a control-click; this is its Contr
 static unsigned char held[16]; /* our own KeyMap contribution, to release it */
 static unsigned char legacy[256][2]; /* char -> keycode+1, [0] plain, [1] shifted */
 static int legacy_ready;
+static volatile int copied; /* the peer pressed Command-C or -X */
 
 static void keymap_set(int code, int down)
 {
@@ -238,7 +239,16 @@ static void keycode(int code, int down)
                                                    &state) & 0xFF)
                          : 0;
         post(down ? keyDown : keyUp, ((long)code << 8) | c);
+        if (down && (mods & M_CMD) && (code == 8 || code == 7)) /* C, X */
+            copied = 1;
     }
+}
+
+int input_take_copy(void)
+{
+    int c = copied;
+    copied = 0;
+    return c;
 }
 
 void input_key(const cdv_key *k)

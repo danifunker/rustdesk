@@ -13,6 +13,7 @@
 #define SLICE_TICKS 2         /* a slice ends after this many 60ths of a second */
 
 engine_flags eng;
+engine_clip clip_out, clip_in;
 
 static engine_ctx X;
 static uint32_t conn_count;
@@ -345,6 +346,10 @@ void engine_tick(void)
             eng.announce = 0;
             cdv_send_display(X.sess, X.scr->width, X.scr->height);
             X.sess->refresh = 1;
+        }
+        if (clip_out.ready) {
+            cdv_send_clipboard(X.sess, clip_out.text, clip_out.len);
+            clip_out.ready = 0;
         }
         video_step();
         cursor_step();

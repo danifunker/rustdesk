@@ -2,6 +2,7 @@
 #include "../src/core/pb.h"
 #include "../src/core/sha256.h"
 #include "../src/core/yuv.h"
+#include "../src/core/macroman.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -92,6 +93,18 @@ int main(void)
             if (!(Y[0] == 235 && Y[1] == 16))
                 printf("  depth %d: %d %d\n", depth, Y[0], Y[1]);
         }
+    }
+
+    /* Mac Roman round trip, with the line endings each side expects. */
+    {
+        static const uint8_t mac[] = { 'c', 'a', 'f', 0x8E, '\r', 0xD2, 'x', 0xD3, 0xA5 };
+        uint8_t u[64], back[64];
+        size_t nu = macroman_to_utf8(mac, sizeof mac, u, sizeof u), nb;
+        CHECK(nu == 16 && !memcmp(u, "caf\xc3\xa9\n\xe2\x80\x9cx\xe2\x80\x9d\xe2\x80\xa2", 16));
+        nb = utf8_to_macroman(u, nu, back, sizeof back);
+        CHECK(nb == sizeof mac && !memcmp(back, mac, sizeof mac));
+        nb = utf8_to_macroman((const uint8_t *)"a\r\nb\xe2\x82\xac", 7, back, sizeof back);
+        CHECK(nb == 4 && back[1] == '\r' && back[3] == 0xDB); /* the euro, since Mac OS 8.5 */
     }
 
     printf("%s\n", fails ? "FAIL" : "PASS: core");

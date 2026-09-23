@@ -14,8 +14,8 @@
 enum {
     M_TEST_DELAY = 5, M_VIDEO_FRAME = 6, M_LOGIN_REQUEST = 7, M_LOGIN_RESPONSE = 8,
     M_HASH = 9, M_MOUSE_EVENT = 10, M_CURSOR_DATA = 12, M_CURSOR_POSITION = 13,
-    M_KEY_EVENT = 15, M_CLIPBOARD = 16, M_MISC = 19, M_SCREENSHOT_REQUEST = 29,
-    M_SCREENSHOT_RESPONSE = 30
+    M_KEY_EVENT = 15, M_CLIPBOARD = 16, M_MISC = 19, M_MULTI_CLIPBOARDS = 28,
+    M_SCREENSHOT_REQUEST = 29, M_SCREENSHOT_RESPONSE = 30
 };
 
 #define KEEPALIVE_MS 3000
@@ -287,6 +287,49 @@ void cdv_send_cursor_pos(cdv_session *s, int x, int y)
     msg_end(s, &m);
 }
 
+/* "1.3.0" -> 10300: enough to compare versions. */
+static long version_number(const char *v)
+{
+    long n = 0, part = 0;
+    int parts = 0;
+    for (;; v++) {
+        if (*v >= '0' && *v <= '9') {
+            part = part * 10 + (*v - '0');
+        } else {
+            n = n * 100 + part;
+            part = 0;
+            parts++;
+            if (*v != '.' || parts == 3)
+                break;
+        }
+    }
+    while (parts++ < 3)
+        n *= 100;
+    return n;
+}
+
+void cdv_send_clipboard(cdv_session *s, const char *utf8, size_t n)
+{
+    /* MultiClipboards from 1.3.0, except to iOS, which never took it (the
+     * rule rustdesk-ppc-agent's clipboard.rs arrived at). */
+    int multi = version_number(s->peer_version) >= version_number("1.3.0") &&
+                s->peer_platform[0] && strcmp(s->peer_platform, "iOS");
+    pbw m;
+    if (s->state != CDV_LIVE || !n || !msg_begin(s, &m))
+        return;
+    if (multi) {
+        pbw_begin(&m, M_MULTI_CLIPBOARDS);
+        pbw_begin(&m, 1);
+    } else {
+        pbw_begin(&m, M_CLIPBOARD);
+    }
+    pbw_bytes(&m, 2, utf8, n); /* content; compress false, format Text: defaults */
+    pbw_end(&m);
+    if (multi)
+        pbw_end(&m);
+    msg_end(s, &m);
+}
+
 void cdv_close(cdv_session *s, const char *reason)
 {
     pbw w;
@@ -397,9 +440,11 @@ static void login(cdv_session *s, const uint8_t *b, size_t n)
         if (r.field == 2) {
             pw = r.data;
             pwlen = r.len;
-        } else if (r.field == 5 || r.field == 11) {
-            char *dst = r.field == 5 ? s->peer_name : s->peer_version;
-            size_t cap = r.field == 5 ? sizeof s->peer_name : sizeof s->peer_version;
+        } else if (r.field == 5 || r.field == 11 || r.field == 13) {
+            char *dst = r.field == 5 ? s->peer_name : r.field == 11 ? s->peer_version : s->peer_platform;
+            size_t cap = r.field == 5    ? sizeof s->peer_name
+                         : r.field == 11 ? sizeof s->peer_version
+                                         : sizeof s->peer_platform;
             size_t k = r.len < cap - 1 ? r.len : cap - 1;
             memcpy(dst, r.data, k);
             dst[k] = 0;
@@ -577,7 +622,8 @@ static void clipboard(cdv_session *s, const uint8_t *b, size_t n)
             format = (int)r.v;
     }
     /* Compressed text is real zstd, which this agent does not carry a decoder
-     * for; a client compresses only above a size threshold. */
+     * for yet; a client compresses whenever that is smaller, which for text
+     * is all but the shortest. */
     if (compressed || format != 0 || !text) {
         say(s, "peer clipboard skipped (compressed or not text)");
         return;
@@ -620,6 +666,16 @@ static void dispatch(cdv_session *s, const uint8_t *b, size_t n)
         case M_TEST_DELAY: test_delay(s, r.data, r.len); break;
         case M_MISC: misc(s, r.data, r.len); break;
         case M_CLIPBOARD: clipboard(s, r.data, r.len); break;
+        case M_MULTI_CLIPBOARDS: {
+            pbr mc;
+            pbr_init(&mc, r.data, r.len);
+            while (pbr_next(&mc))
+                if (mc.field == 1 && mc.wire == PB_LEN) {
+                    clipboard(s, mc.data, mc.len);
+                    break;
+                }
+            break;
+        }
         case M_SCREENSHOT_REQUEST: screenshot(s, r.data, r.len); break;
         default: break;
         }

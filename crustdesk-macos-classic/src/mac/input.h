@@ -24,6 +24,9 @@ void input_init(int screen_w, int screen_h);
 void input_set_kchr(Ptr kchr);
 void input_mouse(int mask, int x, int y);
 void input_key(const cdv_key *k);
+/* Nonzero once after the peer pressed Command-C or Command-X. */
+int input_take_copy(void);
+
 /* Let go of everything the peer held down. */
 void input_release_all(void);
 

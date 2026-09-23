@@ -18,6 +18,7 @@ Steps:
     sleep SECONDS
     refresh           ask for a keyframe
     frames SECONDS    just watch, and report what arrives
+    clip TEXT         put TEXT on the Mac's clipboard (Clipboard, uncompressed)
     save FILE         from now on, append every VP8 frame to FILE (4-byte
                       big-endian length, then the data) for host/build/vp8dump
 
@@ -150,6 +151,13 @@ class Peer:
                     self.save.write(struct.pack('>I', len(one[1][0])) + one[1][0])
                 if one.get(2, [0])[0]:
                     self.keyframes += 1
+            for f in (16, 28):  # clipboard, multi_clipboards
+                if f in m:
+                    c = parse(m[f][0]) if f == 16 else parse(parse(m[f][0])[1][0])
+                    text = c.get(2, [b''])[0]
+                    print('clipboard from the Mac (%s, %s): %r' % (
+                        'multi' if f == 28 else 'single',
+                        'compressed' if c.get(1, [0])[0] else 'plain', text.decode('utf-8', 'replace')))
             if 12 in m:  # cursor_data
                 cd = parse(m[12][0])
                 self.cursors.append(cd)
@@ -171,7 +179,8 @@ class Peer:
         assert err == b'Empty Password', err
         h1 = hashlib.sha256(password.encode() + salt).digest()
         h2 = hashlib.sha256(h1 + challenge).digest()
-        self.send(field(7, 2, field(2, 2, h2) + field(4, 2, b'poke') + field(5, 2, b'cdvpoke')))
+        self.send(field(7, 2, field(2, 2, h2) + field(4, 2, b'poke') + field(5, 2, b'cdvpoke') +
+                        field(11, 2, b'1.4.9') + field(13, 2, b'Linux')))
         lr = parse(self.recv(10)[8][0])
         if 2 not in lr:
             raise SystemExit('login refused: %r' % lr.get(1))
@@ -235,6 +244,9 @@ def main():
             i += 1
         elif op == 'sleep':
             p.pump(float(args[i]))
+            i += 1
+        elif op == 'clip':
+            p.send(field(16, 2, field(2, 2, args[i].encode('utf-8'))))
             i += 1
         elif op == 'save':
             p.save = open(args[i], 'wb')
