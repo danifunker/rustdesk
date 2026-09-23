@@ -72,13 +72,19 @@ static void build_palette(cdv_screen *s, yuv_clut *dst)
     yuv_clut_build(dst, (const uint8_t(*)[3])rgb, n);
 }
 
-OSErr screen_open(cdv_screen *s)
+OSErr screen_open(cdv_screen *s, int use_gamma)
 {
     PixMapHandle pm = main_pixmap();
     long planes, luma;
     memset(s, 0, sizeof *s);
     s->refnum = (**GetMainDevice()).gdRefNum;
     read_gamma(s);
+    if (!use_gamma) {
+        int ch, i;
+        for (ch = 0; ch < 3; ch++)
+            for (i = 0; i < 256; i++)
+                s->gamma[ch][i] = (uint8_t)i;
+    }
     s->width = (**pm).bounds.right - (**pm).bounds.left;
     s->height = (**pm).bounds.bottom - (**pm).bounds.top;
     s->depth = (**pm).pixelSize;
@@ -181,11 +187,13 @@ int screen_scan_rows(cdv_screen *s, int my0, int my1, int band, int all, const u
     int longs = s->rowbytes / 4, lpm = bytes >= 4 ? bytes / 4 : 1;
     int mbs_per_long = bytes >= 4 ? 1 : 4 / bytes;
 
+#if !(defined(__powerpc__) || defined(__ppc__))
     /* VRAM may sit above the 24-bit address space. */
     if (!LM_MMU32BIT) {
         SwapMMUMode((Byte *)&mode);
         swapped = 1;
     }
+#endif
     s->fb.clut = &s->clut[s->clut_cur];
 
     for (my = my0; my < my1; my++) {
@@ -229,7 +237,12 @@ int screen_scan_rows(cdv_screen *s, int my0, int my1, int band, int all, const u
             yuv_convert_rows(&s->fb, s->Y, s->U, s->V, s->ystride, s->uvstride, s->dirty, my,
                              my + 1);
     }
+#if !(defined(__powerpc__) || defined(__ppc__))
     if (swapped)
         SwapMMUMode((Byte *)&mode);
+#else
+    (void)mode;
+    (void)swapped;
+#endif
     return count;
 }

@@ -1,5 +1,6 @@
 #include "engine.h"
 #include "input.h"
+#include "traps.h"
 
 #include <string.h>
 
@@ -80,14 +81,9 @@ static char *put_num(char *p, unsigned long v)
 }
 
 #ifdef VP8E_PROFILE
-/* _Microseconds: A0 high word, D0 low word. The low word is enough here. */
 uint32_t vp8e_clock(void)
 {
-    register long d0 __asm__("d0");
-    register long a0 __asm__("a0");
-    __asm__ volatile(".short 0xA193" : "=d"(d0), "=a"(a0) : : "d1", "d2", "a1", "cc", "memory");
-    (void)a0;
-    return (uint32_t)d0;
+    return cdv_microseconds();
 }
 
 static void log_profile(void)
@@ -338,7 +334,11 @@ void engine_tick(void)
 /* ---- Time Manager heartbeat and the deferred task -------------------------- */
 
 /* The extended Time Manager record (Inside Macintosh: Processes 3-22), with
- * our A5 after it where the glue can find it from A1. */
+ * our A5 after it where the 68k glue can find it from A1. Both records are
+ * the system's, so they keep 68k alignment on PowerPC too. */
+#if CDV_PPC
+#pragma pack(push, 2)
+#endif
 typedef struct {
     QElemPtr qLink;
     short qType;
@@ -358,28 +358,15 @@ typedef struct {
     long dtReserved;
 } cdv_dt;
 
-enum { dtQType = 7 };
+#if CDV_PPC
+#pragma pack(pop)
+#endif
 
-extern void cdv_tm_glue(void);
-extern void cdv_dt_glue(void);
+enum { dtQType = 7 };
 
 static cdv_tm tm;
 static cdv_dt dt;
 static volatile int dt_pending, running;
-
-static OSErr dt_install(cdv_dt *task)
-{
-    register long a0 __asm__("a0") = (long)task;
-    register long d0 __asm__("d0");
-    __asm__ volatile(".short 0xA082" : "=d"(d0), "+a"(a0) : : "d1", "d2", "a1", "cc", "memory");
-    return (OSErr)d0;
-}
-
-static void ins_xtime(cdv_tm *t)
-{
-    register long a0 __asm__("a0") = (long)t;
-    __asm__ volatile(".short 0xA458" : "+a"(a0) : : "d0", "d1", "d2", "a1", "cc", "memory");
-}
 
 /* Called by the glue at interrupt time. Queue the work; do none of it. */
 void cdv_tm_fire(void)
@@ -388,7 +375,7 @@ void cdv_tm_fire(void)
         return;
     if (!dt_pending) {
         dt_pending = 1;
-        if (dt_install(&dt) != noErr)
+        if (cdv_dt_install(&dt) != noErr)
             dt_pending = 0;
     }
     PrimeTime((QElemPtr)&tm, HEARTBEAT_MS);
@@ -400,6 +387,41 @@ void cdv_dt_fire(void)
     engine_tick();
     dt_pending = 0;
 }
+
+#if CDV_PPC
+/* PowerPC: the Time Manager and the Deferred Task Manager call through Mixed
+ * Mode, so each routine gets a descriptor. Both are "register, A1, four
+ * bytes, no result" (uppTimerProcInfo = uppDeferredTaskProcInfo = 0xB802);
+ * native code has no A5 to set up. */
+static void tm_proc(void *task)
+{
+    (void)task;
+    cdv_tm_fire();
+}
+
+static void dt_proc(long param)
+{
+    (void)param;
+    cdv_dt_fire();
+}
+
+OSErr engine_start(void)
+{
+    memset(&tm, 0, sizeof tm);
+    tm.tmAddr = (ProcPtr)NewRoutineDescriptor((ProcPtr)tm_proc, 0x0000B802, 1 /* PowerPC */);
+    memset(&dt, 0, sizeof dt);
+    dt.qType = dtQType;
+    dt.dtAddr = (ProcPtr)NewRoutineDescriptor((ProcPtr)dt_proc, 0x0000B802, 1);
+    if (!tm.tmAddr || !dt.dtAddr)
+        return memFullErr;
+    running = 1;
+    cdv_ins_xtime(&tm);
+    PrimeTime((QElemPtr)&tm, HEARTBEAT_MS);
+    return noErr;
+}
+#else
+extern void cdv_tm_glue(void);
+extern void cdv_dt_glue(void);
 
 OSErr engine_start(void)
 {
@@ -413,10 +435,11 @@ OSErr engine_start(void)
     dt.dtAddr = (ProcPtr)cdv_dt_glue;
     dt.dtParam = a5;
     running = 1;
-    ins_xtime(&tm);
+    cdv_ins_xtime(&tm);
     PrimeTime((QElemPtr)&tm, HEARTBEAT_MS);
     return noErr;
 }
+#endif
 
 void engine_stop(void)
 {

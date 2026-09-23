@@ -44,7 +44,7 @@ typedef struct {
 } cdv_screen;
 
 /* Main loop only. */
-OSErr screen_open(cdv_screen *s);
+OSErr screen_open(cdv_screen *s, int use_gamma);
 void screen_close(cdv_screen *s);
 int screen_geometry_changed(const cdv_screen *s);
 /* Rebuild and publish the colour table if it changed. */

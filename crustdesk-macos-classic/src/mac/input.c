@@ -1,4 +1,5 @@
 #include "input.h"
+#include "traps.h"
 
 #include <Multiverse.h>
 #include <string.h>
@@ -114,23 +115,10 @@ static void move_to(int x, int y)
     LM_CRSRNEW = LM_CRSRCOUPLE;
 }
 
-/* _PPostEvent is register-based and Multiversal gives it no glue: the event
- * code goes in A0 and the message in D0 (Events.h: `#pragma parameter __D0
- * PPostEvent(__A0, __D0, __A1)`); A0 comes back as the queue element. The
- * other way round posts every event as a null event, successfully. */
-static OSErr ppost(short what, long message, EvQElPtr *q)
-{
-    register long a0 __asm__("a0") = what;
-    register long d0 __asm__("d0") = message;
-    __asm__ volatile(".short 0xA12F" : "+d"(d0), "+a"(a0) : : "d1", "d2", "a1", "cc", "memory");
-    *q = (EvQElPtr)a0;
-    return (OSErr)d0;
-}
-
 static void post(short what, long message)
 {
     EvQElPtr q = NULL;
-    if (ppost(what, message, &q) == noErr && q)
+    if (cdv_ppost_event(what, message, &q) == noErr && q)
         q->evtQModifiers = (INTEGER)(mods | (right_ctrl ? M_CONTROL : 0) |
                                      (buttons ? 0 : 0x0080 /* btnState: up */));
 }

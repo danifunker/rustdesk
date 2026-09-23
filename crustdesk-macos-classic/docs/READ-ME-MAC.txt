@@ -6,8 +6,8 @@ this Macintosh.
 
 What it needs
 -------------
-- System 7.5.5 or later on a 68020, 68030 or 68040 Mac (it is tested on a
-  Quadra 800). A PowerPC build is to come.
+- System 7.5.5 or later on a 68020, 68030 or 68040 Mac, or Mac OS 8 or 9
+  on a PowerPC Mac -- the same application runs natively on both.
 - MacTCP or Open Transport, set up and working (the Mac has an IP address).
 - 256 colours or fewer is fastest. Thousands and millions of colours work,
   but are slower.
@@ -36,6 +36,8 @@ SimpleText. Quit C-Desk-Vint first. Lines:
     password=...      the password peers must give
     port=21118        the TCP port to listen on
     quality=16        0 (best) to 127 (smallest); 16 is a good start
+    gamma=1           1: colours as this Mac's monitor shows them (through
+                      the video card's gamma table); 0: as drawn
 
 Things to know
 --------------

@@ -10,6 +10,7 @@
  */
 #include "engine.h"
 #include "input.h"
+#include "traps.h"
 #include "net.h"
 #include "screen.h"
 #include "../core/session.h"
@@ -28,13 +29,12 @@
 
 /* What Multiversal does not declare. */
 #define kOnSystemDisk ((short)0x8000)
-pascal OSErr CDV_FSpCreate(const FSSpec *spec, OSType creator, OSType type, short script)
-    M68K_INLINE(0x7004, 0xAA52);
 
 static struct {
     char password[33];
     unsigned short port;
     int q;
+    int gamma; /* apply the video driver's gamma table (default on) */
 } prefs;
 
 static WindowPtr win;
@@ -121,7 +121,7 @@ static void log_open(void)
     if (FindFolder(kOnSystemDisk, kPreferencesFolderType, 1, &vref, &dir) != noErr)
         return;
     FSMakeFSSpec(vref, dir, "\pC-Desk-Vint Log", &spec);
-    CDV_FSpCreate(&spec, 'ttxt', 'TEXT', 0);
+    cdv_fsp_create(&spec, 'ttxt', 'TEXT', 0);
     memset(&pb, 0, sizeof pb);
     pb.ioParam.ioNamePtr = (StringPtr) "\pC-Desk-Vint Log";
     pb.ioParam.ioVRefNum = vref;
@@ -192,6 +192,8 @@ static void parse_prefs(char *text)
                 prefs.port = (unsigned short)atoi(eq);
             else if (!strcmp(line, "quality"))
                 prefs.q = atoi(eq);
+            else if (!strcmp(line, "gamma"))
+                prefs.gamma = atoi(eq);
         }
         line = next;
     }
@@ -229,7 +231,7 @@ static void write_prefs_file(void)
     if (FindFolder(kOnSystemDisk, kPreferencesFolderType, 1, &vref, &dir) != noErr)
         return;
     FSMakeFSSpec(vref, dir, PREFS_NAME, &spec);
-    CDV_FSpCreate(&spec, 'ttxt', 'TEXT', 0);
+    cdv_fsp_create(&spec, 'ttxt', 'TEXT', 0);
     memset(&pb, 0, sizeof pb);
     pb.ioParam.ioNamePtr = (StringPtr)PREFS_NAME;
     pb.ioParam.ioVRefNum = vref;
@@ -250,6 +252,7 @@ static void init_prefs(void)
     long len = 0;
     prefs.port = DEFAULT_PORT;
     prefs.q = DEFAULT_Q;
+    prefs.gamma = 1;
     prefs.password[0] = 0;
     if (read_prefs_file(buf, sizeof buf - 1, &len)) {
         buf[len] = 0;
@@ -315,7 +318,7 @@ static size_t queue_size(const cdv_screen *s)
 
 static OSErr open_video(void)
 {
-    OSErr err = screen_open(&scr);
+    OSErr err = screen_open(&scr, prefs.gamma);
     if (err != noErr)
         return err;
     encmem = NewPtr((long)vp8e_mem_size(scr.width, scr.height));
