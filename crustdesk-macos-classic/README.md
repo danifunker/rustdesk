@@ -95,9 +95,12 @@ Verified on QEMU's Quadra 800, System 7.5.5, MacTCP 2.0.6, 640x480x8:
 | | |
 |---|---|
 | RustDesk 1.4.9 and `probe_client`: login, PeerInfo, picture in the right colours | works |
-| Pointer, clicks, press-drag-release through a menu (with the menu in front) | works |
+| Pointer, clicks, double-clicks, press-drag-release through a menu | works |
+| Keys: Map-mode keycodes, held modifiers, Legacy characters, into Note Pad | works |
 | Reconnecting, including while a menu holds the machine | works |
 | Every frame equal to libvpx's decode of it (host tests, 4 sizes, q 0-127) | works |
+| Switching depth mid-session in Monitors: 256 -> millions -> black & white -> 16, the peer's decoded picture checked against the Mac's screen at each | works |
+| Colours as the Mac's user sees them (the driver's gamma table applied) | works |
 
 Not established:
 
@@ -106,7 +109,6 @@ Not established:
 - **Speed.** A keyframe of a patterned desktop is several seconds of 68040
   time: every macroblock of a dither carries coefficients. Small changes are
   quick. See RESUME.md for numbers and the plan.
-- **Depths other than 8 bits** on a Mac: the converter handles them and has
-  host tests, but only 256 colours has been run.
-- **Keyboard** beyond the keycodes arriving correctly on the host agent.
+- **Thousands of colours (16-bit)**: QEMU's Quadra offers 1, 4, 8 and 24
+  bits, so the 16-bit path has only host tests.
 - Open Transport, PowerPC, encryption, rendezvous by ID, clipboard: not yet.

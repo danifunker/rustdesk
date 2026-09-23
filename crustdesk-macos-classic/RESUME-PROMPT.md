@@ -20,10 +20,9 @@ Priorities, in order:
    after, and keep `make -C host test` passing: it is the proof that the
    bitstream is still exactly what libvpx decodes.
 
-3. **Other depths on the Mac**: thousands, millions, 16 and 2 colours, and a
-   depth change mid-session. `GFX=640x480x24` (or x16, x1) for QEMU.
-
-4. **PowerPC** and a fat binary, then Open Transport natively.
+3. **PowerPC** and a fat binary, then Open Transport natively. (Depths are
+   done: 1, 4, 8 and 32 bits switched live in Monitors and checked by
+   decoding the peer's stream; 16-bit has host tests only.)
 
 Boundaries: the user's toolchain and the DOOM port's emulator workspace are
 shared -- read them, do not change them. MPW's headers are reference only.

@@ -34,10 +34,11 @@ Levers, cheapest first:
 
 ## 3. Colour depths
 
-Only 256 colours has been run on a Mac. Thousands and millions go through
-`yuv.c`'s direct paths (host-tested); 1-bit through the indexed path with a
-2-entry table. Try each in the Monitors control panel, including switching
-depth mid-session (the engine suspends, rebuilds and sends SwitchDisplay).
+Done for 1, 4, 8 and 32 bits: each switched to live in the Monitors control
+panel with a peer connected, and the peer's decoded stream compared with the
+Mac's screen. Thousands of colours (16-bit) is untried on a Mac -- QEMU's
+Quadra does not offer it -- and the gamma handling there expands 5-bit
+components to 8 before the lookup, which is a guess at what the hardware does.
 
 ## 4. PowerPC and a fat binary
 
