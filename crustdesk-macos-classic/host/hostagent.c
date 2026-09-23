@@ -230,10 +230,11 @@ static int serve(int fd, const char *password, int q)
                 s.refresh = 1; /* the encoder needs a keyframe next */
                 continue;
             }
-            cdv_video_commit(&s, len, key);
             {
                 vp8e_stats st;
                 vp8e_last_stats(e, &st);
+                key = st.key;
+                cdv_video_commit(&s, len, key);
                 if (getenv("CDV_VERBOSE"))
                     printf("frame %s %zu bytes: %d of %d macroblocks skipped, %d intra\n",
                            key ? "key" : "inter", len, st.skipped, st.mbs, st.intra);

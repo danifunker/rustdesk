@@ -60,6 +60,7 @@ void vp8e_recon(const vp8e *e, const uint8_t **y, const uint8_t **u,
 /* Counters from the last vp8e_encode, for logs and tuning. */
 typedef struct {
     int mbs, skipped, inter, intra;
+    int key;   /* the frame was a keyframe, asked for or not */
 } vp8e_stats;
 void vp8e_last_stats(const vp8e *e, vp8e_stats *s);
 

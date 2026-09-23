@@ -892,5 +892,6 @@ size_t vp8e_encode(vp8e *e, const vp8e_src *src, const uint8_t *dirty, int key,
     e->stats.skipped = nskip;
     e->stats.intra = nintra;
     e->stats.inter = total - nintra;
+    e->stats.key = key;
     return hdr + p1len + p2len;
 }

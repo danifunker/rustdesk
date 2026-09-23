@@ -1,0 +1,242 @@
+#!/usr/bin/env python3
+"""A scriptable RustDesk peer for testing C-Desk-Vint without a GUI.
+
+Logs in the way a real client does (empty-password probe, then
+sha256(sha256(password + salt) + challenge)), keeps reading so the agent's
+queue drains, and plays a script of input events:
+
+    cdvpoke.py HOST:PORT PASSWORD [STEP ...]
+
+Steps:
+    move X Y          pointer to X,Y
+    down [X Y]        left button down (at X,Y, or where the pointer is)
+    up [X Y]          left button up
+    rdown / rup       the same for the right button
+    key CODE          a Mac virtual keycode, pressed and released (Map mode)
+    keydown CODE / keyup CODE
+    type TEXT         characters, Legacy mode (chr is a character)
+    sleep SECONDS
+    refresh           ask for a keyframe
+    frames SECONDS    just watch, and report what arrives
+
+Only the handful of protobuf fields involved are encoded, by hand.
+"""
+import hashlib
+import socket
+import struct
+import sys
+import time
+
+
+def varint(v):
+    out = bytearray()
+    while True:
+        b = v & 0x7F
+        v >>= 7
+        if v:
+            out.append(b | 0x80)
+        else:
+            out.append(b)
+            return bytes(out)
+
+
+def field(num, wire, payload):
+    tag = varint(num << 3 | wire)
+    if wire == 0:
+        return tag + varint(payload)
+    return tag + varint(len(payload)) + payload
+
+
+def zz(v):
+    return (v << 1) ^ (v >> 31)
+
+
+def frame(body):
+    n = len(body)
+    if n <= 0x3F:
+        h = struct.pack('<B', n << 2)
+    elif n <= 0x3FFF:
+        h = struct.pack('<H', n << 2 | 1)
+    elif n <= 0x3FFFFF:
+        v = n << 2 | 2
+        h = bytes([v & 255, v >> 8 & 255, v >> 16 & 255])
+    else:
+        h = struct.pack('<I', n << 2 | 3)
+    return h + body
+
+
+def parse(buf):
+    """Top-level fields of a protobuf message: {field: [values]}."""
+    out, i = {}, 0
+    while i < len(buf):
+        key, i = rvarint(buf, i)
+        f, w = key >> 3, key & 7
+        if w == 0:
+            v, i = rvarint(buf, i)
+        elif w == 2:
+            n, i = rvarint(buf, i)
+            v = buf[i:i + n]
+            i += n
+        elif w == 5:
+            v = buf[i:i + 4]
+            i += 4
+        elif w == 1:
+            v = buf[i:i + 8]
+            i += 8
+        else:
+            raise ValueError('wire type %d' % w)
+        out.setdefault(f, []).append(v)
+    return out
+
+
+def rvarint(b, i):
+    v = s = 0
+    while True:
+        c = b[i]
+        i += 1
+        v |= (c & 0x7F) << s
+        s += 7
+        if not c & 0x80:
+            return v, i
+
+
+class Peer:
+    def __init__(self, addr):
+        host, port = addr.rsplit(':', 1)
+        self.s = socket.create_connection((host, int(port)), timeout=10)
+        self.buf = b''
+        self.frames = self.keyframes = self.bytes = 0
+
+    def send(self, body):
+        self.s.sendall(frame(body))
+
+    def recv(self, timeout=None):
+        self.s.settimeout(timeout)
+        while True:
+            if self.buf:
+                hl = (self.buf[0] & 3) + 1
+                if len(self.buf) >= hl:
+                    n = int.from_bytes(self.buf[:hl], 'little') >> 2
+                    if len(self.buf) >= hl + n:
+                        body = self.buf[hl:hl + n]
+                        self.buf = self.buf[hl + n:]
+                        return parse(body)
+            try:
+                d = self.s.recv(65536)
+            except socket.timeout:
+                return None
+            if not d:
+                raise EOFError('agent closed the connection')
+            self.buf += d
+
+    def pump(self, seconds):
+        """Read and account for everything that arrives for a while."""
+        end = time.time() + seconds
+        while time.time() < end:
+            m = self.recv(max(0.01, end - time.time()))
+            if m is None:
+                continue
+            if 6 in m:  # video_frame
+                self.frames += 1
+                vf = parse(m[6][0])
+                enc = parse((vf.get(12) or vf.get(6))[0])
+                one = parse(enc[1][0])
+                self.bytes += len(one[1][0])
+                if one.get(2, [0])[0]:
+                    self.keyframes += 1
+            if 5 in m:  # test_delay: answer it as a client does
+                td = parse(m[5][0])
+                if not td.get(2, [0])[0]:
+                    self.send(field(5, 2, m[5][0]))
+
+    def login(self, password):
+        h = parse(self.recv(10)[9][0])
+        salt, challenge = h[1][0], h[2][0]
+        self.send(field(7, 2, field(4, 2, b'poke') + field(5, 2, b'cdvpoke')))
+        m = self.recv(10)
+        err = parse(m[8][0]).get(1, [b''])[0]
+        assert err == b'Empty Password', err
+        h1 = hashlib.sha256(password.encode() + salt).digest()
+        h2 = hashlib.sha256(h1 + challenge).digest()
+        self.send(field(7, 2, field(2, 2, h2) + field(4, 2, b'poke') + field(5, 2, b'cdvpoke')))
+        lr = parse(self.recv(10)[8][0])
+        if 2 not in lr:
+            raise SystemExit('login refused: %r' % lr.get(1))
+        pi = parse(lr[2][0])
+        d = parse(pi[4][0])
+        print('logged in: %s, %s %s, %dx%d' % (pi[2][0].decode(), pi[3][0].decode(),
+                                              pi[7][0].decode(), d[3][0], d[4][0]))
+
+    def mouse(self, mask, x=0, y=0):
+        body = field(1, 0, mask)
+        if x:
+            body += field(2, 0, zz(x))
+        if y:
+            body += field(3, 0, zz(y))
+        self.send(field(10, 2, body))
+
+    def key(self, code, down=None, press=False, mode=1):
+        body = b''
+        if down:
+            body += field(1, 0, 1)
+        if press:
+            body += field(2, 0, 1)
+        body += field(4, 0, code)
+        if mode:
+            body += field(9, 0, mode)
+        self.send(field(15, 2, body))
+
+
+def main():
+    p = Peer(sys.argv[1])
+    p.login(sys.argv[2])
+    args = sys.argv[3:]
+    i = 0
+
+    def xy():
+        nonlocal i
+        if i + 1 < len(args) and args[i].lstrip('-').isdigit():
+            x, y = int(args[i]), int(args[i + 1])
+            i += 2
+            return x, y
+        return 0, 0
+
+    while i < len(args):
+        op = args[i]
+        i += 1
+        if op == 'move':
+            p.mouse(0, *xy())
+        elif op in ('down', 'up', 'rdown', 'rup'):
+            btn = 2 if op.startswith('r') else 1
+            p.mouse((1 if op.endswith('down') else 2) | btn << 3, *xy())
+        elif op == 'key':
+            p.key(int(args[i]), press=True)
+            i += 1
+        elif op in ('keydown', 'keyup'):
+            p.key(int(args[i]), down=op == 'keydown')
+            i += 1
+        elif op == 'type':
+            for ch in args[i]:
+                p.key(ord(ch), down=True, mode=0)
+                p.key(ord(ch), down=False, mode=0)
+            i += 1
+        elif op == 'sleep':
+            p.pump(float(args[i]))
+            i += 1
+        elif op == 'refresh':
+            p.send(field(19, 2, field(10, 0, 1)))
+        elif op == 'frames':
+            f0, k0, b0 = p.frames, p.keyframes, p.bytes
+            t = float(args[i])
+            i += 1
+            p.pump(t)
+            print('%d frames (%d key), %d bytes in %.1fs' %
+                  (p.frames - f0, p.keyframes - k0, p.bytes - b0, t))
+        else:
+            raise SystemExit('unknown step %s' % op)
+        p.pump(0.05)
+    print('total: %d frames (%d key), %d bytes' % (p.frames, p.keyframes, p.bytes))
+
+
+if __name__ == '__main__':
+    main()
