@@ -12,6 +12,12 @@
 #include "../src/core/session.h"
 #include "../src/core/vp8enc.h"
 #include "../src/core/yuv.h"
+#include "../src/core/rng.h"
+#include "../src/core/rdv.h"
+#include <netdb.h>
+#include <fcntl.h>
+#include "sodium/crypto_sign_ed25519.h"
+#include "../src/core/sha256.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -155,12 +161,42 @@ static void on_log(void *u, const char *m)
     printf("session: %s\n", m);
 }
 
-static int serve(int fd, const char *password, int q)
+/* The host agent's identity: fixed for a run, from CDV_ID (default cdvhost1)
+ * and a keypair derived from it, so hbbs sees the same key every time. */
+static char host_id[16] = "cdvhost1";
+static uint8_t host_pk[32], host_sk[64], host_uuid[16];
+
+static int tcp_connect(const char *host, uint16_t port)
+{
+    struct addrinfo hints, *ai;
+    char ps[8];
+    int fd;
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    snprintf(ps, sizeof ps, "%u", port);
+    if (getaddrinfo(host, ps, &hints, &ai))
+        return -1;
+    fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (connect(fd, ai->ai_addr, ai->ai_addrlen)) {
+        close(fd);
+        fd = -1;
+    }
+    freeaddrinfo(ai);
+    return fd;
+}
+
+static int serve(int fd, const char *password, int q, int secure)
 {
     static uint8_t outbuf[1 << 20], inbuf[64 * 1024];
     static uint8_t encmem_raw[4 << 20];
     static const cdv_hooks hooks = { on_mouse, on_key, NULL, on_log, NULL };
-    cdv_ident id = { password, "classicsalt", "Host Quadra", W, H, 1 };
+    static uint8_t pk[32], sk[64];
+    static int have_keys;
+    cdv_ident id = { host_id, host_sk, password, "classicsalt", "Host Quadra", W, H, 1 };
+    (void)pk;
+    (void)sk;
+    (void)have_keys;
     cdv_session s;
     vp8e *e = vp8e_init(encmem_raw, W, H, q);
     uint8_t dirty[40 * 30];
@@ -169,12 +205,19 @@ static int serve(int fd, const char *password, int q)
     if (vp8e_mem_size(W, H) > sizeof encmem_raw)
         return -1;
     cdv_init(&s, outbuf, sizeof outbuf, inbuf, sizeof inbuf, &hooks, &id, now_ms());
-    cdv_start(&s, now_ms());
+    cdv_start(&s, now_ms(), secure || getenv("CDV_SECURE") != NULL);
+    uint32_t started = now_ms();
     memset(shadow, 0, sizeof shadow);
 
     for (;;) {
         struct pollfd p = { fd, POLLIN, 0 };
         size_t n;
+        /* A connection that never logs in (a client that probed one route and
+         * took another) must not hold the agent: hbbs is still talking. */
+        if (s.state != CDV_LIVE && now_ms() - started > 5000) {
+            printf("no login within 5 s; dropping it\n");
+            return 0;
+        }
         const uint8_t *o = cdv_out_peek(&s, &n);
         if (n)
             p.events |= POLLOUT;
@@ -272,14 +315,133 @@ int main(int argc, char **argv)
         return 1;
     }
     printf("C-Desk-Vint host agent on port %d, password '%s', q=%d\n", port, password, q);
-    for (;;) {
-        int fd = accept(ls, NULL, NULL);
-        if (fd < 0)
-            continue;
-        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
-        printf("connection\n");
-        serve(fd, password, q);
-        close(fd);
-        printf("closed\n");
+    {
+        const char *server = getenv("CDV_SERVER");
+        cdv_rdv rdv;
+        int udp = -1;
+        struct sockaddr_in hbbs;
+        char shost[128];
+        uint16_t sport;
+        uint8_t seed[32];
+        sha256_ctx hc;
+        if (getenv("CDV_ID"))
+            snprintf(host_id, sizeof host_id, "%s", getenv("CDV_ID"));
+        sha256_init(&hc);
+        sha256_update(&hc, host_id, strlen(host_id));
+        sha256_final(&hc, seed);
+        crypto_sign_ed25519_seed_keypair(host_pk, host_sk, seed);
+        memcpy(host_uuid, seed, 16);
+        memset(&rdv, 0, sizeof rdv);
+        rdv_init(&rdv);
+        snprintf(rdv.id, sizeof rdv.id, "%s", host_id);
+        memcpy(rdv.uuid, host_uuid, 16);
+        memcpy(rdv.pk, host_pk, 32);
+        snprintf(rdv.key, sizeof rdv.key, "%s", getenv("CDV_KEY") ? getenv("CDV_KEY") : "");
+        if (server) {
+            struct addrinfo hints, *ai;
+            char ps[8];
+            rdv_split_host(server, shost, sizeof shost, &sport, RDV_PORT);
+            memset(&hints, 0, sizeof hints);
+            hints.ai_family = AF_INET;
+            hints.ai_socktype = SOCK_DGRAM;
+            snprintf(ps, sizeof ps, "%u", sport);
+            if (getaddrinfo(shost, ps, &hints, &ai) == 0) {
+                memcpy(&hbbs, ai->ai_addr, sizeof hbbs);
+                freeaddrinfo(ai);
+                udp = socket(AF_INET, SOCK_DGRAM, 0);
+                printf("registering with %s as id %s\n", server, host_id);
+            }
+        }
+        for (;;) {
+            struct pollfd p[2] = { { ls, POLLIN, 0 }, { udp, POLLIN, 0 } };
+            uint8_t buf[2048], rep[512];
+            size_t n;
+            if (udp >= 0 && (n = rdv_tick(&rdv, now_ms(), buf, sizeof buf)))
+                sendto(udp, buf, n, 0, (struct sockaddr *)&hbbs, sizeof hbbs);
+            poll(p, udp >= 0 ? 2 : 1, 200);
+            if (p[0].revents & POLLIN) {
+                int fd = accept(ls, NULL, NULL);
+                if (fd >= 0) {
+                    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
+                    printf("direct connection\n");
+                    serve(fd, password, q, 0);
+                    close(fd);
+                    printf("closed\n");
+                }
+            }
+            if (udp >= 0 && (p[1].revents & POLLIN)) {
+                ssize_t r = recv(udp, buf, sizeof buf, 0);
+                rdv_action act;
+                size_t replen;
+                int kind;
+                if (r <= 0)
+                    continue;
+                kind = rdv_input(&rdv, buf, (size_t)r, now_ms(), &act, rep, sizeof rep, &replen);
+                if (replen)
+                    sendto(udp, rep, replen, 0, (struct sockaddr *)&hbbs, sizeof hbbs);
+                if (kind == RDV_REGISTERED)
+                    printf("registered: reachable as id %s\n", host_id);
+                else if (kind == RDV_REFUSED)
+                    printf("hbbs refused the registration (%d)\n", act.refuse_code);
+                else if (kind == RDV_RELAY) {
+                    char rhost[128];
+                    uint16_t rport;
+                    int t = tcp_connect(shost, sport), fd;
+                    printf("relay request (%s) from %u.%u.%u.%u via %s, uuid %s\n",
+                           act.initiate ? "punch hole" : "request relay", act.peer_ip >> 24,
+                           act.peer_ip >> 16 & 255, act.peer_ip >> 8 & 255, act.peer_ip & 255,
+                           act.relay, act.uuid);
+                    if (t >= 0) {
+                        n = rdv_relay_response(&rdv, &act, buf, sizeof buf);
+                        send(t, buf, n, 0);
+                        close(t);
+                    }
+                    rdv_split_host(act.relay, rhost, sizeof rhost, &rport, RELAY_PORT);
+                    fd = tcp_connect(rhost, rport);
+                    if (fd >= 0) {
+                        n = rdv_request_relay(&rdv, &act, buf, sizeof buf);
+                        send(fd, buf, n, 0);
+                        printf("joined the relay\n");
+                        serve(fd, password, q, 1);
+                        close(fd);
+                        printf("relay session over\n");
+                    }
+                } else if (kind == RDV_LOCAL) {
+                    int l = socket(AF_INET, SOCK_STREAM, 0), t;
+                    struct sockaddr_in la;
+                    socklen_t ll = sizeof la;
+                    memset(&la, 0, sizeof la);
+                    la.sin_family = AF_INET;
+                    bind(l, (struct sockaddr *)&la, sizeof la);
+                    listen(l, 1);
+                    getsockname(l, (struct sockaddr *)&la, &ll);
+                    t = tcp_connect(shost, sport);
+                    if (t >= 0) {
+                        struct sockaddr_in me;
+                        socklen_t ml = sizeof me;
+                        getsockname(t, (struct sockaddr *)&me, &ml);
+                        n = rdv_local_addr(&rdv, &act, ntohl(me.sin_addr.s_addr),
+                                           ntohs(la.sin_port), buf, sizeof buf);
+                        send(t, buf, n, 0);
+                        close(t);
+                        printf("told hbbs we are at port %u; waiting for the peer\n",
+                               ntohs(la.sin_port));
+                        {
+                            struct pollfd pl = { l, POLLIN, 0 };
+                            if (poll(&pl, 1, 10000) > 0) {
+                                int fd = accept(l, NULL, NULL);
+                                printf("local connection\n");
+                                serve(fd, password, q, 1);
+                                close(fd);
+                                printf("local session over\n");
+                            } else {
+                                printf("the peer never came\n");
+                            }
+                        }
+                    }
+                    close(l);
+                }
+            }
+        }
     }
 }

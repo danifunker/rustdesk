@@ -5,9 +5,11 @@
  * whatever it queued, and asks it for a video buffer when the line is free.
  * The same file runs under a POSIX test harness on Linux.
  *
- * Direct-IP mode only for now: no key exchange, so the session is not
- * encrypted -- the same as upstream's direct server, and what the other
- * vintage agents do on the LAN.
+ * Two modes, chosen by how the peer arrived. Direct IP: no key exchange and
+ * no encryption, the same as upstream's direct server. Through the ID server
+ * (relay or local-address): signed_id, the peer's public_key, then every
+ * message sealed in a secretbox -- rustdesk-ppc-agent's crypto.rs, in C over
+ * a libsodium subset (third_party/libsodium-min).
  *
  * Buffers are the caller's and are never reallocated. `out` is split in two:
  * a small queue for control messages at the front, and room for one video
@@ -66,6 +68,8 @@ typedef struct {
 } cdv_hooks;
 
 typedef struct {
+    const char *id;         /* this machine's RustDesk ID */
+    const uint8_t *sign_sk; /* Ed25519 secret key (64 bytes), for signed_id */
     const char *password;   /* empty: refuse every login */
     const char *salt;
     const char *hostname;
@@ -73,7 +77,7 @@ typedef struct {
     int cursor_embedded;    /* the pointer is drawn into the captured picture */
 } cdv_ident;
 
-enum { CDV_WAIT_LOGIN, CDV_LIVE, CDV_CLOSED };
+enum { CDV_WAIT_PK, CDV_WAIT_LOGIN, CDV_LIVE, CDV_CLOSED };
 
 typedef struct {
     int state;
@@ -99,6 +103,11 @@ typedef struct {
     int refresh;              /* the peer asked for a keyframe */
     uint32_t pts;
 
+    /* encryption, once the key exchange has happened */
+    int secure, enc;
+    uint8_t box_pk[32], box_sk[32], key[32];
+    uint64_t send_seq, recv_seq;
+
     char peer_name[64];
     char peer_version[16];
     char peer_platform[16];
@@ -107,8 +116,9 @@ typedef struct {
 void cdv_init(cdv_session *s, uint8_t *out, size_t outcap, uint8_t *in, size_t incap,
               const cdv_hooks *hooks, const cdv_ident *id, uint32_t seed);
 
-/* Queue the opening message. Call once the connection is up. */
-void cdv_start(cdv_session *s, uint32_t now_ms);
+/* Queue the opening message. Call once the connection is up. `secure` for a
+ * peer that came through the ID server: it will expect the key exchange. */
+void cdv_start(cdv_session *s, uint32_t now_ms, int secure);
 
 /* Bytes from the peer. Returns -1 once the session should be closed. */
 int cdv_feed(cdv_session *s, const uint8_t *data, size_t n);

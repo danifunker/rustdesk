@@ -321,7 +321,7 @@ void engine_tick(void)
         conn_count++;
         cdv_init(X.sess, X.outq, X.outcap, X.inq, X.incap, X.hooks, X.ident,
                  TickCount() ^ (conn_count << 16));
-        cdv_start(X.sess, now_ms());
+        cdv_start(X.sess, now_ms(), 0); /* direct IP: unencrypted, as upstream */
         memset(&C, 0, sizeof C);
         C.sum = 0xFFFFFFFF;
         memset(&V, 0, sizeof V);

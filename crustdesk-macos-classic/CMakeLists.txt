@@ -22,6 +22,9 @@ else()
     set(CDV_ARCH_SOURCES)
 endif()
 
+# libsodium 1.0.18, the parts RustDesk's crypto uses (ISC; see its LICENSE).
+file(GLOB_RECURSE CDV_NACL_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/third_party/libsodium-min/*.c)
+
 add_application(C-Desk-Vint
     src/mac/main.c
     src/mac/net.c
@@ -37,6 +40,9 @@ add_application(C-Desk-Vint
     src/core/sha256.c
     src/core/yuv.c
     src/core/macroman.c
+    src/core/rng.c
+    src/core/rdv.c
+    ${CDV_NACL_SOURCES}
     src/core/vp8enc.c
     rsrc/cdeskvint.r
     CREATOR CDVt
@@ -45,6 +51,11 @@ add_application(C-Desk-Vint
 if(CDV_PROFILE)
     target_compile_definitions(C-Desk-Vint PRIVATE VP8E_PROFILE)
 endif()
+target_include_directories(C-Desk-Vint PRIVATE
+    third_party/libsodium-min/include
+    third_party/libsodium-min/include/sodium
+    src/core)
+target_compile_definitions(C-Desk-Vint PRIVATE CONFIGURED=1)
 target_compile_options(C-Desk-Vint PRIVATE
     -O2 -std=gnu99
     -Wall -Wno-multichar -Wno-unused-parameter

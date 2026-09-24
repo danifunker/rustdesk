@@ -5,7 +5,10 @@ Logs in the way a real client does (empty-password probe, then
 sha256(sha256(password + salt) + challenge)), keeps reading so the agent's
 queue drains, and plays a script of input events:
 
-    cdvpoke.py HOST:PORT PASSWORD [STEP ...]
+    cdvpoke.py [--secure] HOST:PORT PASSWORD [STEP ...]
+
+--secure plays the client's side of the key exchange a peer arriving through
+the ID server does (signed_id, then public_key), and seals everything after.
 
 Steps:
     move X Y          pointer to X,Y
@@ -104,6 +107,9 @@ def rvarint(b, i):
 
 
 class Peer:
+    key = None
+    send_seq = recv_seq = 0
+
     def __init__(self, addr):
         host, port = addr.rsplit(':', 1)
         self.s = socket.create_connection((host, int(port)), timeout=10)
@@ -113,9 +119,28 @@ class Peer:
         self.cursors, self.positions = [], []
 
     def send(self, body):
+        if self.key:
+            from nacl.bindings import crypto_secretbox
+            self.send_seq += 1
+            body = crypto_secretbox(body, self.send_seq.to_bytes(8, 'little') + bytes(16), self.key)
         self.s.sendall(frame(body))
 
-    def recv(self, timeout=None):
+    def handshake(self):
+        """What a client does with signed_id: check the signature, take the
+        box key out of IdPk, and box a fresh session key to it."""
+        from nacl.bindings import (crypto_box, crypto_box_keypair, crypto_sign_open)
+        m = self.recv(15, raw=True)
+        signed = parse(parse(m)[3][0])[1][0]
+        idpk = parse(signed[64:])
+        their = idpk[2][0]
+        print('signed_id from %s, box key %s...' % (idpk[1][0].decode(), their[:4].hex()))
+        pk, sk = crypto_box_keypair()
+        key = bytes(range(32))
+        boxed = crypto_box(key, bytes(24), their, sk)
+        self.s.sendall(frame(field(4, 2, field(1, 2, pk) + field(2, 2, boxed))))
+        self.key = key
+
+    def recv(self, timeout=None, raw=False):
         self.s.settimeout(timeout)
         while True:
             if self.buf:
@@ -125,6 +150,13 @@ class Peer:
                     if len(self.buf) >= hl + n:
                         body = self.buf[hl:hl + n]
                         self.buf = self.buf[hl + n:]
+                        if raw:
+                            return body
+                        if self.key:
+                            from nacl.bindings import crypto_secretbox_open
+                            self.recv_seq += 1
+                            body = crypto_secretbox_open(
+                                body, self.recv_seq.to_bytes(8, 'little') + bytes(16), self.key)
                         return parse(body)
             try:
                 d = self.s.recv(65536)
@@ -210,9 +242,15 @@ class Peer:
 
 
 def main():
-    p = Peer(sys.argv[1])
-    p.login(sys.argv[2])
-    args = sys.argv[3:]
+    argv = sys.argv[1:]
+    secure = argv[0] == '--secure'
+    if secure:
+        argv = argv[1:]
+    p = Peer(argv[0])
+    if secure:
+        p.handshake()
+    p.login(argv[1])
+    args = argv[2:]
     i = 0
 
     def xy():

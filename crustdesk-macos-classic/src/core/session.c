@@ -1,6 +1,11 @@
 #include "session.h"
 #include "pb.h"
+#include "rng.h"
 #include "sha256.h"
+
+#include "sodium/crypto_box.h"
+#include "sodium/crypto_secretbox.h"
+#include "sodium/crypto_sign_ed25519.h"
 
 #include <string.h>
 
@@ -13,7 +18,7 @@
 /* Message fields, from message.proto. */
 enum {
     M_TEST_DELAY = 5, M_VIDEO_FRAME = 6, M_LOGIN_REQUEST = 7, M_LOGIN_RESPONSE = 8,
-    M_HASH = 9, M_MOUSE_EVENT = 10, M_CURSOR_DATA = 12, M_CURSOR_POSITION = 13,
+    M_SIGNED_ID = 3, M_PUBLIC_KEY = 4, M_HASH = 9, M_MOUSE_EVENT = 10, M_CURSOR_DATA = 12, M_CURSOR_POSITION = 13,
     M_KEY_EVENT = 15, M_CLIPBOARD = 16, M_MISC = 19, M_MULTI_CLIPBOARDS = 28,
     M_SCREENSHOT_REQUEST = 29, M_SCREENSHOT_RESPONSE = 30
 };
@@ -22,7 +27,8 @@ enum {
 #define KEEPALIVE_STALE_MS 10000
 #define MAX_LOGIN_ATTEMPTS 10
 #define VIDEO_PREFIX 32 /* room for the headers written in front of a frame */
-#define VIDEO_SUFFIX 16 /* key and pts, written after it */
+#define VIDEO_SUFFIX 32 /* key and pts after it, and the MAC sealing adds */
+#define MAC 16          /* crypto_secretbox_MACBYTES */
 
 static void say(cdv_session *s, const char *msg)
 {
@@ -95,10 +101,29 @@ static size_t frame_header(uint8_t *h, size_t n)
  * front. Returns 0 if there was no room, and queues nothing. */
 static int msg_begin(cdv_session *s, pbw *w)
 {
-    if (s->state == CDV_CLOSED || s->ctlcap - s->olen < 8)
+    if (s->state == CDV_CLOSED || s->ctlcap - s->olen < 8 + MAC)
         return 0;
-    pbw_init(w, s->out + s->olen + 4, s->ctlcap - s->olen - 4);
+    pbw_init(w, s->out + s->olen + 4, s->ctlcap - s->olen - 4 - MAC);
     return 1;
+}
+
+/* Section: crypto.rs's SecureChannel. The nonce is the message's sequence
+ * number, starting at 1, little-endian in the first 8 of 24 bytes -- whatever
+ * the host's byte order. Sealed in place: MAC first, then the ciphertext. */
+static void seq_nonce(uint64_t seq, uint8_t n[24])
+{
+    int i;
+    memset(n, 0, 24);
+    for (i = 0; i < 8; i++)
+        n[i] = (uint8_t)(seq >> (8 * i));
+}
+
+static size_t seal(cdv_session *s, uint8_t *p, size_t n)
+{
+    uint8_t nonce[24];
+    seq_nonce(++s->send_seq, nonce);
+    crypto_secretbox_easy(p, p, n, nonce, s->key);
+    return n + MAC;
 }
 
 static int msg_end(cdv_session *s, pbw *w)
@@ -109,6 +134,8 @@ static int msg_end(cdv_session *s, pbw *w)
         say(s, "outbound queue full; message dropped");
         return 0;
     }
+    if (s->enc)
+        n = seal(s, body, n);
     hl = frame_header(h, n);
     if (hl < 4)
         memmove(s->out + s->olen + hl, body, n);
@@ -344,12 +371,11 @@ void cdv_close(cdv_session *s, const char *reason)
     s->state = CDV_CLOSED;
 }
 
-void cdv_start(cdv_session *s, uint32_t now_ms)
+static void send_hash(cdv_session *s)
 {
     static const char alphabet[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     pbw w;
     int i;
-    s->now = s->delay_sent = now_ms;
     for (i = 0; i < 6; i++)
         s->challenge[i] = alphabet[rnd(s) % (sizeof alphabet - 1)];
     s->challenge[6] = 0;
@@ -360,6 +386,77 @@ void cdv_start(cdv_session *s, uint32_t now_ms)
     pbw_string(&w, 2, s->challenge);
     pbw_end(&w);
     msg_end(s, &w);
+}
+
+/* crypto.rs's Handshake::signed_id: IdPk{id, pk: a fresh box public key},
+ * signed (combined mode) with the machine's Ed25519 key. */
+static void send_signed_id(cdv_session *s)
+{
+    uint8_t idpk[96], signed_[96 + 64];
+    unsigned long long sl;
+    pbw w;
+    size_t n;
+    crypto_box_keypair(s->box_pk, s->box_sk);
+    pbw_init(&w, idpk, sizeof idpk);
+    pbw_string(&w, 1, s->id->id);
+    pbw_bytes(&w, 2, s->box_pk, 32);
+    n = pbw_len(&w, idpk);
+    crypto_sign_ed25519(signed_, &sl, idpk, n, s->id->sign_sk);
+    if (!msg_begin(s, &w))
+        return;
+    pbw_begin(&w, M_SIGNED_ID);
+    pbw_bytes(&w, 1, signed_, (size_t)sl);
+    pbw_end(&w);
+    msg_end(s, &w);
+}
+
+void cdv_start(cdv_session *s, uint32_t now_ms, int secure)
+{
+    s->now = s->delay_sent = now_ms;
+    s->secure = secure && s->id->sign_sk && s->id->id;
+    if (s->secure) {
+        send_signed_id(s);
+        s->state = CDV_WAIT_PK;
+    } else {
+        send_hash(s);
+    }
+}
+
+/* The peer's answer to signed_id: public_key{asymmetric_value: its box
+ * public key, symmetric_value: the session key, boxed to ours with a zero
+ * nonce}. Empty -- or an empty message -- means it declines, and upstream
+ * carries on unencrypted; so do we. */
+static void public_key(cdv_session *s, const uint8_t *b, size_t n)
+{
+    const uint8_t *their = NULL, *boxed = NULL;
+    size_t tl = 0, bl = 0;
+    uint8_t nonce[24] = { 0 };
+    pbr r;
+    pbr_init(&r, b, n);
+    while (pbr_next(&r)) {
+        if (r.wire != PB_LEN)
+            continue;
+        if (r.field == 1) {
+            their = r.data;
+            tl = r.len;
+        } else if (r.field == 2) {
+            boxed = r.data;
+            bl = r.len;
+        }
+    }
+    if (!tl) {
+        say(s, "peer declined encryption; continuing unencrypted");
+    } else if (tl != 32 || bl != 32 + MAC ||
+               crypto_box_open_easy(s->key, boxed, bl, nonce, their, s->box_sk) != 0) {
+        say(s, "key exchange failed");
+        s->state = CDV_CLOSED;
+        return;
+    } else {
+        s->enc = 1;
+        say(s, "session encrypted");
+    }
+    s->state = CDV_WAIT_LOGIN;
+    send_hash(s);
 }
 
 /* ---- video ----------------------------------------------------------------- */
@@ -385,8 +482,8 @@ void cdv_video_abort(cdv_session *s)
  * skipped by starting the queue past it. */
 void cdv_video_commit(cdv_session *s, size_t len, int key)
 {
-    uint8_t *data = s->vid + VIDEO_PREFIX, *p, pre[VIDEO_PREFIX];
-    size_t suffix, l3, l2, l1, l0, n = 0;
+    uint8_t *data = s->vid + VIDEO_PREFIX, *p, pre[VIDEO_PREFIX], *msg, h[4];
+    size_t suffix, l3, l2, l1, l0, n = 0, hl, total;
     p = data + len;
     if (key) {
         *p++ = 0x10; /* key = 2, varint */
@@ -402,7 +499,6 @@ void cdv_video_commit(cdv_session *s, size_t len, int key)
     l1 = 1 + pb_varint_size(l2) + l2;                 /* VideoFrame */
     l0 = 1 + pb_varint_size(l1) + l1;                 /* Message */
 
-    n += frame_header(pre + n, l0);
     pre[n++] = (M_VIDEO_FRAME << 3) | PB_LEN;
     n += pb_put_varint(pre + n, l1);
     pre[n++] = (12 << 3) | PB_LEN; /* vp8s: field 12, not 6, which is VP9 */
@@ -412,9 +508,15 @@ void cdv_video_commit(cdv_session *s, size_t len, int key)
     pre[n++] = (1 << 3) | PB_LEN; /* data */
     n += pb_put_varint(pre + n, len);
 
-    memcpy(data - n, pre, n);
-    s->voff = VIDEO_PREFIX - n;
-    s->vlen = (size_t)(p - s->vid);
+    msg = data - n;
+    memcpy(msg, pre, n);
+    total = l0;
+    if (s->enc)
+        total = seal(s, msg, l0);
+    hl = frame_header(h, total);
+    memcpy(msg - hl, h, hl);
+    s->voff = (size_t)(msg - hl - s->vid);
+    s->vlen = (size_t)(msg + total - s->vid);
     s->vstate = VID_READY;
 }
 
@@ -651,6 +753,16 @@ static void screenshot(cdv_session *s, const uint8_t *b, size_t n)
 static void dispatch(cdv_session *s, const uint8_t *b, size_t n)
 {
     pbr r;
+    if (s->state == CDV_WAIT_PK) {
+        pbr_init(&r, b, n);
+        while (pbr_next(&r))
+            if (r.field == M_PUBLIC_KEY && r.wire == PB_LEN) {
+                public_key(s, r.data, r.len);
+                return;
+            }
+        public_key(s, NULL, 0); /* an empty message: no key for us */
+        return;
+    }
     pbr_init(&r, b, n);
     while (pbr_next(&r)) {
         if (r.wire != PB_LEN)
@@ -723,7 +835,19 @@ int cdv_feed(cdv_session *s, const uint8_t *data, size_t n)
             }
             if (s->ilen < hl + len)
                 break;
-            dispatch(s, s->in + hl, len);
+            if (s->enc) {
+                uint8_t nonce[24];
+                seq_nonce(++s->recv_seq, nonce);
+                if (len < MAC || crypto_secretbox_open_easy(s->in + hl, s->in + hl, len, nonce,
+                                                            s->key) != 0) {
+                    say(s, "a message failed to decrypt; closing");
+                    s->state = CDV_CLOSED;
+                    return -1;
+                }
+                dispatch(s, s->in + hl, len - MAC);
+            } else {
+                dispatch(s, s->in + hl, len);
+            }
             memmove(s->in, s->in + hl + len, s->ilen - hl - len);
             s->ilen -= hl + len;
         }
