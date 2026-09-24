@@ -55,21 +55,30 @@ declarations of the OT calls used.
 
 ## 6. Protocol
 
-- Encryption: the signed_id/public_key exchange and secretbox, as the other
-  agents do. X25519 and Ed25519 in portable C; benchmark on the 68040 first.
-- Rendezvous (by ID through hbbs/hbbr) and LAN discovery (UDP 21119).
-- Clipboard, peer to Mac: needs a zstd decoder, because clients compress
-  clipboard text whenever that is smaller. A decoder for the frames a client
-  sends (one frame, no dictionary) is a few hundred lines of C; the official
-  single-file decoder is far more than this needs.
-- Screenshots (a PNG of the shadow), a cursor shape when the pointer is not
-  embedded.
+Done: encryption (signed_id/public_key, secretbox), rendezvous by ID through
+hbbs/hbbr, LAN discovery (UDP 21119), the clipboard both ways, the pointer
+shape, and reporting to a console (sysinfo, heartbeat) over https.
+
+- **The local-address path** (hbbs sends FetchLocalAddr when peer and Mac
+  share a public address, and the peer comes to port 21120) is untested:
+  QEMU's NAT hides the Mac. The first real-LAN run will say.
+- **TLS on a 68040** costs ~11 s of paced-QEMU time per new connection (two
+  P-384 and one P-256 signature checks, and an X25519). The connection is
+  kept, so it is rare, but it freezes that Mac's own UI while it happens.
+  Levers: anchor Let's Encrypt's current intermediates too (one P-384 check
+  fewer); compare BearSSL's m15 and m31 EC code on the 68040; session
+  resumption if a console's TLS server offers session IDs.
+- The console's `disconnect` and `strategy` answers are ignored, as the
+  PowerPC agent ignores them.
 
 ## 7. Smaller things
 
-- An icon, a BNDL, and "C-Desk-Vint" as a proper document creator.
-- A settings dialog, so the password can be changed without SimpleText.
+- The Control Strip is standard on PowerBooks with 7.5 and on every Mac from
+  7.6; a desktop 7.5.5 Mac needs it installed. Classic under Mac OS X has
+  none (the installer says so).
 - The refresh visits one macroblock row every 400 ms; after a keyframe it
   could go faster until everything has had its pass.
 - Scroll wheel: there is none on System 7; arrow keys or page keys might
   stand in.
+- A Settings change that restarts sharing takes a few seconds before the
+  console is told again (the resolver is asked afresh).

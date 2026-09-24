@@ -702,6 +702,14 @@ static void lan_step(void)
 void engine_setup(const engine_ctx *ctx)
 {
     X = *ctx;
+    /* Also a restart (Stop, then Start, or new settings): nothing of the last
+     * run's streams survives -- they were released and made again. */
+    S = NULL;
+    eng.live = 0;
+    eng.secure = 0;
+    eng.rdv_state = RS_OFF;
+    eng.drop_req = 0;
+    memset((void *)&name_q, 0, sizeof name_q);
     memset(&V, 0, sizeof V);
     V.q = X.q;
     memset(&R, 0, sizeof R);
@@ -746,7 +754,8 @@ void engine_tick(void)
 {
     eng.ticks++;
     if (eng.drop_req) {
-        end_session("the screen changed; please reconnect");
+        end_session(eng.drop_req == DROP_USER ? "disconnected the peer"
+                                              : "the screen changed; please reconnect");
         eng.drop_req = 0;
     }
     if (eng.suspend_req) {

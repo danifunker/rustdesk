@@ -27,13 +27,16 @@
 #include "../core/session.h"
 #include "../core/vp8enc.h"
 
+/* Why the main loop asks for the session to end. */
+enum { DROP_NONE, DROP_SCREEN, DROP_USER };
+
 /* What the ID server made of us, for the window. */
 enum { RS_OFF, RS_RESOLVING, RS_NO_DNS, RS_REGISTERING, RS_REGISTERED, RS_REFUSED };
 
 typedef struct {
     /* main -> engine */
     volatile int suspend_req;   /* stop touching the screen and encoder */
-    volatile int drop_req;      /* end the session (the screen outgrew the queue) */
+    volatile int drop_req;      /* end the session: DROP_SCREEN or DROP_USER */
     volatile int announce;      /* tell the peer the display changed */
     /* engine -> main */
     volatile int suspended;

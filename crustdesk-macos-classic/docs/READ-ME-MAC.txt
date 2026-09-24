@@ -2,47 +2,82 @@ C-Desk-Vint -- RustDesk for classic Mac OS
 ==========================================
 
 C-Desk-Vint lets a RustDesk client on a modern computer see and control
-this Macintosh.
+this Macintosh, by its RustDesk ID or by its IP address.
 
 What it needs
 -------------
 - System 7.5.5 or later on a 68020, 68030 or 68040 Mac, or Mac OS 8 or 9
-  on a PowerPC Mac -- the same application runs natively on both.
-- MacTCP or Open Transport, set up and working (the Mac has an IP address).
+  on a PowerPC Mac -- the same application runs natively on both. Classic
+  under Mac OS X works too.
+- MacTCP or Open Transport, set up and working (the Mac has an IP address,
+  and a name server if the ID server is given by name).
 - 256 colours or fewer is fastest. Thousands and millions of colours work,
   but are slower.
 - About 3 MB of free memory at 640x480.
 
+Installing
+----------
+Open "Install C-Desk-Vint". It puts C-Desk-Vint in a "C-Desk-Vint" folder
+in Applications (on the startup disk before Mac OS 8), and, if you leave the
+boxes ticked:
+- an alias in Startup Items, so it starts with the Mac;
+- "C-Desk-Vint Strip" in Control Strip Modules, so it appears in the Control
+  Strip (after a restart; Macs with a Control Strip only).
+To update, quit C-Desk-Vint and run the new installer: the ID, the password
+and every setting are kept. To take the Startup Items alias or the module
+away, run it with that box unticked.
+
 Starting it
 -----------
-Double-click C-Desk-Vint. Its window shows the address to connect to and
-the password. The first time it runs it makes up a password and saves it in
-"C-Desk-Vint Prefs" in the Preferences folder.
-
-To start it every time the Mac starts, put the application (or an alias to
-it) in the System Folder's Startup Items folder.
+C-Desk-Vint's window shows this Mac's ID, the password, its IP address, and
+how things stand ("Waiting: ready; listed" means the ID server knows it and
+it is in your console's device list). The first run makes up the ID, the
+password and a key, and keeps them in "C-Desk-Vint Prefs" in the Preferences
+folder.
 
 Connecting
 ----------
-In RustDesk on the other computer, type this Mac's IP address -- just the
-address, no port -- into the ID field and connect. Enter the password when
-asked.
+In RustDesk on the other computer, type this Mac's ID and connect, then the
+password. The session is encrypted, as between any two RustDesk machines.
+If the ID does not connect, add "/r" after it (123456789/r) to go through
+the relay.
+
+On the same network you can also connect by IP address: type the address
+-- just the address, no port -- into the ID field. That way is not
+encrypted; use it on a network you trust.
+
+The menus
+---------
+Sharing: Stop Sharing / Start Sharing takes the Mac off the network and puts
+  it back; Disconnect Peer ends the current session; Copy ID and Copy
+  Password put them on the clipboard; New Password makes one up (the old one
+  stops working); Settings... (Command-;) is below.
+File: Hide Status Window (Command-W) and Show Status Window; Quit.
+The Control Strip module shows the same state -- the screen in its little
+Mac is dark while someone is connected, grey while waiting, crossed out when
+sharing is off -- and its menu can stop, start or show C-Desk-Vint.
 
 Settings
 --------
-"C-Desk-Vint Prefs" (Preferences folder) is a text file you can edit with
-SimpleText. Quit C-Desk-Vint first. Lines:
-
-    password=...      the password peers must give
-    port=21118        the TCP port to listen on
-    quality=16        0 (best) to 127 (smallest); 16 is a good start
-    gamma=1           1: colours as this Mac's monitor shows them (through
-                      the video card's gamma table); 0: as drawn
+Sharing > Settings...:
+  ID server   the RustDesk ID server (hbbs), "host" or "host:port"
+  Server key  that server's public key
+  Relay       leave empty to use the relay the ID server names
+  Console     your RustDesk console (API server) URL, so this Mac appears in
+              its device list; empty for none
+  Password    what a peer must give
+  Direct port the TCP port for connections by IP address (21118)
+  Quality     0 (best) to 127 (smallest); 16 is a good start
+The same settings are lines in "C-Desk-Vint Prefs" (a SimpleText file; quit
+C-Desk-Vint before editing it), with two more: gamma=1 shows colours as this
+Mac's monitor does (0: as drawn), and dns= names a DNS server if the Mac's
+own resolver is not enough.
 
 Things to know
 --------------
-- The connection is not encrypted. Use it on a network you trust.
+- On a 68040 the first report to an https console takes some seconds of
+  arithmetic (the TLS handshake), during which this Mac is busy; the
+  connection is then kept, so it happens rarely.
 - The Mac has one mouse button: the other computer's right button gives a
   Control-click.
 - There is no scroll wheel on this system; use the scroll bars.
-- Quit C-Desk-Vint from its File menu (Command-Q) to stop it.

@@ -5,6 +5,8 @@
 #include "../src/core/macroman.h"
 #include "../src/core/dns.h"
 #include "../src/core/rdv.h"
+#include "../src/core/console.h"
+#include "../src/core/https.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -138,6 +140,85 @@ int main(void)
         size_t n = rdv_mangle(0xC0A86343, 21118, 0x9e3779b9u, m);
         rdv_unmangle(m, n, &ip, &port);
         CHECK(ip == 0xC0A86343 && port == 21118);
+    }
+
+    /* The console: URLs, bodies, and what its replies mean. */
+    {
+        console_url u;
+        static const uint8_t uuid[16] = { 0xde, 0xad, 0xbe, 0xef };
+        char out[512], b64[32];
+        CHECK(console_parse_url("https://remote.home.dani.tech", &u) && u.secure &&
+              u.port == 443 && !strcmp(u.host, "remote.home.dani.tech") && !u.prefix[0]);
+        CHECK(console_parse_url("http://192.168.1.10:8080/", &u) && !u.secure && u.port == 8080 &&
+              !strcmp(u.host, "192.168.1.10") && !u.prefix[0]);
+        CHECK(console_parse_url("console.example.org/rd/", &u) && u.secure &&
+              !strcmp(u.prefix, "/rd"));
+        CHECK(!console_parse_url("ftp://nope", &u));
+        CHECK(!console_parse_url("http://host:99999", &u));
+        console_base64((const uint8_t *)"\xde\xad\xbe\xef", 4, b64);
+        CHECK(!strcmp(b64, "3q2+7w=="));
+        CHECK(console_heartbeat_json(out, sizeof out, "123456789", uuid) &&
+              !strcmp(out, "{\"id\":\"123456789\",\"uuid\":\"3q2+7wAAAAAAAAAAAAAAAA==\"}"));
+        /* Mac Roman to UTF-8, and JSON escapes: "Dani\xd5s \"Mac\"" */
+        CHECK(console_sysinfo_json(out, sizeof out, "1", uuid, "68040", "64 MB", "System 7.5.5",
+                                   "Dani\xd5s \"Mac\"", "") &&
+              strstr(out, "\"hostname\":\"Dani\xe2\x80\x99s \\\"Mac\\\"\"") &&
+              strstr(out, "\"version\":\"1.4.5\""));
+        CHECK(console_sysinfo_json(out, sizeof out, "1", uuid, "", "", "", "", "") &&
+              strstr(out, "\"hostname\":\"Macintosh\""));
+        CHECK(!console_sysinfo_json(out, 40, "1", uuid, "", "", "", "x", ""));
+        CHECK(console_wants_sysinfo("{\"sysinfo\":1}"));
+        CHECK(console_wants_sysinfo("{ \"a\": [1,{\"sysinfo\":0}], \"sysinfo\" : true }"));
+        CHECK(!console_wants_sysinfo("{}"));
+        CHECK(!console_wants_sysinfo("{\"modified_at\":9,\"strategy\":{\"sysinfo\":1}}"));
+        CHECK(!console_wants_sysinfo("{\"sysinfo\":false}"));
+        CHECK(!console_wants_sysinfo("{\"x\":\"\\\"sysinfo\\\":1\"}"));
+        CHECK(https_days(1970, 1, 1) == 719528 && https_days(0, 1, 1) == 0 &&
+              https_days(2026, 9, 24) == 719528 + 20720);
+    }
+
+    /* HTTP replies, fed a few bytes at a time as a network would. */
+    {
+        static cdv_https h;
+        static const char *const replies[] = {
+            "HTTP/1.1 200 OK\r\nContent-Length: 15\r\n\r\nSYSINFO_UPDATED",
+            "HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n"
+            "\r\n4\r\n{\"sy\r\n9;x=1\r\nsinfo\":1}\r\n0\r\n\r\n",
+            "HTTP/1.0 301 Moved\r\nLocation: https://x/api/heartbeat\r\nContent-Length: 0\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nbody until close",
+        };
+        static const char *const bodies[] = { "SYSINFO_UPDATED", "{\"sysinfo\":1}", "",
+                                              "body until close" };
+        int i;
+        for (i = 0; i < 4; i++) {
+            const char *r = replies[i];
+            size_t len = strlen(r), off = 0;
+            const uint8_t *o;
+            memset(&h, 0, sizeof h);
+            https_connected(&h, 0, "x", NULL, 0, 0, 0, NULL);
+            CHECK(https_post(&h, "x", "/api/sysinfo", "{}"));
+            CHECK(https_out(&h, &o) > 60 && !memcmp(o, "POST /api/sysinfo HTTP/1.1\r\n", 28));
+            https_out_done(&h, https_out(&h, &o));
+            while (off < len) {
+                uint8_t *room;
+                size_t k = https_in(&h, &room);
+                if (k > 3)
+                    k = 3;
+                if (k > len - off)
+                    k = len - off;
+                memcpy(room, r + off, k);
+                https_in_done(&h, k);
+                off += k;
+            }
+            if (i == 3) {
+                CHECK(https_poll(&h) == HS_BUSY);
+                https_eof(&h);
+            }
+            CHECK(https_poll(&h) == HS_DONE);
+            CHECK(!strcmp(h.body, bodies[i]));
+            CHECK(https_needs_reconnect(&h) == (i >= 2));
+        }
+        CHECK(h.status == 200);
     }
 
     printf("%s\n", fails ? "FAIL" : "PASS: core");

@@ -14,12 +14,15 @@
 #include "mem.h"
 #include "traps.h"
 #include "net.h"
+#include "report.h"
+#include "strip.h"
 #include "dnr.h"
 #include "screen.h"
 #include "../core/dns.h"
 #include "../core/macroman.h"
 #include "../core/rdv.h"
 #include "../core/rng.h"
+#include "../core/sha256.h"
 #include "../core/session.h"
 #include "../core/vp8enc.h"
 
@@ -43,6 +46,11 @@
 #ifndef DEFAULT_KEY
 #define DEFAULT_KEY ""
 #endif
+/* The console (API server), likewise: none unless the build names one
+ * (cmake -DCDV_API=https://...). */
+#ifndef DEFAULT_API
+#define DEFAULT_API ""
+#endif
 #define LOG_LINES 9
 
 /* What Multiversal does not declare. */
@@ -62,6 +70,7 @@ static struct {
     char key[64];        /* the server's public key */
     char relay[64];      /* hbbr override; "" to take the one hbbs names */
     char dns[20];        /* a DNS server, if the Mac's resolver is not enough */
+    char api[96];        /* the console, for its device list; "" for none */
 } prefs;
 
 static WindowPtr win;
@@ -69,6 +78,9 @@ static char loglines[LOG_LINES][80];
 static int nlog;
 static char status[80], addr_line[80], id_line[80];
 static int quit;
+static int running;  /* on the network: Sharing > Start/Stop Sharing */
+static int video_ok; /* the screen and encoder are set up */
+static void set_menus(void);
 
 /* ---- the window ------------------------------------------------------------ */
 
@@ -265,6 +277,8 @@ static void parse_prefs(char *text)
                 strncpy(prefs.key, eq, sizeof prefs.key - 1);
             else if (!strcmp(line, "relay"))
                 strncpy(prefs.relay, eq, sizeof prefs.relay - 1);
+            else if (!strcmp(line, "api"))
+                strncpy(prefs.api, eq, sizeof prefs.api - 1);
             else if (!strcmp(line, "dns"))
                 strncpy(prefs.dns, eq, sizeof prefs.dns - 1);
         }
@@ -300,7 +314,7 @@ static void write_prefs_file(void)
     long dir, len;
     FSSpec spec;
     HParamBlockRec pb;
-    char text[700], u[33], k[65];
+    char text[900], u[33], k[65];
     if (FindFolder(kOnSystemDisk, kPreferencesFolderType, 1, &vref, &dir) != noErr)
         return;
     FSMakeFSSpec(vref, dir, PREFS_NAME, &spec);
@@ -314,11 +328,11 @@ static void write_prefs_file(void)
         return;
     len = snprintf(text, sizeof text,
                    "password=%s\rport=%u\rquality=%d\rgamma=%d\rcursor=%s\r"
-                   "id=%s\ruuid=%s\rseed=%s\rserver=%s\rkey=%s\rrelay=%s\rdns=%s\r",
+                   "id=%s\ruuid=%s\rseed=%s\rserver=%s\rkey=%s\rrelay=%s\rdns=%s\rapi=%s\r",
                    prefs.password, prefs.port, prefs.q, prefs.gamma,
                    prefs.cursor_separate ? "separate" : "auto", prefs.id,
                    hex(prefs.uuid, 16, u), hex(prefs.seed, 32, k), prefs.server, prefs.key,
-                   prefs.relay, prefs.dns);
+                   prefs.relay, prefs.dns, prefs.api);
     if (len > (long)sizeof text - 1)
         len = sizeof text - 1;
     FSWrite(pb.ioParam.ioRefNum, &len, text);
@@ -364,6 +378,7 @@ static void init_prefs(void)
     prefs.password[0] = 0;
     strcpy(prefs.server, DEFAULT_SERVER);
     strcpy(prefs.key, DEFAULT_KEY);
+    strcpy(prefs.api, DEFAULT_API);
     if (read_prefs_file(buf, sizeof buf - 1, &len)) {
         buf[len] = 0;
         parse_prefs(buf);
@@ -403,9 +418,9 @@ static void init_prefs(void)
 
 /* ---- the agent: set up here, run by the engine ---------------------------- */
 
-static cdv_tcp t_direct, t_local, t_relay, t_helper;
+static cdv_tcp t_direct, t_local, t_relay, t_helper, t_api;
 static cdv_udp u_rdv, u_lan;
-static int have_direct, have_local, have_relay, have_helper, have_rdv, have_lan;
+static int have_direct, have_local, have_relay, have_helper, have_rdv, have_lan, have_api;
 static ip_addr my_ip;
 static long my_mask;
 static uint8_t sign_pk[32], sign_sk[64];
@@ -414,7 +429,7 @@ static int have_dnr;
 static cdv_screen scr;
 static cdv_session sess;
 static cdv_ident ident;
-static char hostname[64];
+static char hostname[64], username[64];
 static vp8e *enc;
 static void *encmem;
 static uint8_t *outq, *inq;
@@ -505,7 +520,7 @@ static void screen_changed(void)
     if (queue_size(&scr) > outcap) {
         /* A bigger picture than the queue was sized for: drop the peer,
          * which will reconnect to a fresh one. */
-        eng.drop_req = 1;
+        eng.drop_req = DROP_SCREEN;
         t0 = TickCount();
         while (eng.drop_req && TickCount() - t0 < 5 * 60)
             ;
@@ -630,6 +645,9 @@ static void clipboard_chores(void)
 /* Main-loop chores: everything the engine may not do itself. */
 static void renew(cdv_tcp *t, int have);
 
+static void agent_start(void);
+static void agent_stop(void);
+
 static void chores(void)
 {
     static unsigned long last_status, last_kchr, frames0, bytes0;
@@ -641,8 +659,27 @@ static void chores(void)
         say(m);
     clipboard_chores();
 
-    renew(&t_helper, have_helper);
-    renew(&t_relay, have_relay);
+    switch (strip_command()) {
+    case STRIP_CMD_START:
+        agent_start();
+        break;
+    case STRIP_CMD_STOP:
+        agent_stop();
+        break;
+    case STRIP_CMD_SHOW:
+        if (win) {
+            ShowWindow(win);
+            SelectWindow(win);
+        }
+        break;
+    }
+    strip_update(running, eng.live, eng.rdv_state == RS_REGISTERED,
+                 !strcmp(report_status(), "console: listed"), prefs.id);
+    if (running) {
+        renew(&t_helper, have_helper);
+        renew(&t_relay, have_relay);
+        report_step();
+    }
     if (name_q.req && !name_q.ans) {
         /* The engine wants a relay's address: the Mac's resolver first. */
         uint32_t ip;
@@ -663,7 +700,7 @@ static void chores(void)
         else
             screen_check_palette(&scr);
     }
-    if (now - last_status >= 120) {
+    if (running && now - last_status >= 120) {
         if (eng.live) {
             snprintf(line, sizeof line, "Live: %lu frames, %lu KB in 2s", eng.frames - frames0,
                      (eng.bytes - bytes0) / 1024);
@@ -673,7 +710,9 @@ static void chores(void)
                 "no ID server", "looking up the ID server", "cannot find the ID server",
                 "registering with the ID server", "ready", "the ID server refused us"
             };
-            snprintf(line, sizeof line, "Waiting: %s", rs[eng.rdv_state]);
+            const char *c = report_status();
+            snprintf(line, sizeof line, "Waiting: %s%s%s", rs[eng.rdv_state], c[0] ? "; " : "",
+                     c[0] ? c + 9 : ""); /* past "console: " */
             set_status(line);
             snprintf(line, sizeof line, "ID: %s%s", prefs.id,
                      eng.rdv_state == RS_REGISTERED ? "" : "  (not registered)");
@@ -687,6 +726,30 @@ static void chores(void)
 
 /* ---- the network ---------------------------------------------------------------- */
 
+/* The names the Mac's owner gave it in Sharing Setup: the computer's
+ * ('STR ' -16413) and the owner's (-16096). The peer and the console show
+ * them. Mac Roman, as they are. */
+static void mac_name(short id, char *out, size_t cap, const char *fallback)
+{
+    StringHandle h = GetString(id);
+    size_t n = 0;
+    if (h && *h && (*h)[0]) {
+        n = (*h)[0];
+        if (n > cap - 1)
+            n = cap - 1;
+        memcpy(out, *h + 1, n);
+    }
+    out[n] = 0;
+    if (!n)
+        strcpy(out, fallback);
+}
+
+static void mac_names(void)
+{
+    mac_name(-16413, hostname, sizeof hostname, "Macintosh");
+    mac_name(-16096, username, sizeof username, "");
+}
+
 static void close_network(void)
 {
     /* MacTCP owns each stream's buffer until it is released; quitting
@@ -695,9 +758,10 @@ static void close_network(void)
     if (have_local) tcp_release(&t_local);
     if (have_relay) tcp_release(&t_relay);
     if (have_helper) tcp_release(&t_helper);
+    if (have_api) tcp_release(&t_api);
     if (have_rdv) udp_release(&u_rdv);
     if (have_lan) udp_release(&u_lan);
-    have_direct = have_local = have_relay = have_helper = have_rdv = have_lan = 0;
+    have_direct = have_local = have_relay = have_helper = have_rdv = have_lan = have_api = 0;
 }
 
 /* The streams a session can arrive on, and the ones that find it. Only the
@@ -723,6 +787,7 @@ static OSErr open_network(void)
     have_local = tcp_create(&t_local, 32 * 1024L, 8 * 1024) == noErr;
     have_relay = tcp_create(&t_relay, 32 * 1024L, 8 * 1024) == noErr;
     have_helper = tcp_create(&t_helper, 4 * 1024L, 1024) == noErr;
+    have_api = tcp_create(&t_api, 16 * 1024L, 4 * 1024) == noErr;
     have_rdv = udp_create(&u_rdv, 0, 4 * 1024L) == noErr;
     have_lan = udp_create(&u_lan, LAN_PORT, 4 * 1024L) == noErr;
     if (!have_lan)
@@ -781,31 +846,437 @@ static void renew(cdv_tcp *t, int have)
     }
 }
 
+/* ---- starting and stopping ------------------------------------------------- */
+
+/* The network, the engine and the console, from the prefs as they are now. */
+static void agent_start(void)
+{
+    char line[80];
+    if (running || !video_ok)
+        return;
+    if (open_network() != noErr) {
+        close_network();
+        strcpy(addr_line, "Not running: no network");
+        invalidate();
+        return;
+    }
+    engine_ctx ctx;
+    char a[20];
+    input_set_kchr((Ptr)GetScriptManagerVariable(smKCHRCache));
+    memset(&ctx, 0, sizeof ctx);
+    ctx.direct = have_direct ? &t_direct : NULL;
+    ctx.local = have_local ? &t_local : NULL;
+    ctx.relay = have_relay ? &t_relay : NULL;
+    ctx.helper = have_helper ? &t_helper : NULL;
+    ctx.rdv = have_rdv ? &u_rdv : NULL;
+    ctx.lan = have_lan ? &u_lan : NULL;
+    ctx.my_ip = my_ip;
+    ctx.direct_port = prefs.port;
+    ctx.local_port = LOCAL_PORT;
+    ctx.server = server_addr;
+    ctx.relay_host = prefs.relay;
+    ctx.key = prefs.key;
+    ctx.uuid = prefs.uuid;
+    ctx.pk = sign_pk;
+    pick_dns(ctx.dns, &ctx.ndns);
+    ctx.scr = &scr;
+    ctx.sess = &sess;
+    ctx.hooks = &hooks;
+    ctx.ident = &ident;
+    ctx.enc = enc;
+    ctx.outq = outq;
+    ctx.outcap = outcap;
+    ctx.inq = inq;
+    ctx.incap = INQ_SIZE;
+    ctx.q = prefs.q;
+    engine_setup(&ctx);
+    engine_start();
+    {
+        report_config rc;
+        rc.url = prefs.api;
+        rc.id = prefs.id;
+        rc.uuid = prefs.uuid;
+        rc.secret = sign_sk; /* the Ed25519 seed: only this Mac has it */
+        rc.hostname = hostname;
+        rc.username = username;
+        report_start(&rc, have_api ? &t_api : NULL, say);
+    }
+    net_addr_string(my_ip, a);
+    snprintf(addr_line, sizeof addr_line, "Or by address: %s  (port %u)", a, prefs.port);
+    snprintf(line, sizeof line, "ID: %s", prefs.id);
+    set_id_line(line);
+    set_status("Starting");
+    running = 1;
+    set_menus();
+}
+
+/* Everything off the network: sessions end, the ID server and the console
+ * stop hearing from us. MacTCP owns each stream's buffer until it is
+ * released; quitting without this leaves it writing into a heap that no
+ * longer exists. */
+static void agent_stop(void)
+{
+    if (!running)
+        return;
+    report_stop();
+    engine_stop();
+    input_release_all();
+    close_network();
+    running = 0;
+    eng.live = 0;
+    strcpy(addr_line, "Sharing is off (Sharing > Start Sharing)");
+    set_id_line("ID: -");
+    set_status("Stopped");
+    say("stopped");
+    set_menus();
+}
+
 /* ---- setup and events -------------------------------------------------------- */
+
+/* Menus: 128 Apple, 129 File, 130 Edit, 131 Sharing. */
+enum { M_APPLE = 128, M_FILE, M_EDIT, M_SHARING };
+enum { F_WINDOW = 1, F_QUIT = 3 };
+enum { E_UNDO = 1, E_CUT = 3, E_COPY, E_PASTE, E_CLEAR };
+enum { SH_TOGGLE = 1, SH_DISCONNECT, SH_COPY_ID = 4, SH_COPY_PASSWORD, SH_NEW_PASSWORD,
+       SH_SETTINGS = 8 };
+
+static void enable(MenuHandle m, short item, int on)
+{
+    if (on)
+        EnableItem(m, item);
+    else
+        DisableItem(m, item);
+}
+
+/* Before the menus are shown: what can be chosen now. */
+static void set_menus(void)
+{
+    MenuHandle file = GetMenuHandle(M_FILE), edit = GetMenuHandle(M_EDIT),
+               sh = GetMenuHandle(M_SHARING);
+    WindowPeek front = (WindowPeek)FrontWindow();
+    int da = front && front->windowKind < 0; /* a desk accessory is in front */
+    if (!file || !edit || !sh)
+        return;
+    SetMenuItemText(file, F_WINDOW,
+                    win && ((WindowPeek)win)->visible ? "\pHide Status Window"
+                                                      : "\pShow Status Window");
+    enable(edit, 0, da); /* the whole menu: only a desk accessory has anything to edit */
+    SetMenuItemText(sh, SH_TOGGLE, running ? "\pStop Sharing" : "\pStart Sharing");
+    enable(sh, SH_TOGGLE, video_ok);
+    enable(sh, SH_DISCONNECT, running && eng.live);
+    enable(sh, SH_COPY_ID, prefs.id[0]);
+    DrawMenuBar();
+}
+
+static void put_scrap_text(const char *c)
+{
+    ZeroScrap();
+    PutScrap((long)strlen(c), 'TEXT', (Ptr)c);
+}
+
+static void new_password(char out[9]);
+
+static void about(void)
+{
+    unsigned char id[32], build[64];
+    size_t n = strlen(prefs.id);
+    id[0] = (unsigned char)n;
+    memcpy(id + 1, prefs.id, n);
+    {
+#if defined(__powerpc__) || defined(__ppc__)
+        const char *b = "native PowerPC, built " __DATE__;
+#else
+        const char *b = "68k, built " __DATE__;
+#endif
+        build[0] = (unsigned char)strlen(b);
+        memcpy(build + 1, b, build[0]);
+    }
+    ParamText(id, build, "\p", "\p");
+    Alert(400, NULL);
+}
+
+/* ---- settings ------------------------------------------------------------------- */
+
+enum { S_SAVE = 1, S_CANCEL, S_SERVER = 4, S_KEY = 6, S_RELAY = 8, S_API = 10, S_PASSWORD = 12,
+       S_PORT = 14, S_QUALITY = 16, S_NEWPW = 18 };
+
+static void set_field(DialogPtr d, short item, const char *c)
+{
+    short type;
+    Handle h;
+    Rect r;
+    Str255 p;
+    size_t n = strlen(c);
+    if (n > 255)
+        n = 255;
+    p[0] = (unsigned char)n;
+    memcpy(p + 1, c, n);
+    GetDialogItem(d, item, &type, &h, &r);
+    SetDialogItemText(h, p);
+}
+
+static void get_field(DialogPtr d, short item, char *c, size_t cap)
+{
+    short type;
+    Handle h;
+    Rect r;
+    Str255 p;
+    size_t n;
+    GetDialogItem(d, item, &type, &h, &r);
+    GetDialogItemText(h, p);
+    n = p[0] < cap - 1 ? p[0] : cap - 1;
+    memcpy(c, p + 1, n);
+    c[n] = 0;
+    /* Pasted text can bring spaces at either end; none of these want them. */
+    while (n && (c[n - 1] == ' ' || c[n - 1] == '\t'))
+        c[--n] = 0;
+    while (n && c[0] == ' ')
+        memmove(c, c + 1, n--);
+}
+
+/* A password nobody chose, from this loop's own randomness (the engine owns
+ * the shared RNG at interrupt time). */
+static void new_password(char out[9])
+{
+    static const char a[] = "abcdefghjkmnpqrstuvwxyz23456789";
+    static uint32_t counter;
+    sha256_ctx c;
+    uint8_t h[32];
+    uint32_t v[3];
+    int i;
+    v[0] = ++counter;
+    v[1] = cdv_microseconds();
+    v[2] = TickCount();
+    sha256_init(&c);
+    sha256_update(&c, prefs.seed, sizeof prefs.seed);
+    sha256_update(&c, "cdv password", 12);
+    sha256_update(&c, v, sizeof v);
+    sha256_final(&c, h);
+    for (i = 0; i < 8; i++)
+        out[i] = a[h[i] % (sizeof a - 1)];
+    out[8] = 0;
+}
+
+/* Keys in the Settings dialog: Return and Enter save, Escape and Cmd-. cancel,
+ * and Cmd-X/C/V/A edit the field -- with the desk scrap, so a server key
+ * copied from elsewhere pastes. TextEdit's own calls: the Dialog Manager's
+ * DialogCut and friends are glue this toolchain does not have. */
+static pascal Boolean settings_filter(DialogPtr d, EventRecord *e, short *item)
+{
+    DialogPeek dp = (DialogPeek)d;
+    TEHandle te = dp->textH;
+    char c;
+    if (e->what != keyDown && e->what != autoKey)
+        return false;
+    c = (char)(e->message & charCodeMask);
+    if (c == '\r' || c == 3) {
+        *item = S_SAVE;
+        return true;
+    }
+    if (c == 27 || ((e->modifiers & cmdKey) && c == '.')) {
+        *item = S_CANCEL;
+        return true;
+    }
+    if (!(e->modifiers & cmdKey) || !te)
+        return false;
+    if (c == 'a' || c == 'A') {
+        TESetSelect(0, 32767, te);
+    } else if (c == 'c' || c == 'C' || c == 'x' || c == 'X') {
+        TEPtr t = *te;
+        if (t->selEnd > t->selStart) {
+            HLock(t->hText);
+            ZeroScrap();
+            PutScrap(t->selEnd - t->selStart, 'TEXT', *t->hText + t->selStart);
+            HUnlock((*te)->hText);
+            if (c == 'x' || c == 'X')
+                TEDelete(te);
+        }
+    } else if (c == 'v' || c == 'V') {
+        Handle h = NewHandle(0);
+        long off, n = h ? GetScrap(h, 'TEXT', &off) : -1;
+        if (n > 0) {
+            /* One line of it: these fields hold a host, a key, a number. */
+            long i;
+            HLock(h);
+            for (i = 0; i < n && (*h)[i] != '\r' && (*h)[i] != '\n'; i++)
+                ;
+            TEDelete(te);
+            TEInsert(*h, i, te);
+            HUnlock(h);
+        }
+        if (h)
+            DisposeHandle(h);
+    } else {
+        return false;
+    }
+    *item = 0; /* handled: nothing for ModalDialog's caller */
+    return true;
+}
+
+/* File > Settings: the prefs file's settings, in a dialog. */
+static void settings(void)
+{
+    DialogPtr d = GetNewDialog(200, NULL, (WindowPtr)-1);
+    char num[16], pw[33], server[64], key[64], relay[64], api[96];
+    short item = 0;
+    if (!d) {
+        say("the Settings dialog is missing from the application");
+        return;
+    }
+    set_field(d, S_SERVER, prefs.server);
+    set_field(d, S_KEY, prefs.key);
+    set_field(d, S_RELAY, prefs.relay);
+    set_field(d, S_API, prefs.api);
+    set_field(d, S_PASSWORD, prefs.password);
+    snprintf(num, sizeof num, "%u", prefs.port);
+    set_field(d, S_PORT, num);
+    snprintf(num, sizeof num, "%d", prefs.q);
+    set_field(d, S_QUALITY, num);
+    SetDialogDefaultItem(d, S_SAVE);
+    SetDialogCancelItem(d, S_CANCEL);
+    SelectDialogItemText(d, S_SERVER, 0, 255);
+    ShowWindow(d);
+    for (;;) {
+        long port, q;
+        static ModalFilterUPP filter;
+        if (!filter)
+            filter = NewModalFilterUPP(settings_filter);
+        ModalDialog(filter, &item);
+        if (item == S_CANCEL)
+            break;
+        if (item == S_NEWPW) {
+            char p[9];
+            new_password(p);
+            set_field(d, S_PASSWORD, p);
+            SelectDialogItemText(d, S_PASSWORD, 0, 255);
+            continue;
+        }
+        if (item != S_SAVE)
+            continue;
+        get_field(d, S_PORT, num, sizeof num);
+        port = atol(num);
+        get_field(d, S_QUALITY, num, sizeof num);
+        q = atol(num);
+        if (port < 1 || port > 65535) {
+            SysBeep(10);
+            SelectDialogItemText(d, S_PORT, 0, 255);
+            continue;
+        }
+        if (q < 0 || q > 127) {
+            SysBeep(10);
+            SelectDialogItemText(d, S_QUALITY, 0, 255);
+            continue;
+        }
+        get_field(d, S_SERVER, server, sizeof server);
+        get_field(d, S_KEY, key, sizeof key);
+        get_field(d, S_RELAY, relay, sizeof relay);
+        get_field(d, S_API, api, sizeof api);
+        get_field(d, S_PASSWORD, pw, sizeof pw);
+        {
+            /* The password is read at each login: changing it alone needs
+             * no restart. Everything else is set up when sharing starts. */
+            int restart = strcmp(server, prefs.server) || strcmp(key, prefs.key) ||
+                          strcmp(relay, prefs.relay) || strcmp(api, prefs.api) ||
+                          port != prefs.port || q != prefs.q;
+            strcpy(prefs.server, server);
+            strcpy(prefs.key, key);
+            strcpy(prefs.relay, relay);
+            strcpy(prefs.api, api);
+            strcpy(prefs.password, pw);
+            prefs.port = (unsigned short)port;
+            prefs.q = (int)q;
+            write_prefs_file();
+            say(restart && running ? "settings saved; sharing restarts with them"
+                                   : "settings saved");
+            if (restart && running) {
+                agent_stop();
+                agent_start();
+            }
+        }
+        break;
+    }
+    DisposeDialog(d);
+    invalidate();
+}
 
 static void make_menus(void)
 {
-    MenuHandle apple = NewMenu(128, "\p\024"), file = NewMenu(129, "\pFile");
+    MenuHandle apple = NewMenu(M_APPLE, "\p\024"), file = NewMenu(M_FILE, "\pFile"),
+               edit = NewMenu(M_EDIT, "\pEdit"), sh = NewMenu(M_SHARING, "\pSharing");
     AppendMenu(apple, "\pAbout C-Desk-Vint...");
     AppendMenu(apple, "\p(-");
     AppendResMenu(apple, 'DRVR');
+    AppendMenu(file, "\pHide Status Window/W");
+    AppendMenu(file, "\p(-");
     AppendMenu(file, "\pQuit/Q");
+    AppendMenu(edit, "\pUndo/Z;(-;Cut/X;Copy/C;Paste/V;Clear");
+    AppendMenu(sh, "\pStop Sharing;Disconnect Peer;(-;Copy ID;Copy Password;New Password;(-");
+    AppendMenu(sh, "\pSettings.../;");
     InsertMenu(apple, 0);
     InsertMenu(file, 0);
-    DrawMenuBar();
+    InsertMenu(edit, 0);
+    InsertMenu(sh, 0);
+    set_menus();
 }
 
 static void menu_choice(long choice)
 {
     short menu = (short)(choice >> 16), item = (short)(choice & 0xFFFF);
-    if (menu == 128 && item > 2) {
-        Str255 name;
-        GetMenuItemText(GetMenuHandle(128), item, name);
-        OpenDeskAcc(name);
-    } else if (menu == 128 && item == 1) {
-        say(APP_NAME " -- RustDesk for classic Mac OS");
-    } else if (menu == 129 && item == 1) {
-        quit = 1;
+    char pw[9];
+    switch (menu) {
+    case M_APPLE:
+        if (item == 1) {
+            about();
+        } else if (item > 2) {
+            Str255 name;
+            GetMenuItemText(GetMenuHandle(M_APPLE), item, name);
+            OpenDeskAcc(name);
+        }
+        break;
+    case M_FILE:
+        if (item == F_WINDOW && win) {
+            if (((WindowPeek)win)->visible)
+                HideWindow(win);
+            else {
+                ShowWindow(win);
+                SelectWindow(win);
+            }
+        } else if (item == F_QUIT) {
+            quit = 1;
+        }
+        break;
+    case M_EDIT:
+        SystemEdit(item - 1); /* for a desk accessory in front */
+        break;
+    case M_SHARING:
+        switch (item) {
+        case SH_TOGGLE:
+            if (running)
+                agent_stop();
+            else
+                agent_start();
+            break;
+        case SH_DISCONNECT:
+            eng.drop_req = DROP_USER; /* the engine ends the session */
+            break;
+        case SH_COPY_ID:
+            put_scrap_text(prefs.id);
+            break;
+        case SH_COPY_PASSWORD:
+            put_scrap_text(prefs.password);
+            break;
+        case SH_NEW_PASSWORD:
+            new_password(pw);
+            strcpy(prefs.password, pw);
+            write_prefs_file();
+            say("a new password; the old one no longer works");
+            invalidate();
+            break;
+        case SH_SETTINGS:
+            settings();
+            break;
+        }
+        break;
     }
     HiliteMenu(0);
 }
@@ -817,8 +1288,10 @@ static void handle_event(EventRecord *ev)
     switch (ev->what) {
     case mouseDown:
         part = FindWindow(ev->where, &w);
-        if (part == inMenuBar)
+        if (part == inMenuBar) {
+            set_menus();
             menu_choice(MenuSelect(ev->where));
+        }
         else if (part == inSysWindow)
             SystemClick(ev, w);
         else if (part == inDrag && w == win) {
@@ -828,8 +1301,10 @@ static void handle_event(EventRecord *ev)
             SelectWindow(w);
         break;
     case keyDown:
-        if (ev->modifiers & cmdKey)
+        if (ev->modifiers & cmdKey) {
+            set_menus();
             menu_choice(MenuKey((char)(ev->message & charCodeMask)));
+        }
         break;
     case updateEvt:
         if ((WindowPtr)ev->message == win) {
@@ -866,6 +1341,7 @@ int main(void)
 
     init_prefs();
     log_open();
+    strip_publish();
 #if defined(__powerpc__) || defined(__ppc__)
     say(APP_NAME " 0.1d, native PowerPC");
 #else
@@ -876,7 +1352,7 @@ int main(void)
     crypto_sign_ed25519_seed_keypair(sign_pk, sign_sk, prefs.seed);
     ident.id = prefs.id;
     ident.sign_sk = sign_sk;
-    strcpy(hostname, "Macintosh");
+    mac_names();
     ident.password = prefs.password;
     ident.salt = "cdeskvint";
     ident.hostname = hostname;
@@ -908,47 +1384,8 @@ int main(void)
             snprintf(line, sizeof line, "no gamma table from the driver (%d); colours as drawn",
                      scr.gamma_err);
         say(line);
-        err = open_network();
-    }
-    if (err == noErr) {
-        engine_ctx ctx;
-        char a[20];
-        input_set_kchr((Ptr)GetScriptManagerVariable(smKCHRCache));
-        memset(&ctx, 0, sizeof ctx);
-        ctx.direct = have_direct ? &t_direct : NULL;
-        ctx.local = have_local ? &t_local : NULL;
-        ctx.relay = have_relay ? &t_relay : NULL;
-        ctx.helper = have_helper ? &t_helper : NULL;
-        ctx.rdv = have_rdv ? &u_rdv : NULL;
-        ctx.lan = have_lan ? &u_lan : NULL;
-        ctx.my_ip = my_ip;
-        ctx.direct_port = prefs.port;
-        ctx.local_port = LOCAL_PORT;
-        ctx.server = server_addr;
-        ctx.relay_host = prefs.relay;
-        ctx.key = prefs.key;
-        ctx.uuid = prefs.uuid;
-        ctx.pk = sign_pk;
-        pick_dns(ctx.dns, &ctx.ndns);
-        ctx.scr = &scr;
-        ctx.sess = &sess;
-        ctx.hooks = &hooks;
-        ctx.ident = &ident;
-        ctx.enc = enc;
-        ctx.outq = outq;
-        ctx.outcap = outcap;
-        ctx.inq = inq;
-        ctx.incap = INQ_SIZE;
-        ctx.q = prefs.q;
-        engine_setup(&ctx);
-        engine_start();
-        net_addr_string(my_ip, a);
-        snprintf(addr_line, sizeof addr_line, "Or by address: %s  (port %u)", a, prefs.port);
-        snprintf(line, sizeof line, "ID: %s", prefs.id);
-        set_id_line(line);
-        set_status("Starting");
-    } else {
-        strcpy(addr_line, "Not running");
+        video_ok = 1;
+        agent_start();
     }
     redraw();
 
@@ -956,16 +1393,11 @@ int main(void)
         EventRecord ev;
         if (WaitNextEvent(everyEvent, &ev, 6, NULL))
             handle_event(&ev);
-        if (err == noErr)
+        if (video_ok)
             chores();
     }
-    if (err == noErr) {
-        engine_stop();
-        input_release_all();
-        /* MacTCP owns the stream's buffer until it is released; quitting
-         * without this leaves it writing into a heap that no longer exists. */
-        close_network();
-    }
+    agent_stop();
+    strip_quit();
     dnr_close();
     if (logref)
         FSClose(logref);

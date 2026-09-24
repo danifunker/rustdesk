@@ -25,6 +25,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* What we tell the peer we are -- and the console, which shows it. A version is
+ * a capability claim, not a label: the client decides which messages to send
+ * from it. 1.4.5 matches the other vintage agents, whose handling of what it
+ * implies has been checked against real clients (see
+ * rustdesk-ppc-agent/src/session.rs, REPORTED_VERSION). */
+#define REPORTED_VERSION "1.4.5"
+
 /* RustDesk's ControlKey values the platform needs to name. */
 enum {
     CK_ALT = 1, CK_BACKSPACE = 2, CK_CAPSLOCK = 3, CK_CONTROL = 4, CK_DELETE = 5,

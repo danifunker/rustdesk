@@ -7,6 +7,7 @@ pascal void InsXTime(QElemPtr tmTaskPtr);
 pascal void Microseconds(void *microTickCount);
 
 pascal OSErr GetFrontProcess(ProcessSerialNumber *psn);
+pascal void ReadLocation(void *loc);
 
 OSErr cdv_ppost_event(short what, long message, EvQElPtr *q)
 {
@@ -33,6 +34,11 @@ uint32_t cdv_microseconds(void)
     uint32_t t[2];
     Microseconds(t);
     return t[1];
+}
+
+static void read_location(long loc[3])
+{
+    ReadLocation(loc);
 }
 
 #else
@@ -85,7 +91,25 @@ uint32_t cdv_microseconds(void)
     return (uint32_t)d0;
 }
 
+/* _ReadLocation is _ReadXPRam of 12 bytes at 0xE4: A0 the record, D0 the
+ * length and address. */
+static pascal void read_location(long loc[3])
+    M68K_INLINE(0x205F, 0x203C, 0x000C, 0x00E4, 0xA051);
+
 #endif
+
+/* Seconds east of GMT, from the Map control panel's setting. The low 24
+ * bits of the third longword, sign-extended; the top byte is daylight saving. */
+long cdv_gmt_delta(void)
+{
+    long loc[3] = { 0, 0, 0 };
+    long d;
+    read_location(loc);
+    d = loc[2] & 0x00FFFFFFL;
+    if (d & 0x00800000L)
+        d |= (long)0xFF000000UL;
+    return d;
+}
 
 OSErr cdv_fsp_create(const FSSpec *spec, OSType creator, OSType type, short script)
 {

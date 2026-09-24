@@ -9,12 +9,6 @@
 
 #include <string.h>
 
-/* What we tell the peer we are. A version is a capability claim, not a label:
- * the client decides which messages to send from it. 1.4.5 matches the other
- * vintage agents, whose handling of what it implies has been checked against
- * real clients (see rustdesk-ppc-agent/src/session.rs, REPORTED_VERSION). */
-#define REPORTED_VERSION "1.4.5"
-
 /* Message fields, from message.proto. */
 enum {
     M_TEST_DELAY = 5, M_VIDEO_FRAME = 6, M_LOGIN_REQUEST = 7, M_LOGIN_RESPONSE = 8,

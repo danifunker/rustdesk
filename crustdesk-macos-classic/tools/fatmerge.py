@@ -101,6 +101,15 @@ def write_fork(resources):
     return header + bytes(doff - 16) + bytes(data) + bytes(mapbody)
 
 
+def bundled(hdr):
+    """Finder flags, high byte (MacBinary offset 73): set "has bundle", so the
+    Finder reads the BNDL and shows the icon, and clear "inited", so it does
+    so when it first sees the file."""
+    h = bytearray(hdr)
+    h[73] = (h[73] | 0x20) & ~0x01
+    return bytes(h)
+
+
 def main():
     h68, _, r68 = read_macbinary(sys.argv[1])
     _, pef, rppc = read_macbinary(sys.argv[2])
@@ -109,7 +118,7 @@ def main():
     if not cfrg or not pef.startswith(b'Joy!peff'):
         sys.exit('the PowerPC build has no cfrg or no PEF data fork')
     merged = [r for r in res68 if r[0] != b'cfrg'] + cfrg
-    write_macbinary(sys.argv[3], h68, pef, write_fork(merged))
+    write_macbinary(sys.argv[3], bundled(h68), pef, write_fork(merged))
     kinds = sorted({r[0].decode('mac_roman') for r in merged})
     print('fat: %d-byte PEF, %d resources (%s)' % (len(pef), len(merged), ' '.join(kinds)))
 

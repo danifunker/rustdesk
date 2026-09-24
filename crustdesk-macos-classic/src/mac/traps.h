@@ -21,6 +21,7 @@ OSErr cdv_dt_install(void *task);
 void cdv_ins_xtime(void *task);
 uint32_t cdv_microseconds(void);
 OSErr cdv_get_front_process(ProcessSerialNumber *psn);
+long cdv_gmt_delta(void);
 OSErr cdv_fsp_create(const FSSpec *spec, OSType creator, OSType type, short script);
 
 #endif

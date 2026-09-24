@@ -7,9 +7,13 @@ this repository are Rust built with mrustc.
 
 **Status:** serves a stock RustDesk client (1.4.9 tested) from QEMU's Quadra
 800 under System 7.5.5 with MacTCP, and from QEMU's mac99 G4 under Mac OS
-9.2.2 with Open Transport: login, picture, pointer, clicks, drags, menus,
-keys, every colour depth. Not yet run on real hardware. See *What is known and
-what is not*.
+9.2.2 with Open Transport: by ID through an ID server and its relay,
+encrypted, or directly by IP; picture, pointer, clicks, drags, menus, keys,
+clipboard, every colour depth. It reports to a RustDesk console over https
+(BearSSL) so the Mac is in the device list. It comes with an installer, a
+Settings dialog, a Sharing menu and a Control Strip module. The PowerPC half
+has run on a real G4 (Classic under Mac OS X); the 68k half not yet on real
+hardware. See *What is known and what is not*.
 
 ## Why C, and why a VP8 encoder of its own
 

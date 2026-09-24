@@ -117,12 +117,13 @@ class Peer:
         self.frames = self.keyframes = self.bytes = 0
         self.save = None
         self.cursors, self.positions = [], []
+        self.box_key = None  # set by the secure handshake
 
     def send(self, body):
-        if self.key:
+        if self.box_key:
             from nacl.bindings import crypto_secretbox
             self.send_seq += 1
-            body = crypto_secretbox(body, self.send_seq.to_bytes(8, 'little') + bytes(16), self.key)
+            body = crypto_secretbox(body, self.send_seq.to_bytes(8, 'little') + bytes(16), self.box_key)
         self.s.sendall(frame(body))
 
     def handshake(self):
@@ -138,7 +139,7 @@ class Peer:
         key = bytes(range(32))
         boxed = crypto_box(key, bytes(24), their, sk)
         self.s.sendall(frame(field(4, 2, field(1, 2, pk) + field(2, 2, boxed))))
-        self.key = key
+        self.box_key = key
 
     def recv(self, timeout=None, raw=False):
         self.s.settimeout(timeout)
@@ -152,11 +153,11 @@ class Peer:
                         self.buf = self.buf[hl + n:]
                         if raw:
                             return body
-                        if self.key:
+                        if self.box_key:
                             from nacl.bindings import crypto_secretbox_open
                             self.recv_seq += 1
                             body = crypto_secretbox_open(
-                                body, self.recv_seq.to_bytes(8, 'little') + bytes(16), self.key)
+                                body, self.recv_seq.to_bytes(8, 'little') + bytes(16), self.box_key)
                         return parse(body)
             try:
                 d = self.s.recv(65536)

@@ -1,53 +1,69 @@
 #!/usr/bin/env bash
 # Package C-Desk-Vint as a SCSI hard-disk image for a real Mac.
 #
-#   scripts/make-disk.sh [-o OUT.hda] [-s SIZE]
+#   scripts/make-disk.sh [-o OUT.hda] [-z OUT.sit.hqx] [-s SIZE] [-b BUILD-PARENT]
 #
 # The result is an Apple Partition Map disk with an Apple SCSI driver and one
-# HFS volume, "C-Desk-Vint", holding the application and its Read Me. A
+# HFS volume, "C-Desk-Vint", holding the installer, the application, the
+# Control Strip module and the Read Me (-z also packs them as .sit.hqx). A
 # BlueSCSI (or any SCSI emulator) presents it as an ordinary hard disk, and a
-# Quadra's ROM mounts it next to the system disk; drag the application into
-# the System Folder's Startup Items to have it start at boot.
+# Quadra's ROM mounts it next to the system disk; open Install C-Desk-Vint.
 #
 # Needs rb-cli (rusty-backup) on the PATH.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")/.." && pwd)
-# The fat application if the PowerPC half is built, else the 68k one.
-app="$here/build-m68k/C-Desk-Vint.bin"
-if [ -f "$here/build-ppc/C-Desk-Vint.bin" ]; then
-    python3 "$here/tools/fatmerge.py" "$here/build-m68k/C-Desk-Vint.bin" \
-        "$here/build-ppc/C-Desk-Vint.bin" "$here/build-m68k/C-Desk-Vint-fat.bin"
-    app="$here/build-m68k/C-Desk-Vint-fat.bin"
-fi
-out="$here/build-m68k/C-Desk-Vint.hda"
+b68=$here/build-m68k
+bppc=$here/build-ppc
+out=""
+sit=""
 size=8M
 
 while [ $# -gt 0 ]; do
     case "$1" in
         -o) out=$2; shift 2 ;;
+        -z) sit=$2; shift 2 ;;
         -s) size=$2; shift 2 ;;
-        -a) app=$2; shift 2 ;;
+        -b) b68=$2/build-m68k; bppc=$2/build-ppc; shift 2 ;;
         *) echo "unknown option: $1" >&2; exit 1 ;;
     esac
 done
-[ -f "$app" ] || { echo "build the app first ($app missing)" >&2; exit 1; }
+[ -n "$out" ] || out=$b68/C-Desk-Vint.hda
+
+# The fat application if the PowerPC half is built, else the 68k one.
+app="$b68/C-Desk-Vint.bin"
+if [ -f "$bppc/C-Desk-Vint.bin" ]; then
+    python3 "$here/tools/fatmerge.py" "$b68/C-Desk-Vint.bin" "$bppc/C-Desk-Vint.bin" \
+        "$b68/C-Desk-Vint-fat.bin"
+    app="$b68/C-Desk-Vint-fat.bin"
+fi
+for f in "$app" "$b68/C-Desk-Vint-Installer.bin" "$b68/C-Desk-Vint-Strip.bin"; do
+    [ -f "$f" ] || { echo "build first ($f missing)" >&2; exit 1; }
+done
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 rb() { rb-cli --progress never -q "$@"; }
 
-flat="$work/flat.hfs"
-rb new --fs hfs --size "$size" --name C-Desk-Vint "$flat"
-python3 "$here/tools/mbrename.py" "$app" "$work/app.bin" "C-Desk-Vint"
-rb put-macbinary "$flat" "$work/app.bin"
-
+# The four items, named as the Mac will show them.
+mkdir "$work/items"
+python3 "$here/tools/mbrename.py" "$app" "$work/items/C-Desk-Vint.bin" "C-Desk-Vint" --bundle
+python3 "$here/tools/mbrename.py" "$b68/C-Desk-Vint-Installer.bin" \
+    "$work/items/Install C-Desk-Vint.bin" "Install C-Desk-Vint" --bundle
+python3 "$here/tools/mbrename.py" "$b68/C-Desk-Vint-Strip.bin" \
+    "$work/items/C-Desk-Vint Strip.bin" "C-Desk-Vint Strip"
 # The Read Me, as a SimpleText document: Mac line endings, Mac Roman.
-python3 - "$here/docs/READ-ME-MAC.txt" "$work/Read Me" <<'EOF'
+python3 - "$here/docs/READ-ME-MAC.txt" "$work/Read Me" <<'EOF2'
 import sys
 text = open(sys.argv[1], encoding='utf-8').read()
 open(sys.argv[2], 'wb').write(text.replace('\n', '\r').encode('mac_roman'))
-EOF
+EOF2
+
+flat="$work/flat.hfs"
+rb new --fs hfs --size "$size" --name C-Desk-Vint "$flat"
+for f in "$work/items/"*.bin; do
+    rb put-macbinary "$flat" "$f"
+done
 rb put "$flat" "$work/Read Me" "/Read Me"
 rb chmeta "$flat" "/Read Me" --type TEXT --creator ttxt
 
@@ -55,3 +71,16 @@ rb expand --size "$size" --output "$out" "$flat"
 rb mac-scsi-bless "$out"
 echo "wrote $out"
 rb ls "$out@1" /
+
+# And the same four as a StuffIt archive, for a Mac on the network.
+if [ -n "$sit" ]; then
+    # Each item as BinHex from the volume: the archiver takes .hqx with both
+    # forks and Finder info, where it would store a .bin as plain data.
+    mkdir "$work/hqx"
+    for f in "C-Desk-Vint" "Install C-Desk-Vint" "C-Desk-Vint Strip" "Read Me"; do
+        rb-cli get-binhex --progress never -q "$flat" "/$f" "$work/hqx/$f.hqx"
+    done
+    rm -f "$sit"
+    rb-cli archive create --progress never -q "$sit" "$work/hqx/"*.hqx
+    echo "wrote $sit"
+fi

@@ -23,6 +23,8 @@ else()
 endif()
 
 # libsodium 1.0.18, the parts RustDesk's crypto uses (ISC; see its LICENSE).
+# BearSSL, for the console's https (MIT; see its README.md).
+file(GLOB_RECURSE CDV_BEARSSL_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/third_party/bearssl/src/*.c)
 file(GLOB_RECURSE CDV_NACL_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/third_party/libsodium-min/*.c)
 
 add_application(C-Desk-Vint
@@ -35,6 +37,8 @@ add_application(C-Desk-Vint
     src/mac/cursor.c
     src/mac/mem.c
     src/mac/dnr.c
+    src/mac/report.c
+    src/mac/strip.c
     ${CDV_ARCH_SOURCES}
     src/core/session.c
     src/core/pb.c
@@ -44,9 +48,14 @@ add_application(C-Desk-Vint
     src/core/rng.c
     src/core/rdv.c
     src/core/dns.c
+    src/core/console.c
+    src/core/https.c
+    src/core/anchors.c
     ${CDV_NACL_SOURCES}
+    ${CDV_BEARSSL_SOURCES}
     src/core/vp8enc.c
     rsrc/cdeskvint.r
+    rsrc/icons.r
     CREATOR CDVt
     TYPE APPL)
 
@@ -56,6 +65,8 @@ endif()
 target_include_directories(C-Desk-Vint PRIVATE
     third_party/libsodium-min/include
     third_party/libsodium-min/include/sodium
+    third_party/bearssl/inc
+    third_party/bearssl/src
     src/core)
 target_compile_definitions(C-Desk-Vint PRIVATE CONFIGURED=1)
 target_compile_options(C-Desk-Vint PRIVATE
@@ -85,9 +96,46 @@ else()
     target_link_options(C-Desk-Vint PRIVATE -Wl,-gc-sections)
 endif()
 
+# The Control Strip module: a 68k code resource, which PowerPC Macs run in
+# their emulator like every module; built with the 68k half only.
+if(CDV_68K)
+    add_executable(cstrip src/cstrip/module.c src/mac/strip.h)
+    target_include_directories(cstrip PRIVATE src)
+    set_target_properties(cstrip PROPERTIES OUTPUT_NAME cstrip.flt
+        COMPILE_OPTIONS "-ffunction-sections;-O2;-m${CDV_CPU}"
+        LINK_FLAGS "-Wl,--mac-flat -Wl,-eCSTRIP_MAIN -Wl,-gc-sections -m${CDV_CPU}")
+    if(REZ_INCLUDE_PATH)
+        set(CDV_REZ_INC -I${REZ_INCLUDE_PATH})
+    endif()
+    add_custom_command(
+        OUTPUT C-Desk-Vint-Strip.bin
+        COMMAND ${REZ} ${CDV_REZ_INC} ${CMAKE_CURRENT_SOURCE_DIR}/src/cstrip/cstrip.r
+            -o C-Desk-Vint-Strip.bin -t sdev -c CDVt
+        DEPENDS cstrip src/cstrip/cstrip.r)
+    add_custom_target(cstrip_module ALL DEPENDS C-Desk-Vint-Strip.bin)
+endif()
+
+# The installer: 68k only, like most installers of the time (PowerPC Macs run
+# it in their emulator). Copies the application and the module beside it.
+if(CDV_68K)
+    add_application(C-Desk-Vint-Installer
+        src/installer/install.c
+        rsrc/installer.r
+        rsrc/icons.r
+        CREATOR CDVi
+        TYPE APPL)
+    target_compile_options(C-Desk-Vint-Installer PRIVATE -O2 -std=gnu99 -Wall -Wno-multichar
+        -m${CDV_CPU})
+    target_link_options(C-Desk-Vint-Installer PRIVATE -m${CDV_CPU})
+endif()
+
 # An ID server other than the public one, as the default for a fresh prefs file.
 set(CDV_SERVER "" CACHE STRING "default ID server, host[:port]")
 set(CDV_KEY "" CACHE STRING "that server's public key")
+set(CDV_API "" CACHE STRING "default console (API server) URL")
+if(CDV_API)
+    target_compile_definitions(C-Desk-Vint PRIVATE DEFAULT_API="${CDV_API}")
+endif()
 if(CDV_SERVER)
     target_compile_definitions(C-Desk-Vint PRIVATE DEFAULT_SERVER="${CDV_SERVER}" DEFAULT_KEY="${CDV_KEY}")
 endif()
