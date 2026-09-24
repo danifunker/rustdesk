@@ -78,6 +78,11 @@ own resolver is not enough.
 
 Things to know
 --------------
+- With no network (no cable, no address yet) C-Desk-Vint says "Waiting for
+  the network" and tries again every 30 seconds; the Mac stays usable. With
+  a network but no way out to the ID server, it keeps connections by IP
+  address working and keeps trying the server.
+- It quits by itself at Shut Down and Restart.
 - On a 68040 the first report to an https console takes some seconds of
   arithmetic (the TLS handshake), during which this Mac is busy; the
   connection is then kept, so it happens rarely.

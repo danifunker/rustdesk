@@ -26,7 +26,18 @@ typedef struct {
 
 static Handle code;    /* the 'dnrp' resource, detached and locked */
 static ProcPtr dnr;
-static volatile hostInfo info;
+
+/* Lookups in flight. The resolver writes into a slot's hostInfo until it
+ * answers, so a slot is not reused before then -- even one its owner has
+ * stopped waiting for. */
+enum { SLOT_FREE, SLOT_BUSY, SLOT_ABANDONED, SLOT_READY };
+#define SLOTS 4
+static struct {
+    int state;
+    volatile hostInfo info;
+    char name[256];
+    uint32_t ip;   /* SLOT_READY with a dotted quad: no lookup needed */
+} slot[SLOTS];
 
 #if CDV_PPC
 /* The DNR is 68k code and so is its calling convention: C, stack-based,
@@ -59,14 +70,14 @@ static OSErr call_open(void)
 #endif
 }
 
-static OSErr call_strtoaddr(char *name)
+static OSErr call_strtoaddr(char *name, volatile hostInfo *hi)
 {
 #if CDV_PPC
     return (OSErr)CallUniversalProc((UniversalProcPtr)dnr, PI_STRTOADDR, (long)STRTOADDR, name,
-                                    (hostInfo *)&info, done_upp, (char *)0);
+                                    (hostInfo *)hi, done_upp, (char *)0);
 #else
     typedef OSErr (*sta_fn)(long, char *, hostInfo *, void *, char *);
-    return ((sta_fn)dnr)(STRTOADDR, name, (hostInfo *)&info, (void *)done, 0);
+    return ((sta_fn)dnr)(STRTOADDR, name, (hostInfo *)hi, (void *)done, 0);
 #endif
 }
 
@@ -141,31 +152,70 @@ void dnr_close(void)
      * early, which nothing here needs. */
 }
 
-int dnr_lookup(const char *name, uint32_t *ip, unsigned long ticks)
+static int pending(int i)
 {
-    char buf[256];
-    unsigned long start = TickCount();
+    long r = slot[i].info.rtnCode;
+    return r == 1 || r == cacheFault;
+}
+
+int dnr_start(const char *name)
+{
+    int i;
     OSErr err;
-    if (dns_parse_ip(name, ip))
-        return 1;
-    if (!dnr && dnr_open() != noErr)
-        return 0;
-    strncpy(buf, name, sizeof buf - 1);
-    buf[sizeof buf - 1] = 0;
-    memset((void *)&info, 0, sizeof info);
-    info.rtnCode = 1; /* in progress, until the resolver says otherwise */
-    err = call_strtoaddr(buf);
-    if (err == cacheFault) {
-        while (info.rtnCode == 1 || info.rtnCode == cacheFault) {
-            EventRecord ev;
-            if (TickCount() - start > ticks)
-                return 0;
-            WaitNextEvent(0, &ev, 1, NULL); /* let MacTCP and everyone else run */
-        }
-        err = (OSErr)info.rtnCode;
+    uint32_t ip;
+    for (i = 0; i < SLOTS; i++)
+        if (slot[i].state == SLOT_ABANDONED && !pending(i))
+            slot[i].state = SLOT_FREE;
+    for (i = 0; i < SLOTS && slot[i].state != SLOT_FREE; i++)
+        ;
+    if (i == SLOTS)
+        return -1;
+    if (dns_parse_ip(name, &ip)) {
+        slot[i].ip = ip;
+        slot[i].state = SLOT_READY;
+        return i;
     }
-    if (err != noErr || !info.addr[0])
+    if (!dnr && dnr_open() != noErr)
+        return -1;
+    strncpy(slot[i].name, name, sizeof slot[i].name - 1);
+    slot[i].name[sizeof slot[i].name - 1] = 0;
+    memset((void *)&slot[i].info, 0, sizeof slot[i].info);
+    slot[i].info.rtnCode = 1; /* in progress, until the resolver says otherwise */
+    slot[i].ip = 0;
+    err = call_strtoaddr(slot[i].name, &slot[i].info);
+    if (err != cacheFault) /* answered at once, from the cache -- or refused */
+        slot[i].info.rtnCode = err;
+    slot[i].state = SLOT_BUSY;
+    return i;
+}
+
+int dnr_poll(int h, uint32_t *ip)
+{
+    int ok;
+    if (h < 0 || h >= SLOTS)
+        return -1;
+    if (slot[h].state == SLOT_READY) {
+        *ip = slot[h].ip;
+        slot[h].state = SLOT_FREE;
+        return 1;
+    }
+    if (slot[h].state != SLOT_BUSY)
+        return -1;
+    if (pending(h))
         return 0;
-    *ip = info.addr[0];
-    return 1;
+    ok = slot[h].info.rtnCode == noErr && slot[h].info.addr[0];
+    if (ok)
+        *ip = (uint32_t)slot[h].info.addr[0];
+    slot[h].state = SLOT_FREE;
+    return ok ? 1 : -1;
+}
+
+void dnr_forget(int h)
+{
+    if (h < 0 || h >= SLOTS)
+        return;
+    if (slot[h].state == SLOT_BUSY && pending(h))
+        slot[h].state = SLOT_ABANDONED;
+    else
+        slot[h].state = SLOT_FREE;
 }

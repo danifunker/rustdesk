@@ -429,7 +429,8 @@ static ip_addr my_ip;
 static long my_mask;
 static uint8_t sign_pk[32], sign_sk[64];
 static char server_addr[80]; /* the server as the engine gets it: dotted, with the port */
-static int have_dnr;
+static int net_wait;              /* no address yet: agent_start tries again */
+static unsigned long net_retry_at;
 static cdv_screen scr;
 static cdv_session sess;
 static cdv_ident ident;
@@ -665,6 +666,42 @@ static void renew(cdv_tcp *t, int have);
 static void agent_start(void);
 static void agent_stop(void);
 
+/* The engine asks for a name (the ID server's, a relay's): the Mac's
+ * resolver, polled, never waited on. The engine gives up and asks DNS
+ * itself if this takes too long or the main loop is held up. */
+static void name_lookup(unsigned long now)
+{
+    static int h = -1;
+    static unsigned long started;
+    static char asked[64];
+    uint32_t ip;
+    int r;
+    if (h >= 0 && (!name_q.req || name_q.ans || strcmp(asked, name_q.name))) {
+        dnr_forget(h); /* the engine moved on */
+        h = -1;
+    }
+    if (!name_q.req || name_q.ans)
+        return;
+    if (h < 0) {
+        strcpy(asked, name_q.name);
+        started = now;
+        h = dnr_start(asked);
+        if (h < 0) {
+            name_q.ans = -1; /* no resolver: the engine's own DNS */
+            return;
+        }
+    }
+    r = dnr_poll(h, &ip);
+    if (r == 0 && now - started < 10 * 60)
+        return;
+    if (r == 0)
+        dnr_forget(h);
+    h = -1;
+    if (r == 1)
+        name_q.ip = ip;
+    name_q.ans = r == 1 ? 1 : -1;
+}
+
 static void chores(void)
 {
     static unsigned long last_status, last_kchr, frames0, bytes0;
@@ -697,16 +734,9 @@ static void chores(void)
         renew(&t_relay, have_relay);
         report_step();
     }
-    if (name_q.req && !name_q.ans) {
-        /* The engine wants a relay's address: the Mac's resolver first. */
-        uint32_t ip;
-        if (have_dnr && dnr_lookup(name_q.name, &ip, 5 * 60)) {
-            name_q.ip = ip;
-            name_q.ans = 1;
-        } else {
-            name_q.ans = -1;
-        }
-    }
+    if (!running && net_wait && video_ok && now >= net_retry_at)
+        agent_start();
+    name_lookup(now);
     if (now - last_kchr > 60) {
         input_set_kchr((Ptr)GetScriptManagerVariable(smKCHRCache));
         last_kchr = now;
@@ -797,17 +827,23 @@ static void close_network(void)
 
 /* The streams a session can arrive on, and the ones that find it. Only the
  * direct one is essential; without the others it is a direct-IP agent. */
+#define NO_ADDRESS 1 /* open_network: the Mac has no IP address (yet) */
+
 static OSErr open_network(void)
 {
-    char line[100], host[64], a[20];
-    unsigned short port;
-    uint32_t ip;
+    char line[100];
     OSErr err = net_open(&my_ip, &my_mask);
     if (err != noErr) {
-        snprintf(line, sizeof line, "MacTCP did not open (%d)", err);
-        say(line);
+        if (!net_wait) { /* once, not every 30 s while it waits */
+            snprintf(line, sizeof line, "MacTCP did not open (%d)", err);
+            say(line);
+        }
         return err;
     }
+    /* No address: no link, or DHCP/BOOTP has not answered. Nothing on the
+     * network can work, and every name lookup would only wait to fail. */
+    if (!my_ip)
+        return NO_ADDRESS;
     err = tcp_create(&t_direct, 32 * 1024L, 8 * 1024);
     if (err != noErr) {
         snprintf(line, sizeof line, "no TCP stream (%d)", err);
@@ -826,27 +862,12 @@ static OSErr open_network(void)
     if (!have_local || !have_relay || !have_helper || !have_rdv)
         say("not enough memory for every stream: direct connections only");
 
-    /* The ID server's address, with the Mac's own resolver if it has one;
-     * the engine asks DNS itself if not. */
+    /* The ID server as it is set: a name is looked up later, by the engine
+     * asking the main loop's resolver -- never here, where waiting on it
+     * would hold up the whole Mac. */
     server_addr[0] = 0;
-    if (prefs.server[0] && have_rdv && have_relay && have_helper) {
-        rdv_split_host(prefs.server, host, sizeof host, &port, RDV_PORT);
-        if (dns_parse_ip(host, &ip)) {
-            strcpy(server_addr, prefs.server);
-        } else {
-            have_dnr = dnr_open() == noErr;
-            if (!have_dnr)
-                say("no resolver in this System; asking DNS directly");
-            if (have_dnr && dnr_lookup(host, &ip, 10 * 60)) {
-                net_addr_string(ip, a);
-                snprintf(server_addr, sizeof server_addr, "%s:%u", a, port);
-                snprintf(line, sizeof line, "%s is %s", host, a);
-                say(line);
-            } else {
-                strncpy(server_addr, prefs.server, sizeof server_addr - 1);
-            }
-        }
-    }
+    if (prefs.server[0] && have_rdv && have_relay && have_helper)
+        strncpy(server_addr, prefs.server, sizeof server_addr - 1);
     return noErr;
 }
 
@@ -883,14 +904,26 @@ static void renew(cdv_tcp *t, int have)
 static void agent_start(void)
 {
     char line[80];
+    OSErr err;
     if (running || !video_ok)
         return;
-    if (open_network() != noErr) {
+    err = open_network();
+    if (err != noErr) {
         close_network();
-        strcpy(addr_line, "Not running: no network");
+        if (!net_wait)
+            say(err == NO_ADDRESS ? "no network address; trying again every 30 s"
+                                  : "no network; trying again every 30 s");
+        /* Keep trying, quietly: the cable goes in, DHCP answers. */
+        net_wait = 1;
+        net_retry_at = TickCount() + 30 * 60;
+        strcpy(addr_line, "No network yet");
+        set_status("Waiting for the network");
         invalidate();
         return;
     }
+    if (net_wait)
+        say("the network is up");
+    net_wait = 0;
     engine_ctx ctx;
     char a[20];
     input_set_kchr((Ptr)GetScriptManagerVariable(smKCHRCache));
@@ -947,6 +980,7 @@ static void agent_start(void)
  * longer exists. */
 static void agent_stop(void)
 {
+    net_wait = 0; /* stopped on purpose: no more retries */
     if (!running)
         return;
     report_stop();
@@ -1326,6 +1360,46 @@ static void menu_choice(long choice)
     HiliteMenu(0);
 }
 
+/* ---- Apple Events ------------------------------------------------------------- */
+
+/* Shut Down and Restart ask every application to quit with a 'quit' Apple
+ * Event, and wait for it. An application that does not take Apple Events
+ * gets "puppet strings" instead -- the Process Manager choosing Quit from its
+ * menus, which a background application may not answer -- and the shutdown
+ * stalls. The four required events: C-Desk-Vint has no documents, so it
+ * declines to open or print them. */
+static pascal OSErr ae_open_app(const AppleEvent *evt, AppleEvent *reply, int32_t refcon)
+{
+    return noErr;
+}
+
+static pascal OSErr ae_no_documents(const AppleEvent *evt, AppleEvent *reply, int32_t refcon)
+{
+    return errAEEventNotHandled;
+}
+
+static pascal OSErr ae_quit(const AppleEvent *evt, AppleEvent *reply, int32_t refcon)
+{
+    say("asked to quit (shut down, restart or a script)");
+    quit = 1; /* the main loop stops sharing and releases the streams */
+    return noErr;
+}
+
+static void install_apple_events(void)
+{
+    long v;
+    if (Gestalt('evnt', &v) != noErr)
+        return; /* before System 7: nothing sends them */
+    AEInstallEventHandler(kCoreEventClass, kAEOpenApplication, NewAEEventHandlerUPP(ae_open_app),
+                          0, false);
+    AEInstallEventHandler(kCoreEventClass, kAEOpenDocuments,
+                          NewAEEventHandlerUPP(ae_no_documents), 0, false);
+    AEInstallEventHandler(kCoreEventClass, kAEPrintDocuments,
+                          NewAEEventHandlerUPP(ae_no_documents), 0, false);
+    AEInstallEventHandler(kCoreEventClass, kAEQuitApplication, NewAEEventHandlerUPP(ae_quit), 0,
+                          false);
+}
+
 static void handle_event(EventRecord *ev)
 {
     WindowPtr w;
@@ -1350,6 +1424,9 @@ static void handle_event(EventRecord *ev)
             set_menus();
             menu_choice(MenuKey((char)(ev->message & charCodeMask)));
         }
+        break;
+    case kHighLevelEvent:
+        AEProcessAppleEvent(ev);
         break;
     case updateEvt:
         if ((WindowPtr)ev->message == win) {
@@ -1378,6 +1455,7 @@ int main(void)
     InitDialogs(NULL);
     InitCursor();
     FlushEvents(everyEvent, 0);
+    install_apple_events();
     make_menus();
 
     r = qd.screenBits.bounds;

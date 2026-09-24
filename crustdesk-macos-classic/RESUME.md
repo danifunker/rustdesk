@@ -176,6 +176,17 @@ bytes 5x and the time 25%.
   `cdv_out_peek` seals; `host/test_core.c` replays that exact order.
 - **The desk scrap waits for the main loop**, so the Settings dialog exports
   a copy itself (`export_scrap`), or the peer would get it on closing.
+- **Nothing in the main loop may wait on the network.** It is the Mac's own
+  event loop: a blocking DNR lookup with no network froze the whole machine
+  for its timeout. `dnr_start/poll/forget` never block (and never reuse a
+  result record the resolver may still write); the engine asks the main
+  loop for the ID server's address through `name_q` and falls back on its own
+  DNS; with no IP address sharing waits and retries every 30 s.
+  `NET=restricted` / `NET=none scripts/q800.sh start` test both cases.
+- **Shut Down needs Apple Events**: an application that is not
+  high-level-event aware gets puppet strings, which a background agent may
+  not answer. The four required events are handled; 'quit' ends sharing and
+  releases the streams.
 - **Retro68 specifics met here**: `pascal` functions' symbols are
   upper-cased (a code resource's `-Wl,-e` names `CSTRIP_MAIN`); Rez wants
   `rect, Case { ... };` per DITL item, no braces around each; `\n` in a Rez

@@ -452,6 +452,7 @@ static void dns_step(void)
 
 /* ---- the ID server -------------------------------------------------------- */
 
+enum { SRV_ASK, SRV_WAIT, SRV_DNS };
 enum { A_NONE, A_HELPER_CONNECT, A_HELPER_SEND, A_RELAY_RESOLVE, A_RELAY_CONNECT, A_RELAY_SEND };
 
 static struct {
@@ -471,6 +472,8 @@ static struct {
     ip_addr cached_ip;
     unsigned long asked_at;
     int fallback;
+    int srv;                    /* SRV_*: how the server's address is being found */
+    unsigned long srv_asked;
     uint8_t msg[512];
     size_t msglen;
 } R;
@@ -545,7 +548,7 @@ static void action_step(void)
         if (!R.fallback) {
             if (name_q.ans == 1) {
                 R.relay_ip = name_q.ip;
-            } else if (name_q.ans == -1 || TickCount() - R.asked_at > 3 * 60) {
+            } else if (name_q.ans == -1 || TickCount() - R.asked_at > 6 * 60) {
                 /* No answer from the Mac's resolver (or the main loop is held
                  * up): ask a DNS server ourselves. */
                 name_q.req = 0;
@@ -614,22 +617,51 @@ static void rdv_step(void)
         return;
     dns_step();
 
-    /* The server's address first. */
-    if (!R.ip) {
-        if (!D.busy && TickCount() >= R.retry_at) {
-            if (D.result == 1 && !strcmp(D.name, R.host)) {
-                R.ip = D.ip;
-                eng.server_ip = R.ip;
-                eng.rdv_state = RS_REGISTERING;
-                rdv_init(&R.r);
-            } else if (D.result == -1 && !strcmp(D.name, R.host)) {
-                eng.rdv_state = RS_NO_DNS;
-                R.retry_at = TickCount() + 30 * 60;
-                D.result = 0;
-            } else {
+    /* The server's address first: the Mac's resolver, through the main
+     * loop; then DNS of our own, if that says no or takes too long. */
+    if (!R.ip && TickCount() >= R.retry_at) {
+        uint32_t found = 0;
+        switch (R.srv) {
+        case SRV_ASK:
+            if (!name_q.req || name_q.ans) {
+                strncpy(name_q.name, R.host, sizeof name_q.name - 1);
+                name_q.ans = 0;
+                name_q.req = 1;
+                R.srv_asked = TickCount();
+                R.srv = SRV_WAIT;
                 eng.rdv_state = RS_RESOLVING;
+            }
+            break;
+        case SRV_WAIT:
+            if (name_q.ans == 1) {
+                found = name_q.ip;
+                name_q.req = 0;
+            } else if (name_q.ans == -1 || TickCount() - R.srv_asked > 12 * 60) {
+                name_q.req = 0;
+                R.srv = SRV_DNS;
                 dns_start(R.host);
             }
+            break;
+        case SRV_DNS:
+            if (D.busy)
+                break;
+            if (D.result == 1 && !strcmp(D.name, R.host)) {
+                found = D.ip;
+            } else {
+                eng.rdv_state = RS_NO_DNS;
+                R.retry_at = TickCount() + 30 * 60;
+                R.srv = SRV_ASK;
+            }
+            D.result = 0;
+            break;
+        }
+        if (found) {
+            R.ip = found;
+            R.srv = SRV_ASK;
+            eng.server_ip = R.ip;
+            eng.rdv_state = RS_REGISTERING;
+            engine_log("found the ID server");
+            rdv_init(&R.r);
         }
     }
 

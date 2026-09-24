@@ -35,6 +35,7 @@ static struct {
     uint32_t counter;
     unsigned long last_ok;
     int fresh;                  /* the request in flight opened its connection */
+    int lookup;                 /* the API server's name being looked up, or -1 */
     char status[48];
 } R;
 
@@ -358,6 +359,7 @@ static void pump(void)
 void report_start(const report_config *c, cdv_tcp *t, void (*say)(const char *))
 {
     memset(&R, 0, sizeof R);
+    R.lookup = -1;
     R.c = *c;
     R.t = t;
     R.say = say;
@@ -388,6 +390,9 @@ void report_start(const report_config *c, cdv_tcp *t, void (*say)(const char *))
 
 void report_stop(void)
 {
+    if (R.lookup >= 0)
+        dnr_forget(R.lookup);
+    R.lookup = -1;
     if (R.state >= R_CONNECTING && R.t)
         tcp_abort(R.t);
     R.state = R_OFF;
@@ -398,10 +403,28 @@ void report_step(void)
     unsigned long now = TickCount();
     switch (R.state) {
     case R_RESOLVE: {
+        /* Polled, never waited on: a lookup with no network takes as long
+         * as the resolver needs to give up, and would stop the whole Mac. */
         uint32_t ip;
+        int r;
         if (now < R.next_at)
             break;
-        if (dnr_lookup(R.u.host, &ip, 10 * 60)) {
+        if (R.lookup < 0) {
+            R.lookup = dnr_start(R.u.host);
+            R.started_at = now;
+            if (R.lookup < 0) {
+                fault("console: no resolver to find the API server with");
+                R.next_at = now + 4 * TICKS_PER_BEAT;
+            }
+            break;
+        }
+        r = dnr_poll(R.lookup, &ip);
+        if (r == 0 && now - R.started_at < 15 * 60)
+            break;
+        if (r == 0)
+            dnr_forget(R.lookup);
+        R.lookup = -1;
+        if (r == 1) {
             R.ip = ip;
             R.state = R_IDLE;
             R.next_at = now;

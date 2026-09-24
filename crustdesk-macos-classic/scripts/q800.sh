@@ -65,12 +65,19 @@ start)
         extra=(-device scsi-hd,scsi-id=1,drive=hd1
                -drive file=disk2.hda,media=disk,format=raw,if=none,id=hd1)
     fi
+    # NET=restricted: an address but nothing beyond the host (no DNS, no ID
+    # server); NET=none: no network card at all.
+    case "${NET:-}" in
+    none) nic="-nic none" ;;
+    restricted) nic="-nic user,model=dp83932,restrict=on,hostfwd=tcp:127.0.0.1:$port-:21118" ;;
+    *) nic="-nic user,model=dp83932,hostfwd=tcp:127.0.0.1:$port-:21118" ;;
+    esac
     cd "$env"
     "$qemu" -M q800 -m "${MEM:-64}" -bios f1acad13.rom -g "${GFX:-640x480x8}" \
         -drive file=pram.img,format=raw,if=mtd \
         -device scsi-hd,scsi-id=0,drive=hd0 \
         -drive file=sys.hda,media=disk,format=raw,if=none,id=hd0 "${extra[@]}" \
-        -nic user,model=dp83932,hostfwd=tcp:127.0.0.1:$port-:21118 \
+        $nic \
         -display none -vnc 127.0.0.1:${VNC:-23} \
         -monitor unix:mon.sock,server,nowait ${ICOUNT:+-icount shift=$ICOUNT,align=off} \
         ${QEMU_EXTRA:-} > qemu.log 2>&1 &

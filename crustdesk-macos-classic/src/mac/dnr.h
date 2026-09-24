@@ -18,8 +18,15 @@
 OSErr dnr_open(void);
 void dnr_close(void);
 
-/* Resolve `name` (or parse it, if it is a dotted quad), waiting at most
- * `ticks`. 1 and *ip set on success, 0 if not. */
-int dnr_lookup(const char *name, uint32_t *ip, unsigned long ticks);
+/* Lookups that never wait: start one, then poll it from the main loop.
+ * dnr_start: a handle (a dotted quad is answered at once), or -1 if there is
+ * no resolver or too many lookups are out. dnr_poll: 0 still going, 1 with
+ * *ip set, -1 failed; either answer ends the lookup. dnr_forget: stop
+ * waiting (the resolver may still answer; the slot is kept until it does).
+ * Blocking here would stop the whole Mac -- with no network, for as long as
+ * the resolver takes to give up. */
+int dnr_start(const char *name);
+int dnr_poll(int h, uint32_t *ip);
+void dnr_forget(int h);
 
 #endif
