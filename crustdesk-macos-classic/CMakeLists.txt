@@ -51,6 +51,8 @@ add_application(C-Desk-Vint
     src/core/console.c
     src/core/https.c
     src/core/png.c
+    src/core/unzstd.c
+    third_party/zstd-decoder/zstddeclib.c
     src/core/anchors.c
     ${CDV_NACL_SOURCES}
     ${CDV_BEARSSL_SOURCES}
@@ -66,6 +68,7 @@ endif()
 target_include_directories(C-Desk-Vint PRIVATE
     third_party/libsodium-min/include
     third_party/libsodium-min/include/sodium
+    third_party/zstd-decoder
     third_party/bearssl/inc
     third_party/bearssl/src
     src/core)
@@ -129,6 +132,11 @@ if(CDV_68K)
         -m${CDV_CPU})
     target_link_options(C-Desk-Vint-Installer PRIVATE -m${CDV_CPU})
 endif()
+
+# The zstd decoder, small rather than fast (see its README.md).
+set_source_files_properties(third_party/zstd-decoder/zstddeclib.c PROPERTIES
+    COMPILE_DEFINITIONS "HUF_FORCE_DECOMPRESS_X1;ZSTD_FORCE_DECOMPRESS_SEQUENCES_SHORT;ZSTD_NO_INLINE"
+    COMPILE_OPTIONS "-w")
 
 # An ID server other than the public one, as the default for a fresh prefs file.
 set(CDV_SERVER "" CACHE STRING "default ID server, host[:port]")

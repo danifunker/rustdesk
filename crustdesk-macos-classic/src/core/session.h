@@ -73,7 +73,9 @@ typedef struct {
      * above them the button, 1 left, 2 right, 4 middle. */
     void (*mouse)(void *user, int mask, int x, int y);
     void (*key)(void *user, const cdv_key *k);
-    void (*clipboard)(void *user, const char *utf8, size_t n);
+    /* Text from the peer's clipboard: UTF-8, or a zstd frame of it if
+     * `compressed` (decompress it where allocation is allowed). */
+    void (*clipboard)(void *user, const char *utf8, size_t n, int compressed);
     void (*log)(void *user, const char *msg);
     /* Optional (NULL: not offered). A chat line from the peer, UTF-8. */
     void (*chat)(void *user, const char *utf8, size_t n);

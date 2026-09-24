@@ -22,6 +22,7 @@ Steps:
     refresh           ask for a keyframe
     frames SECONDS    just watch, and report what arrives
     clip TEXT         put TEXT on the Mac's clipboard (Clipboard, uncompressed)
+    zclip TEXT        the same, zstd-compressed, as a client sends all but short text
     save FILE         from now on, append every VP8 frame to FILE (4-byte
                       big-endian length, then the data) for host/build/vp8dump
     chat TEXT         a chat line to the Mac (Misc.chat_message)
@@ -305,6 +306,11 @@ def main():
             i += 1
         elif op == 'save':
             p.save = open(args[i], 'wb')
+            i += 1
+        elif op == 'zclip':
+            import zstandard
+            z = zstandard.ZstdCompressor(level=3).compress(args[i].encode('utf-8'))
+            p.send(field(16, 2, field(1, 0, 1) + field(2, 2, z)))
             i += 1
         elif op == 'chat':
             p.send(field(19, 2, field(4, 2, field(1, 2, args[i].encode('utf-8')))))

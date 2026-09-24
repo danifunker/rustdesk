@@ -100,6 +100,7 @@ typedef struct {
     char text[CLIP_MAX];
     volatile size_t len;
     volatile int ready;
+    volatile int compressed; /* clip_in: a zstd frame, for the main loop to open */
 } engine_clip;
 extern engine_clip clip_out; /* main -> peer */
 extern engine_clip clip_in;  /* peer -> main */

@@ -9,10 +9,11 @@ B       := build
 CORE    := ../src/core
 NACL    := ../third_party/libsodium-min
 NACLSRC := $(shell find $(NACL) -name '*.c')
-NACLINC := -I$(NACL)/include -I$(NACL)/include/sodium -I$(CORE) -I../third_party/bearssl/inc
+NACLINC := -I$(NACL)/include -I$(NACL)/include/sodium -I$(CORE) -I../third_party/bearssl/inc \
+           -I../third_party/zstd-decoder
 CORESRC := $(CORE)/vp8enc.c $(CORE)/pb.c $(CORE)/sha256.c $(CORE)/session.c $(CORE)/yuv.c \
            $(CORE)/macroman.c $(CORE)/rng.c $(CORE)/rdv.c $(CORE)/dns.c $(CORE)/console.c \
-           $(CORE)/https.c $(CORE)/anchors.c $(CORE)/png.c $(NACLSRC)
+           $(CORE)/https.c $(CORE)/anchors.c $(CORE)/png.c $(CORE)/unzstd.c $(B)/zstddeclib.o $(NACLSRC)
 BSSL    := ../third_party/bearssl
 BSSLSRC := $(shell find $(BSSL)/src -name '*.c')
 BSSLOBJ := $(patsubst $(BSSL)/src/%.c,$(B)/bearssl/%.o,$(BSSLSRC))
@@ -24,6 +25,11 @@ $(B):
 
 $(B)/test_vp8: test_vp8.c $(CORESRC) | $(B)
 	$(CC) $(CFLAGS) -I$(VPXINC) -o $@ test_vp8.c $(CORE)/vp8enc.c $(LIBVPX) -lm
+
+# The zstd decoder, with the Mac build's options.
+$(B)/zstddeclib.o: ../third_party/zstd-decoder/zstddeclib.c | $(B)
+	$(CC) -O2 -w -DHUF_FORCE_DECOMPRESS_X1 -DZSTD_FORCE_DECOMPRESS_SEQUENCES_SHORT \
+	    -DZSTD_NO_INLINE -c -o $@ $<
 
 # BearSSL, once, as a library.
 $(B)/bearssl/%.o: $(BSSL)/src/%.c

@@ -789,15 +789,14 @@ static void clipboard(cdv_session *s, const uint8_t *b, size_t n)
         } else if (r.field == 5)
             format = (int)r.v;
     }
-    /* Compressed text is real zstd, which this agent does not carry a decoder
-     * for yet; a client compresses whenever that is smaller, which for text
-     * is all but the shortest. */
-    if (compressed || format != 0 || !text) {
-        say(s, "peer clipboard skipped (compressed or not text)");
+    /* A client compresses whenever that is smaller -- all but the shortest
+     * text. The platform decompresses (cdv_unzstd), where it may allocate. */
+    if (format != 0 || !text) {
+        say(s, "peer clipboard skipped (not text)");
         return;
     }
     if (s->hooks->clipboard)
-        s->hooks->clipboard(s->hooks->user, (const char *)text, len);
+        s->hooks->clipboard(s->hooks->user, (const char *)text, len, compressed);
 }
 
 static void screenshot(cdv_session *s, const uint8_t *b, size_t n)

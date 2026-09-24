@@ -24,6 +24,7 @@
 #include "../core/rng.h"
 #include "../core/sha256.h"
 #include "../core/png.h"
+#include "../core/unzstd.h"
 #include "../core/session.h"
 #include "../core/vp8enc.h"
 
@@ -463,15 +464,19 @@ static void hook_key(void *u, const cdv_key *k)
 }
 
 /* Deferred-task time: park the text for the main loop, which owns the scrap. */
-static void hook_clipboard(void *u, const char *utf8, size_t n)
+static void hook_clipboard(void *u, const char *utf8, size_t n, int compressed)
 {
     (void)u;
     if (clip_in.ready)
         return; /* the last one is not in yet; the newer can wait for another copy */
-    if (n > CLIP_MAX)
+    if (n > CLIP_MAX) {
+        if (compressed)
+            return; /* half a zstd frame is nothing */
         n = CLIP_MAX;
+    }
     memcpy(clip_in.text, utf8, n);
     clip_in.len = n;
+    clip_in.compressed = compressed;
     clip_in.ready = 1;
 }
 
@@ -595,12 +600,30 @@ static struct {
     unsigned long at;
 } bounce;
 
-static uint8_t mr[CLIP_MAX];
+static uint8_t mr[64 * 1024L]; /* Mac Roman, either way */
 static short last_count = -32768;
 
 static void put_peer_text(void)
 {
-    size_t n = utf8_to_macroman((const uint8_t *)clip_in.text, clip_in.len, mr, sizeof mr);
+    const char *utf8 = clip_in.text;
+    size_t len = clip_in.len, n;
+    if (clip_in.compressed) {
+        /* Most of what a client sends: zstd, opened here where the decoder
+         * may allocate. At most 64 KB of text, as much as a scrap is wise. */
+        static char *plain;
+        long k;
+        if (!plain)
+            plain = (char *)NewPtr(64 * 1024L);
+        k = plain ? cdv_unzstd(plain, 64 * 1024L, clip_in.text, clip_in.len) : -1;
+        if (k < 0) {
+            clip_in.ready = 0;
+            say("clipboard from the peer could not be decompressed");
+            return;
+        }
+        utf8 = plain;
+        len = (size_t)k;
+    }
+    n = utf8_to_macroman((const uint8_t *)utf8, len, mr, sizeof mr);
     ZeroScrap();
     PutScrap((long)n, 'TEXT', (Ptr)mr);
     last_count = InfoScrap()->scrapCount;

@@ -106,6 +106,15 @@ listing from both halves.
 - **Restart**: an Apple Event to the Finder ('FNDR' 'rest'), so programs
   quit properly; refused under Classic (the OS X Finder would restart it all).
 
+## 2d. zstd
+
+`third_party/zstd-decoder` (upstream's single-file decoder, v1.5.6, built
+small: 52 KB of 68k code) behind `src/core/unzstd.c`. Clients compress
+clipboard text and file blocks whenever that is smaller; before this, peer
+clipboard text longer than a few words was silently skipped. The decoder
+allocates, so the session hands compressed bytes to the platform with a flag
+and the Mac's main loop opens them.
+
 ## 2a. The ID server
 
 Registration (UDP to hbbs), PunchHole/RequestRelay -> relay (hbbr), and
