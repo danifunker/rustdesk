@@ -30,6 +30,7 @@ add_application(C-Desk-Vint
     src/mac/engine.c
     src/mac/traps.c
     src/mac/cursor.c
+    src/mac/mem.c
     ${CDV_ARCH_SOURCES}
     src/core/session.c
     src/core/pb.c

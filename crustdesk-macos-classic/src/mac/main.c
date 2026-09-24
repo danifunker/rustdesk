@@ -11,6 +11,7 @@
 #include "cursor.h"
 #include "engine.h"
 #include "input.h"
+#include "mem.h"
 #include "traps.h"
 #include "net.h"
 #include "screen.h"
@@ -340,7 +341,7 @@ static OSErr open_video(void)
     OSErr err = screen_open(&scr, prefs.gamma);
     if (err != noErr)
         return err;
-    encmem = NewPtr((long)vp8e_mem_size(scr.width, scr.height));
+    encmem = big_alloc((long)vp8e_mem_size(scr.width, scr.height));
     if (!encmem)
         return memFullErr;
     enc = vp8e_init(encmem, scr.width, scr.height, prefs.q);
@@ -356,7 +357,7 @@ static void close_video(void)
 {
     screen_close(&scr);
     if (encmem)
-        DisposePtr((Ptr)encmem);
+        big_free(encmem);
     encmem = NULL;
     enc = NULL;
 }
@@ -381,9 +382,9 @@ static void screen_changed(void)
         eng.need_reset = 1;
         while (!net_send_idle(&net))
             ;
-        DisposePtr((Ptr)outq);
+        big_free(outq);
         outcap = queue_size(&scr);
-        outq = (uint8_t *)NewPtr((long)outcap);
+        outq = (uint8_t *)big_alloc((long)outcap);
     }
     engine_replace_video(enc, outq, outcap);
     snprintf(line, sizeof line, "screen now %dx%d, %d bits", scr.width, scr.height, scr.depth);
@@ -642,17 +643,22 @@ int main(void)
     err = inq ? open_video() : memFullErr;
     if (err == noErr) {
         outcap = queue_size(&scr);
-        outq = (uint8_t *)NewPtr((long)outcap);
+        outq = (uint8_t *)big_alloc((long)outcap);
         if (!outq)
             err = memFullErr;
     }
     if (err != noErr) {
         snprintf(line, sizeof line, "not enough memory for this screen (%d)", err);
         say(line);
+        say("give C-Desk-Vint more in Get Info, or quit other programs");
     } else {
         snprintf(line, sizeof line, "screen %dx%d, %d bits, %s cursor", scr.width, scr.height,
                  scr.depth, ident.cursor_embedded ? "software" : "hardware");
         say(line);
+        if (big_temp_bytes()) {
+            snprintf(line, sizeof line, "%ld KB of it in temporary memory", big_temp_bytes() / 1024);
+            say(line);
+        }
         if (scr.gamma_info[0])
             snprintf(line, sizeof line, "gamma from the driver (%d-channel), mid-grey %d -> %d",
                      scr.gamma_info[0], 128, scr.gamma[1][128]);

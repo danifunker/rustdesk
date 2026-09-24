@@ -9,7 +9,8 @@ resource 'vers' (1) {
 
 /* The screen is copied twice (a shadow for change detection and the YUV
  * planes the encoder reads) and the encoder keeps its own reconstruction:
- * about 2 MB at 640x480x8, 6 MB at 1024x768 in thousands of colours. */
+ * about 2 MB at 640x480x8, 11 MB at 1280x1024 in millions. What the
+ * partition cannot hold comes from temporary memory (src/mac/mem.c). */
 resource 'SIZE' (-1) {
     reserved,
     acceptSuspendResumeEvents,
@@ -27,6 +28,6 @@ resource 'SIZE' (-1) {
     reserved,
     reserved,
     reserved,
-    8 * 1024 * 1024,
+    12 * 1024 * 1024,
     3 * 1024 * 1024
 };

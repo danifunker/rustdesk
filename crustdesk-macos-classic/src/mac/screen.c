@@ -1,4 +1,5 @@
 #include "screen.h"
+#include "mem.h"
 
 #include <string.h>
 
@@ -97,9 +98,9 @@ OSErr screen_open(cdv_screen *s, int use_gamma)
     luma = (long)s->ystride * s->mbh * 16;
     planes = luma + 2L * s->uvstride * s->mbh * 8;
 
-    s->shadow = (uint8_t *)NewPtrClear((long)s->rowbytes * s->height);
-    s->Y = (uint8_t *)NewPtrClear(planes);
-    s->dirty = (uint8_t *)NewPtrClear((long)s->mbw * s->mbh * 2);
+    s->shadow = (uint8_t *)big_alloc((long)s->rowbytes * s->height);
+    s->Y = (uint8_t *)big_alloc(planes);
+    s->dirty = (uint8_t *)big_alloc((long)s->mbw * s->mbh * 2);
     if (!s->shadow || !s->Y || !s->dirty) {
         screen_close(s);
         return memFullErr;
@@ -123,11 +124,11 @@ OSErr screen_open(cdv_screen *s, int use_gamma)
 void screen_close(cdv_screen *s)
 {
     if (s->shadow)
-        DisposePtr((Ptr)s->shadow);
+        big_free(s->shadow);
     if (s->Y)
-        DisposePtr((Ptr)s->Y);
+        big_free(s->Y);
     if (s->dirty)
-        DisposePtr((Ptr)s->dirty);
+        big_free(s->dirty);
     s->shadow = s->Y = s->dirty = s->stale = NULL;
 }
 
