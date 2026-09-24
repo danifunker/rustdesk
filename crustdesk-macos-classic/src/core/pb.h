@@ -17,7 +17,7 @@
 
 enum { PB_VARINT = 0, PB_I64 = 1, PB_LEN = 2, PB_I32 = 5 };
 
-typedef struct {
+typedef struct pbw {
     uint8_t *p, *end;
     int overflow;
     int depth;
@@ -27,6 +27,7 @@ typedef struct {
 void pbw_init(pbw *w, uint8_t *buf, size_t cap);
 size_t pbw_len(const pbw *w, const uint8_t *buf);
 void pbw_varint(pbw *w, int field, uint64_t v);
+void pbw_varint_always(pbw *w, int field, uint64_t v); /* a oneof member: even 0 */
 void pbw_sint(pbw *w, int field, int32_t v); /* zigzag, for sint32 */
 void pbw_bool(pbw *w, int field, int v);
 void pbw_bytes(pbw *w, int field, const void *data, size_t n);

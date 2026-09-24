@@ -65,6 +65,13 @@ void pbw_varint(pbw *w, int field, uint64_t v)
     raw_varint(w, v);
 }
 
+/* A oneof member: present even at zero, or the peer sees no choice made. */
+void pbw_varint_always(pbw *w, int field, uint64_t v)
+{
+    tag(w, field, PB_VARINT);
+    raw_varint(w, v);
+}
+
 void pbw_sint(pbw *w, int field, int32_t v)
 {
     pbw_varint(w, field, (uint32_t)((v << 1) ^ (v >> 31)));

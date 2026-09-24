@@ -13,12 +13,13 @@ NACLINC := -I$(NACL)/include -I$(NACL)/include/sodium -I$(CORE) -I../third_party
            -I../third_party/zstd-decoder
 CORESRC := $(CORE)/vp8enc.c $(CORE)/pb.c $(CORE)/sha256.c $(CORE)/session.c $(CORE)/yuv.c \
            $(CORE)/macroman.c $(CORE)/rng.c $(CORE)/rdv.c $(CORE)/dns.c $(CORE)/console.c \
-           $(CORE)/https.c $(CORE)/anchors.c $(CORE)/png.c $(CORE)/unzstd.c $(B)/zstddeclib.o $(NACLSRC)
+           $(CORE)/https.c $(CORE)/anchors.c $(CORE)/png.c $(CORE)/unzstd.c $(CORE)/files.c $(CORE)/macbin.c $(B)/zstddeclib.o $(NACLSRC)
 BSSL    := ../third_party/bearssl
 BSSLSRC := $(shell find $(BSSL)/src -name '*.c')
 BSSLOBJ := $(patsubst $(BSSL)/src/%.c,$(B)/bearssl/%.o,$(BSSLSRC))
 
-all: $(B)/test_vp8 $(B)/hostagent $(B)/test_core $(B)/vp8dump $(B)/test_crypto $(B)/consoleprobe
+all: $(B)/test_vp8 $(B)/hostagent $(B)/test_core $(B)/vp8dump $(B)/test_crypto $(B)/consoleprobe \
+     $(B)/test_macbin
 
 $(B):
 	mkdir -p $(B)
@@ -39,11 +40,15 @@ $(B)/bearssl/%.o: $(BSSL)/src/%.c
 $(B)/libbearssl.a: $(BSSLOBJ)
 	ar rcs $@ $^
 
-$(B)/hostagent: hostagent.c $(CORESRC) $(B)/libbearssl.a | $(B)
-	$(CC) $(CFLAGS) $(NACLINC) -D_POSIX_C_SOURCE=200809L -o $@ hostagent.c $(CORESRC) $(B)/libbearssl.a
+$(B)/hostagent: hostagent.c fs_posix.c fs_posix.h $(CORESRC) $(B)/libbearssl.a | $(B)
+	$(CC) $(CFLAGS) $(NACLINC) -D_DEFAULT_SOURCE -o $@ hostagent.c fs_posix.c $(CORESRC) \
+	    $(B)/libbearssl.a
 
 $(B)/test_core: test_core.c $(CORESRC) $(B)/libbearssl.a | $(B)
 	$(CC) $(CFLAGS) $(NACLINC) -o $@ test_core.c $(CORESRC) $(B)/libbearssl.a
+
+$(B)/test_macbin: test_macbin.c ../src/core/macbin.c | $(B)
+	$(CC) $(CFLAGS) -o $@ test_macbin.c ../src/core/macbin.c
 
 $(B)/consoleprobe: consoleprobe.c $(CORESRC) $(B)/libbearssl.a | $(B)
 	$(CC) $(CFLAGS) $(NACLINC) -D_POSIX_C_SOURCE=200809L -o $@ consoleprobe.c $(CORESRC) \
@@ -58,6 +63,7 @@ $(B)/vp8dump: vp8dump.c | $(B)
 test: all
 	$(B)/test_core
 	python3 test_png.py
+	$(B)/test_macbin
 	python3 test_crypto.py $(B)/test_crypto
 	$(B)/test_vp8 16 | tail -1
 	$(B)/test_vp8 0 | tail -1

@@ -10,6 +10,8 @@
  *   hostagent [port] [password] [q]
  */
 #include "../src/core/session.h"
+#include "../src/core/files.h"
+#include "fs_posix.h"
 #include "../src/core/vp8enc.h"
 #include "../src/core/yuv.h"
 #include "../src/core/rng.h"
@@ -186,11 +188,31 @@ static int tcp_connect(const char *host, uint16_t port)
     return fd;
 }
 
+/* File transfer: the protocol in src/core/files.c over the directory in
+ * CDV_FILES (default ./files-root), as the client's "/". */
+static cdv_files *files;
+static uint8_t files_work[192 * 1024];
+
+static int on_login(void *u, int file_transfer)
+{
+    (void)u;
+    printf("login: %s\n", file_transfer ? "file transfer" : "desktop");
+    return 1;
+}
+
+static void on_file(void *u, int field, const uint8_t *d, size_t n)
+{
+    (void)u;
+    cdv_files_message(files, field, d, n);
+}
+
 static int serve(int fd, const char *password, int q, int secure)
 {
-    static uint8_t outbuf[1 << 20], inbuf[64 * 1024];
+    static uint8_t outbuf[1 << 20], inbuf[192 * 1024];
     static uint8_t encmem_raw[4 << 20];
-    static const cdv_hooks hooks = { on_mouse, on_key, NULL, on_log, NULL };
+    static const cdv_hooks hooks = { on_mouse, on_key, NULL,    on_log, NULL, NULL,
+                                     NULL,     NULL,   on_login, on_file, NULL };
+    int files_started = 0;
     static uint8_t pk[32], sk[64];
     static int have_keys;
     cdv_ident id = { host_id, host_sk, password, "classicsalt", "Host Quadra", W, H, 1 };
@@ -205,6 +227,10 @@ static int serve(int fd, const char *password, int q, int secure)
     if (vp8e_mem_size(W, H) > sizeof encmem_raw)
         return -1;
     cdv_init(&s, outbuf, sizeof outbuf, inbuf, sizeof inbuf, &hooks, &id, now_ms());
+    if (!files)
+        files = malloc(cdv_files_size());
+    cdv_files_init(files, &s, fs_posix(getenv("CDV_FILES") ? getenv("CDV_FILES") : "files-root"),
+                   files_work, sizeof files_work);
     cdv_start(&s, now_ms(), secure || getenv("CDV_SECURE") != NULL);
     uint32_t started = now_ms();
     memset(shadow, 0, sizeof shadow);
@@ -244,6 +270,14 @@ static int serve(int fd, const char *password, int q, int secure)
         cdv_tick(&s, now_ms());
         if (s.state == CDV_CLOSED && !cdv_out_peek(&s, &n))
             return 0;
+        if (s.state == CDV_LIVE && s.file_mode) {
+            if (!files_started) {
+                cdv_files_start(files);
+                files_started = 1;
+            }
+            cdv_files_pump(files);
+            continue;
+        }
         cdv_out_peek(&s, &n);
         if (s.state == CDV_LIVE && !n) {
             int key = cdv_take_refresh(&s), mx, my, any = key;

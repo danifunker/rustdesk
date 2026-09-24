@@ -58,23 +58,58 @@ static uint32_t rnd(cdv_session *s)
     return s->rng;
 }
 
-void cdv_init(cdv_session *s, uint8_t *out, size_t outcap, uint8_t *in, size_t incap,
-              const cdv_hooks *hooks, const cdv_ident *id, uint32_t seed)
+static int msg_begin(cdv_session *s, pbw *w);
+static int msg_end(cdv_session *s, pbw *w);
+
+void cdv_init2(cdv_session *s, uint8_t *ctl, size_t ctlcap, uint8_t *vid, size_t vidcap,
+               uint8_t *in, size_t incap, const cdv_hooks *hooks, const cdv_ident *id,
+               uint32_t seed)
 {
+    static const cdv_hooks none;
     memset(s, 0, sizeof *s);
-    s->hooks = hooks;
+    s->hooks = hooks ? hooks : &none;
     s->id = id;
-    /* A sixteenth of the space, at least 4 KB, for control messages. */
-    s->ctlcap = outcap / 16 < 4096 ? 4096 : outcap / 16;
-    if (s->ctlcap > outcap / 2)
-        s->ctlcap = outcap / 2;
-    s->out = out;
-    s->vid = out + s->ctlcap;
-    s->vidcap = outcap - s->ctlcap;
+    s->out = ctl;
+    s->ctlcap = ctlcap;
+    s->vid = vid;
+    s->vidcap = vid ? vidcap : 0;
     s->in = in;
     s->incap = incap;
     s->rng = seed ? seed : 0x2545F491u;
     s->state = CDV_WAIT_LOGIN;
+}
+
+void cdv_init(cdv_session *s, uint8_t *out, size_t outcap, uint8_t *in, size_t incap,
+              const cdv_hooks *hooks, const cdv_ident *id, uint32_t seed)
+{
+    /* A sixteenth of the space, at least 4 KB, for control messages. */
+    size_t ctlcap = outcap / 16 < 4096 ? 4096 : outcap / 16;
+    if (ctlcap > outcap / 2)
+        ctlcap = outcap / 2;
+    cdv_init2(s, out, ctlcap, out + ctlcap, outcap - ctlcap, in, incap, hooks, id, seed);
+}
+
+void cdv_set_video(cdv_session *s, uint8_t *vid, size_t vidcap)
+{
+    s->vid = vid;
+    s->vidcap = vid ? vidcap : 0;
+    s->vstate = VID_FREE;
+}
+
+int cdv_msg_begin(cdv_session *s, pbw *w)
+{
+    return msg_begin(s, w);
+}
+
+int cdv_msg_end(cdv_session *s, pbw *w)
+{
+    return msg_end(s, w);
+}
+
+size_t cdv_ctl_room(const cdv_session *s)
+{
+    size_t need = 8 + MAC;
+    return s->ctlcap - s->olen > need ? s->ctlcap - s->olen - need : 0;
 }
 
 /* ---- framing (BytesCodec): length << 2 | (header bytes - 1), little-endian -- */
@@ -223,13 +258,15 @@ static void send_peer_info(cdv_session *s)
     /* "Mac OS" is true, and it is what makes a client in Map mode send Mac
      * virtual keycodes -- which are the ADB keycodes this machine uses. */
     pbw_string(&w, 3, "Mac OS");
-    pbw_begin(&w, 4); /* displays */
-    pbw_varint(&w, 3, (uint32_t)id->width);
-    pbw_varint(&w, 4, (uint32_t)id->height);
-    pbw_string(&w, 5, "Display");
-    pbw_bool(&w, 6, 1);
-    pbw_bool(&w, 7, id->cursor_embedded);
-    pbw_end(&w);
+    if (!s->file_mode) { /* a file manager has no display */
+        pbw_begin(&w, 4); /* displays */
+        pbw_varint(&w, 3, (uint32_t)id->width);
+        pbw_varint(&w, 4, (uint32_t)id->height);
+        pbw_string(&w, 5, "Display");
+        pbw_bool(&w, 6, 1);
+        pbw_bool(&w, 7, id->cursor_embedded);
+        pbw_end(&w);
+    }
     pbw_string(&w, 7, REPORTED_VERSION);
     pbw_end(&w);
     pbw_end(&w);
@@ -566,6 +603,19 @@ static void login(cdv_session *s, const uint8_t *b, size_t n)
         } else if (r.field == 6) {
             login_option = r.data;
             login_option_len = r.len;
+        } else if (r.field == 7) { /* file_transfer: FileTransfer{dir, show_hidden} */
+            pbr ft;
+            s->file_mode = 1;
+            pbr_init(&ft, r.data, r.len);
+            while (pbr_next(&ft)) {
+                if (ft.field == 1 && ft.wire == PB_LEN) {
+                    size_t k = ft.len < sizeof s->ft_dir - 1 ? ft.len : sizeof s->ft_dir - 1;
+                    memcpy(s->ft_dir, ft.data, k);
+                    s->ft_dir[k] = 0;
+                } else if (ft.field == 2) {
+                    s->ft_hidden = ft.v != 0;
+                }
+            }
         } else if (r.field == 5 || r.field == 11 || r.field == 13) {
             char *dst = r.field == 5 ? s->peer_name : r.field == 11 ? s->peer_version : s->peer_platform;
             size_t cap = r.field == 5    ? sizeof s->peer_name
@@ -617,12 +667,17 @@ static void login(cdv_session *s, const uint8_t *b, size_t n)
             return;
         }
     }
+    if (s->hooks->login && !s->hooks->login(s->hooks->user, s->file_mode)) {
+        send_login_error(s, "Another remote desktop session is using this Mac's screen");
+        s->state = CDV_CLOSED;
+        return;
+    }
     send_peer_info(s);
     s->state = CDV_LIVE;
-    s->refresh = 1;
+    s->refresh = !s->file_mode;
     if (login_option)
         option(s, login_option, login_option_len);
-    say3(s, s->peer_name, " logged in, client ",
+    say3(s, s->peer_name, s->file_mode ? " logged in for files, client " : " logged in, client ",
          s->peer_version[0] ? s->peer_version : "unknown");
 }
 
@@ -864,6 +919,11 @@ static void dispatch(cdv_session *s, const uint8_t *b, size_t n)
             break;
         }
         case M_SCREENSHOT_REQUEST: screenshot(s, r.data, r.len); break;
+        case 17: /* file_action */
+        case 18: /* file_response */
+            if (s->file_mode && s->hooks->file)
+                s->hooks->file(s->hooks->user, (int)r.field, r.data, r.len);
+            break;
         default: break;
         }
     }

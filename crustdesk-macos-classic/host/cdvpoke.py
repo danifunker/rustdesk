@@ -5,7 +5,7 @@ Logs in the way a real client does (empty-password probe, then
 sha256(sha256(password + salt) + challenge)), keeps reading so the agent's
 queue drains, and plays a script of input events:
 
-    cdvpoke.py [--secure] HOST:PORT PASSWORD [STEP ...]
+    cdvpoke.py [--secure] [--files] HOST:PORT PASSWORD [STEP ...]
 
 --secure plays the client's side of the key exchange a peer arriving through
 the ID server does (signed_id, then public_key), and seals everything after.
@@ -31,6 +31,13 @@ Steps:
     quality N         image_quality: 2 Low, 3 Balanced, 4 Best
     fps N             custom_fps
     restart           ask the Mac to restart (Misc.restart_remote_device)
+
+--files logs in as the client's file manager does (LoginRequest.file_transfer)
+and takes these steps instead:
+    ls PATH             list a folder
+    get REMOTE LOCAL    download a file or folder
+    put LOCAL REMOTE    upload a file (REMOTE: its full path on the agent)
+    mkdir PATH / rm PATH / rmdir PATH / mv PATH NEWNAME
 
 Only the handful of protobuf fields involved are encoded, by hand.
 """
@@ -62,6 +69,10 @@ def field(num, wire, payload):
 
 def zz(v):
     return (v << 1) ^ (v >> 31)
+
+
+def unzz(v):
+    return (v >> 1) ^ -(v & 1)
 
 
 def frame(body):
@@ -126,6 +137,8 @@ class Peer:
         self.cursors, self.positions = [], []
         self.box_key = None  # set by the secure handshake
         self.shot = None
+        self.files = []      # FileActions and FileResponses from the agent
+        self.file_mode = False
 
     def send(self, body):
         if self.box_key:
@@ -199,6 +212,10 @@ class Peer:
                     print('clipboard from the Mac (%s, %s): %r' % (
                         'multi' if f == 28 else 'single',
                         'compressed' if c.get(1, [0])[0] else 'plain', text.decode('utf-8', 'replace')))
+            if 17 in m:
+                self.files.append((17, parse(m[17][0])))
+            if 18 in m:
+                self.files.append((18, parse(m[18][0])))
             if 19 in m:  # misc: a chat line from the Mac
                 mi = parse(m[19][0])
                 if 4 in mi:
@@ -229,15 +246,128 @@ class Peer:
         assert err == b'Empty Password', err
         h1 = hashlib.sha256(password.encode() + salt).digest()
         h2 = hashlib.sha256(h1 + challenge).digest()
+        ft = field(7, 2, field(1, 2, b'')) if self.file_mode else b''
         self.send(field(7, 2, field(2, 2, h2) + field(4, 2, b'poke') + field(5, 2, b'cdvpoke') +
-                        field(11, 2, b'1.4.9') + field(13, 2, b'Linux')))
+                        ft + field(11, 2, b'1.4.9') + field(13, 2, b'Linux')))
         lr = parse(self.recv(10)[8][0])
         if 2 not in lr:
             raise SystemExit('login refused: %r' % lr.get(1))
         pi = parse(lr[2][0])
+        if self.file_mode:
+            print('logged in for files: %s, %s %s' % (pi[2][0].decode(), pi[3][0].decode(),
+                                                      pi[7][0].decode()))
+            return
         d = parse(pi[4][0])
         print('logged in: %s, %s %s, %dx%d' % (pi[2][0].decode(), pi[3][0].decode(),
                                               pi[7][0].decode(), d[3][0], d[4][0]))
+
+    # ---- file manager ------------------------------------------------------------
+
+    def file_wait(self, want, timeout=60):
+        """The next FileResponse/FileAction of kind (field, union) in `want`."""
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            while self.files:
+                fld, m = self.files.pop(0)
+                for k in m:
+                    if (fld, k) in want:
+                        return fld, k, parse(m[k][0])
+                    if (fld, k) == (18, 3):  # error
+                        e = parse(m[k][0])
+                        print('  error: %s (file %d)' % (
+                            e.get(2, [b''])[0].decode('utf-8', 'replace'),
+                            unzz(e.get(3, [0])[0])))
+                        if (18, 3) in want:
+                            return fld, k, e
+            self.pump(0.2)
+        raise SystemExit('no answer in %d s' % timeout)
+
+    def ls(self, path):
+        self.send(field(17, 2, field(1, 2, field(1, 2, path.encode()))))
+        _, _, d = self.file_wait({(18, 1), (18, 3)})
+        print('%s:' % d.get(2, [b'?'])[0].decode('utf-8', 'replace'))
+        for raw in d.get(3, []):
+            e = parse(raw)
+            kind = {0: 'dir ', 3: 'disk', 4: 'file'}.get(e.get(1, [0])[0], '?')
+            print('  %s %10d  %s%s' % (kind, e.get(4, [0])[0],
+                                      e.get(2, [b''])[0].decode('utf-8', 'replace'),
+                                      ' (hidden)' if e.get(3, [0])[0] else ''))
+
+    def get(self, remote, local):
+        import os
+        job = 7
+        self.send(field(17, 2, field(2, 2, field(1, 0, job) + field(2, 2, remote.encode()))))
+        _, _, d = self.file_wait({(18, 1), (18, 3)})
+        names = [parse(r).get(2, [b''])[0].decode() for r in d.get(3, [])]
+        print('  %d file(s)' % len(names))
+        out, cur, total = None, None, 0
+        t0 = time.time()
+        while True:
+            fld, k, m = self.file_wait({(18, 2), (18, 4), (18, 3)})
+            if k == 4:
+                break
+            if k == 3:
+                continue
+            num = unzz(m.get(2, [0])[0])
+            if num != cur:
+                if out:
+                    out.close()
+                name = names[num]
+                path = os.path.join(local, name) if name else local
+                os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+                out, cur = open(path, 'wb'), num
+                print('  %s' % path)
+            data = m.get(3, [b''])[0]
+            if m.get(4, [0])[0]:
+                import zstandard
+                data = zstandard.ZstdDecompressor().decompress(data)
+            out.write(data)
+            total += len(data)
+        if out:
+            out.close()
+        dt = time.time() - t0
+        print('  done: %d bytes in %.1f s (%.0f KB/s)' % (total, dt, total / 1024 / max(dt, 0.01)))
+
+    def put(self, local, remote):
+        import os
+        import zstandard
+        job = 9
+        data = open(local, 'rb').read()
+        mtime = int(os.path.getmtime(local))
+        entry = field(1, 0, 4) + field(2, 2, b'') + field(4, 0, len(data)) + field(5, 0, mtime)
+        self.send(field(17, 2, field(3, 2, field(1, 0, job) + field(2, 2, remote.encode()) +
+                                     field(3, 2, entry) + field(5, 0, len(data)))))
+        # The digest, as a 1.4.9 client sends it, and wait for the go-ahead.
+        self.send(field(18, 2, field(5, 2, field(1, 0, job) + field(2, 0, zz(0)) +
+                                     field(3, 0, mtime) + field(4, 0, len(data)) +
+                                     field(5, 0, 1))))
+        fld, k, m = self.file_wait({(17, 9), (18, 3)})
+        if k != 9:
+            return
+        print('  confirmed: %r' % {kk: v[0] for kk, v in m.items()})
+        t0 = time.time()
+        off = 0
+        while True:
+            chunk = data[off:off + 128 * 1024]
+            z = zstandard.ZstdCompressor(level=3).compress(chunk)
+            comp = len(z) < len(chunk)
+            blk = field(1, 0, job) + field(2, 0, zz(0)) + field(3, 2, z if comp else chunk)
+            if comp:
+                blk += field(4, 0, 1)
+            self.send(field(18, 2, field(2, 2, blk)))
+            off += len(chunk)
+            if off >= len(data):
+                break
+        self.send(field(18, 2, field(4, 2, field(1, 0, job) + field(2, 0, zz(0)))))
+        fld, k, m = self.file_wait({(18, 4), (18, 3)})
+        dt = time.time() - t0
+        print('  %s: %d bytes in %.1f s' % ('done' if k == 4 else 'failed', len(data), dt))
+
+    def simple(self, union, body, file_num_field=None):
+        job = 11
+        self.send(field(17, 2, field(union, 2, field(1, 0, job) + body)))
+        fld, k, m = self.file_wait({(18, 4), (18, 3)})
+        print('  %s' % ('done' if k == 4 else 'failed'))
 
     def mouse(self, mask, x=0, y=0):
         body = field(1, 0, mask)
@@ -261,13 +391,43 @@ class Peer:
 
 def main():
     argv = sys.argv[1:]
-    secure = argv[0] == '--secure'
-    if secure:
-        argv = argv[1:]
+    secure = '--secure' in argv
+    file_mode = '--files' in argv
+    argv = [a for a in argv if a not in ('--secure', '--files')]
     p = Peer(argv[0])
+    p.file_mode = file_mode
     if secure:
         p.handshake()
     p.login(argv[1])
+    if file_mode:
+        # The agent lists the folder the client asked to start in, unasked.
+        p.file_wait({(18, 1)})
+        args = argv[2:]
+        i = 0
+        while i < len(args):
+            op = args[i]
+            i += 1
+            print('%s %s' % (op, ' '.join(args[i:i + (2 if op in ('get', 'put', 'mv') else 1)])))
+            if op == 'ls':
+                p.ls(args[i]); i += 1
+            elif op == 'get':
+                p.get(args[i], args[i + 1]); i += 2
+            elif op == 'put':
+                p.put(args[i], args[i + 1]); i += 2
+            elif op == 'mkdir':
+                p.simple(4, field(2, 2, args[i].encode())); i += 1
+            elif op == 'rm':
+                p.simple(6, field(2, 2, args[i].encode())); i += 1
+            elif op == 'rmdir':
+                p.simple(5, field(2, 2, args[i].encode()) + field(3, 0, 1)); i += 1
+            elif op == 'mv':
+                p.simple(10, field(2, 2, args[i].encode()) + field(3, 2, args[i + 1].encode()))
+                i += 2
+            elif op == 'sleep':
+                p.pump(float(args[i])); i += 1
+            else:
+                raise SystemExit('unknown step ' + op)
+        return
     args = argv[2:]
     i = 0
 

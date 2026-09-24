@@ -86,6 +86,14 @@ typedef struct {
     void (*option)(void *user, int quality, int fps);
     /* The peer wants a screenshot: answer with cdv_screenshot_commit(). */
     void (*screenshot)(void *user);
+    /* The password was right: may this session go ahead? file_transfer: it
+     * is the client's file manager (LoginRequest.file_transfer), not a
+     * desktop. 0 refuses it (the peer is told another session is using the
+     * screen). NULL: every login goes ahead. */
+    int (*login)(void *user, int file_transfer);
+    /* A file-transfer session's FileAction (field 17) or FileResponse (18),
+     * raw -- see files.h. Valid only during the call. */
+    void (*file)(void *user, int field, const uint8_t *data, size_t n);
     void *user;
 } cdv_hooks;
 
@@ -138,10 +146,20 @@ typedef struct {
     char peer_platform[16];
     uint8_t shot_sid[64];     /* the screenshot request's sid, sent back with it */
     size_t shot_sid_len;
+    int file_mode;            /* a file-transfer session */
+    char ft_dir[256];         /* ...the directory it asked to start in */
+    int ft_hidden;
 } cdv_session;
 
 void cdv_init(cdv_session *s, uint8_t *out, size_t outcap, uint8_t *in, size_t incap,
               const cdv_hooks *hooks, const cdv_ident *id, uint32_t seed);
+/* The same with the control queue and the video frame given apart; vid may
+ * be NULL and come later (cdv_set_video), once the session is known to be a
+ * desktop. */
+void cdv_init2(cdv_session *s, uint8_t *ctl, size_t ctlcap, uint8_t *vid, size_t vidcap,
+               uint8_t *in, size_t incap, const cdv_hooks *hooks, const cdv_ident *id,
+               uint32_t seed);
+void cdv_set_video(cdv_session *s, uint8_t *vid, size_t vidcap);
 
 /* Queue the opening message. Call once the connection is up. `secure` for a
  * peer that came through the ID server: it will expect the key exchange. */
@@ -184,6 +202,13 @@ void cdv_send_cursor_pos(cdv_session *s, int x, int y);
 
 /* Close with a reason the client displays. */
 void cdv_close(cdv_session *s, const char *reason);
+
+/* For modules that build messages of their own (files.c): a message in the
+ * control queue, as pb.h builds it, and how much room is left there. */
+struct pbw;
+int cdv_msg_begin(cdv_session *s, struct pbw *w);
+int cdv_msg_end(cdv_session *s, struct pbw *w);
+size_t cdv_ctl_room(const cdv_session *s);
 
 /* A chat line to the peer (Misc.chat_message), UTF-8. */
 void cdv_send_chat(cdv_session *s, const char *utf8, size_t n);
