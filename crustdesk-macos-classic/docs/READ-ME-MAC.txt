@@ -60,6 +60,9 @@ sharing is off -- and its menu can stop, start or show C-Desk-Vint.
 Settings
 --------
 Sharing > Settings...:
+  Name        what the console's device list and peers call this Mac. Empty:
+              the computer name from Sharing Setup, or, if that is blank or
+              still "Macintosh", "Macintosh-" and the ID
   ID server   the RustDesk ID server (hbbs), "host" or "host:port"
   Server key  that server's public key
   Relay       leave empty to use the relay the ID server names

@@ -71,6 +71,7 @@ static struct {
     char relay[64];      /* hbbr override; "" to take the one hbbs names */
     char dns[20];        /* a DNS server, if the Mac's resolver is not enough */
     char api[96];        /* the console, for its device list; "" for none */
+    char name[64];       /* what peers and the console call this Mac; "" to derive it */
 } prefs;
 
 static WindowPtr win;
@@ -277,6 +278,8 @@ static void parse_prefs(char *text)
                 strncpy(prefs.key, eq, sizeof prefs.key - 1);
             else if (!strcmp(line, "relay"))
                 strncpy(prefs.relay, eq, sizeof prefs.relay - 1);
+            else if (!strcmp(line, "name"))
+                strncpy(prefs.name, eq, sizeof prefs.name - 1);
             else if (!strcmp(line, "api"))
                 strncpy(prefs.api, eq, sizeof prefs.api - 1);
             else if (!strcmp(line, "dns"))
@@ -328,11 +331,12 @@ static void write_prefs_file(void)
         return;
     len = snprintf(text, sizeof text,
                    "password=%s\rport=%u\rquality=%d\rgamma=%d\rcursor=%s\r"
-                   "id=%s\ruuid=%s\rseed=%s\rserver=%s\rkey=%s\rrelay=%s\rdns=%s\rapi=%s\r",
+                   "id=%s\ruuid=%s\rseed=%s\rserver=%s\rkey=%s\rrelay=%s\rdns=%s\rapi=%s\r"
+                   "name=%s\r",
                    prefs.password, prefs.port, prefs.q, prefs.gamma,
                    prefs.cursor_separate ? "separate" : "auto", prefs.id,
                    hex(prefs.uuid, 16, u), hex(prefs.seed, 32, k), prefs.server, prefs.key,
-                   prefs.relay, prefs.dns, prefs.api);
+                   prefs.relay, prefs.dns, prefs.api, prefs.name);
     if (len > (long)sizeof text - 1)
         len = sizeof text - 1;
     FSWrite(pb.ioParam.ioRefNum, &len, text);
@@ -429,7 +433,8 @@ static int have_dnr;
 static cdv_screen scr;
 static cdv_session sess;
 static cdv_ident ident;
-static char hostname[64], username[64];
+static char hostname[64], username[64]; /* Mac Roman */
+static char hostname_utf8[192];          /* for peers: protobuf strings are UTF-8 */
 static vp8e *enc;
 static void *encmem;
 static uint8_t *outq, *inq;
@@ -714,8 +719,8 @@ static void chores(void)
             snprintf(line, sizeof line, "Waiting: %s%s%s", rs[eng.rdv_state], c[0] ? "; " : "",
                      c[0] ? c + 9 : ""); /* past "console: " */
             set_status(line);
-            snprintf(line, sizeof line, "ID: %s%s", prefs.id,
-                     eng.rdv_state == RS_REGISTERED ? "" : "  (not registered)");
+            snprintf(line, sizeof line, "ID: %s%s  %s", prefs.id,
+                     eng.rdv_state == RS_REGISTERED ? "" : " (not registered)", hostname);
             set_id_line(line);
         }
         frames0 = eng.frames;
@@ -744,10 +749,24 @@ static void mac_name(short id, char *out, size_t cap, const char *fallback)
         strcpy(out, fallback);
 }
 
+/* This Mac's name for peers, LAN discovery and the console: the Name
+ * setting; else the Sharing Setup name -- unless that is blank or the
+ * "Macintosh" every Mac ships with, which would make a console's list a
+ * column of identical rows; then "Macintosh-" and the ID, which is unique. */
 static void mac_names(void)
 {
-    mac_name(-16413, hostname, sizeof hostname, "Macintosh");
+    size_t n;
     mac_name(-16096, username, sizeof username, "");
+    if (prefs.name[0]) {
+        strcpy(hostname, prefs.name);
+    } else {
+        mac_name(-16413, hostname, sizeof hostname, "");
+        if (!hostname[0] || !strcmp(hostname, "Macintosh"))
+            snprintf(hostname, sizeof hostname, "Macintosh-%s", prefs.id);
+    }
+    n = macroman_to_utf8((const uint8_t *)hostname, strlen(hostname), (uint8_t *)hostname_utf8,
+                         sizeof hostname_utf8 - 1);
+    hostname_utf8[n] = 0;
 }
 
 static void close_network(void)
@@ -903,7 +922,7 @@ static void agent_start(void)
     }
     net_addr_string(my_ip, a);
     snprintf(addr_line, sizeof addr_line, "Or by address: %s  (port %u)", a, prefs.port);
-    snprintf(line, sizeof line, "ID: %s", prefs.id);
+    snprintf(line, sizeof line, "ID: %s  %s", prefs.id, hostname);
     set_id_line(line);
     set_status("Starting");
     running = 1;
@@ -998,7 +1017,7 @@ static void about(void)
 /* ---- settings ------------------------------------------------------------------- */
 
 enum { S_SAVE = 1, S_CANCEL, S_SERVER = 4, S_KEY = 6, S_RELAY = 8, S_API = 10, S_PASSWORD = 12,
-       S_PORT = 14, S_QUALITY = 16, S_NEWPW = 18 };
+       S_PORT = 14, S_QUALITY = 16, S_NEWPW = 18, S_NAME = 20 };
 
 static void set_field(DialogPtr d, short item, const char *c)
 {
@@ -1117,7 +1136,7 @@ static pascal Boolean settings_filter(DialogPtr d, EventRecord *e, short *item)
 static void settings(void)
 {
     DialogPtr d = GetNewDialog(200, NULL, (WindowPtr)-1);
-    char num[16], pw[33], server[64], key[64], relay[64], api[96];
+    char num[16], pw[33], server[64], key[64], relay[64], api[96], name[64];
     short item = 0;
     if (!d) {
         say("the Settings dialog is missing from the application");
@@ -1127,6 +1146,7 @@ static void settings(void)
     set_field(d, S_KEY, prefs.key);
     set_field(d, S_RELAY, prefs.relay);
     set_field(d, S_API, prefs.api);
+    set_field(d, S_NAME, prefs.name[0] ? prefs.name : hostname);
     set_field(d, S_PASSWORD, prefs.password);
     snprintf(num, sizeof num, "%u", prefs.port);
     set_field(d, S_PORT, num);
@@ -1134,7 +1154,7 @@ static void settings(void)
     set_field(d, S_QUALITY, num);
     SetDialogDefaultItem(d, S_SAVE);
     SetDialogCancelItem(d, S_CANCEL);
-    SelectDialogItemText(d, S_SERVER, 0, 255);
+    SelectDialogItemText(d, S_NAME, 0, 255);
     ShowWindow(d);
     for (;;) {
         long port, q;
@@ -1171,17 +1191,24 @@ static void settings(void)
         get_field(d, S_KEY, key, sizeof key);
         get_field(d, S_RELAY, relay, sizeof relay);
         get_field(d, S_API, api, sizeof api);
+        get_field(d, S_NAME, name, sizeof name);
         get_field(d, S_PASSWORD, pw, sizeof pw);
         {
             /* The password is read at each login: changing it alone needs
              * no restart. Everything else is set up when sharing starts. */
             int restart = strcmp(server, prefs.server) || strcmp(key, prefs.key) ||
                           strcmp(relay, prefs.relay) || strcmp(api, prefs.api) ||
+                          strcmp(name, hostname) ||
                           port != prefs.port || q != prefs.q;
             strcpy(prefs.server, server);
             strcpy(prefs.key, key);
             strcpy(prefs.relay, relay);
             strcpy(prefs.api, api);
+            /* Kept only if it is not what would be derived anyway, so an
+             * untouched field goes on following Sharing Setup. */
+            if (strcmp(name, hostname) || prefs.name[0])
+                strcpy(prefs.name, name);
+            mac_names();
             strcpy(prefs.password, pw);
             prefs.port = (unsigned short)port;
             prefs.q = (int)q;
@@ -1355,7 +1382,7 @@ int main(void)
     mac_names();
     ident.password = prefs.password;
     ident.salt = "cdeskvint";
-    ident.hostname = hostname;
+    ident.hostname = hostname_utf8;
 
     inq = (uint8_t *)NewPtr(INQ_SIZE);
     err = inq ? open_video() : memFullErr;

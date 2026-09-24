@@ -62,6 +62,10 @@ compatibility layer, so this covers 7.5.5-9.2.2); the directory is
   Certificate dates come from the Mac's clock in UTC (ReadLocation), floored
   at the build date for Macs with flat PRAM batteries. `host/consoleprobe`
   runs the same code against a real console from Linux.
+- **The name** peers and the console see: `name=`, else Sharing Setup's
+  computer name unless blank or the stock "Macintosh" (a console would fill
+  with identical rows), else "Macintosh-<ID>". Peers get it as UTF-8
+  (`hostname_utf8`); it is Mac Roman everywhere else.
 - **Settings dialog** (Sharing > Settings..., DLOG 200) edits the prefs;
   a change other than the password restarts sharing (`agent_stop` /
   `agent_start`). Its filter does Cut/Copy/Paste itself with TextEdit traps.

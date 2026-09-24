@@ -35,9 +35,9 @@ resource 'SIZE' (-1) {
 
 /* Settings. Items: 1 Save, 2 Cancel, then label/field pairs (4 ID server,
  * 6 key, 8 relay, 10 console, 12 password, 14 port, 16 quality), 17 help,
- * 18 New Password. src/mac/settings.c knows these numbers. */
+ * 18 New Password, then 19/20 the name (first on screen, last in number). src/mac/settings.c knows these numbers. */
 resource 'DLOG' (200, "Settings") {
-    { 0, 0, 294, 416 },
+    { 0, 0, 320, 416 },
     movableDBoxProc,
     invisible,
     noGoAway,
@@ -49,42 +49,46 @@ resource 'DLOG' (200, "Settings") {
 
 resource 'DITL' (200) {
     {
-        { 262, 334, 282, 404 },
+        { 288, 334, 308, 404 },
         Button { enabled, "Save" };
-        { 262, 250, 282, 320 },
+        { 288, 250, 308, 320 },
         Button { enabled, "Cancel" };
-        { 15, 12, 31, 104 },
-        StaticText { disabled, "ID server:" };
-        { 14, 112, 30, 404 },
-        EditText { enabled, "" };
         { 41, 12, 57, 104 },
-        StaticText { disabled, "Server key:" };
+        StaticText { disabled, "ID server:" };
         { 40, 112, 56, 404 },
         EditText { enabled, "" };
         { 67, 12, 83, 104 },
-        StaticText { disabled, "Relay:" };
+        StaticText { disabled, "Server key:" };
         { 66, 112, 82, 404 },
         EditText { enabled, "" };
         { 93, 12, 109, 104 },
-        StaticText { disabled, "Console:" };
+        StaticText { disabled, "Relay:" };
         { 92, 112, 108, 404 },
         EditText { enabled, "" };
         { 119, 12, 135, 104 },
-        StaticText { disabled, "Password:" };
+        StaticText { disabled, "Console:" };
         { 118, 112, 134, 404 },
         EditText { enabled, "" };
         { 145, 12, 161, 104 },
-        StaticText { disabled, "Direct port:" };
+        StaticText { disabled, "Password:" };
         { 144, 112, 160, 404 },
         EditText { enabled, "" };
         { 171, 12, 187, 104 },
-        StaticText { disabled, "Quality:" };
+        StaticText { disabled, "Direct port:" };
         { 170, 112, 186, 404 },
         EditText { enabled, "" };
-        { 194, 12, 252, 404 },
-        StaticText { disabled, "Relay: empty to use the one the ID server names. Console: the API server whose device list shows this Mac (empty for none). Quality: 0 best, 127 smallest." };
-        { 262, 12, 282, 132 },
+        { 197, 12, 213, 104 },
+        StaticText { disabled, "Quality:" };
+        { 196, 112, 212, 404 },
+        EditText { enabled, "" };
+        { 220, 12, 278, 404 },
+        StaticText { disabled, "Name: shown in the console and to peers. Relay: empty for the one the ID server names. Console: the API server's URL, or empty. Quality: 0 best to 127 smallest." };
+        { 288, 12, 308, 132 },
         Button { enabled, "New Password" };
+        { 15, 12, 31, 104 },
+        StaticText { disabled, "Name:" };
+        { 14, 112, 30, 404 },
+        EditText { enabled, "" };
     }
 };
 
