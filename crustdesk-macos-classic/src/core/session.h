@@ -75,6 +75,15 @@ typedef struct {
     void (*key)(void *user, const cdv_key *k);
     void (*clipboard)(void *user, const char *utf8, size_t n);
     void (*log)(void *user, const char *msg);
+    /* Optional (NULL: not offered). A chat line from the peer, UTF-8. */
+    void (*chat)(void *user, const char *utf8, size_t n);
+    /* The peer asked for this machine to restart. */
+    void (*restart)(void *user);
+    /* The peer's view settings: quality 0..127 (VP8 quantiser, -1 unchanged),
+     * frames a second (0 unchanged). */
+    void (*option)(void *user, int quality, int fps);
+    /* The peer wants a screenshot: answer with cdv_screenshot_commit(). */
+    void (*screenshot)(void *user);
     void *user;
 } cdv_hooks;
 
@@ -125,6 +134,8 @@ typedef struct {
     char peer_name[64];
     char peer_version[16];
     char peer_platform[16];
+    uint8_t shot_sid[64];     /* the screenshot request's sid, sent back with it */
+    size_t shot_sid_len;
 } cdv_session;
 
 void cdv_init(cdv_session *s, uint8_t *out, size_t outcap, uint8_t *in, size_t incap,
@@ -171,5 +182,15 @@ void cdv_send_cursor_pos(cdv_session *s, int x, int y);
 
 /* Close with a reason the client displays. */
 void cdv_close(cdv_session *s, const char *reason);
+
+/* A chat line to the peer (Misc.chat_message), UTF-8. */
+void cdv_send_chat(cdv_session *s, const char *utf8, size_t n);
+
+/* The screenshot, in the video frame's buffer (so a big PNG is not copied):
+ * cdv_big_begin() reserves it like cdv_video_begin() and says how much fits;
+ * cdv_screenshot_commit() sends what was written there (len 0 and `err` to
+ * say why there is none). */
+uint8_t *cdv_big_begin(cdv_session *s, size_t *cap);
+void cdv_screenshot_commit(cdv_session *s, size_t len, const char *err);
 
 #endif

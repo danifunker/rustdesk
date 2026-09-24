@@ -12,7 +12,7 @@ NACLSRC := $(shell find $(NACL) -name '*.c')
 NACLINC := -I$(NACL)/include -I$(NACL)/include/sodium -I$(CORE) -I../third_party/bearssl/inc
 CORESRC := $(CORE)/vp8enc.c $(CORE)/pb.c $(CORE)/sha256.c $(CORE)/session.c $(CORE)/yuv.c \
            $(CORE)/macroman.c $(CORE)/rng.c $(CORE)/rdv.c $(CORE)/dns.c $(CORE)/console.c \
-           $(CORE)/https.c $(CORE)/anchors.c $(NACLSRC)
+           $(CORE)/https.c $(CORE)/anchors.c $(CORE)/png.c $(NACLSRC)
 BSSL    := ../third_party/bearssl
 BSSLSRC := $(shell find $(BSSL)/src -name '*.c')
 BSSLOBJ := $(patsubst $(BSSL)/src/%.c,$(B)/bearssl/%.o,$(BSSLSRC))
@@ -51,6 +51,7 @@ $(B)/vp8dump: vp8dump.c | $(B)
 
 test: all
 	$(B)/test_core
+	python3 test_png.py
 	python3 test_crypto.py $(B)/test_crypto
 	$(B)/test_vp8 16 | tail -1
 	$(B)/test_vp8 0 | tail -1

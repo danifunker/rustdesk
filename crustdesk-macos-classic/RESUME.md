@@ -90,6 +90,22 @@ boot from Startup Items, the strip module's icon states and menu (Stop
 Sharing from it), the menus, the Settings dialog and its restart, console
 listing from both halves.
 
+## 2c. Chat, screenshots, the wheel, view settings, restart
+
+- **Screenshots**: `src/core/png.c` (deflate of its own: LZ77 + fixed
+  Huffman, streaming rows; `host/test_png.py` checks it with PIL). The engine
+  lends the main loop the video frame's buffer (`shot`, SHOT_*), the main loop
+  writes the PNG there from `screen_read_row`, the engine sends it
+  (`cdv_screenshot_commit`). ~10 KB and 66 ms for a 640x480 desktop.
+- **Chat**: `chat_in`/`chat_out` like the clipboard; a modeless window (DLOG
+  500) with a user item for the history; Notification Manager beep and mark
+  in the background.
+- **Wheel**: Page Up/Down (arrows sideways), throttled; y > 0 is up.
+- **View settings**: OptionMessage (login and Misc) -> `engine_set_view`: q
+  and a scan interval; they last one session.
+- **Restart**: an Apple Event to the Finder ('FNDR' 'rest'), so programs
+  quit properly; refused under Classic (the OS X Finder would restart it all).
+
 ## 2a. The ID server
 
 Registration (UDP to hbbs), PunchHole/RequestRelay -> relay (hbbr), and

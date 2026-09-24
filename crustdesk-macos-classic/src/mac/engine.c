@@ -18,6 +18,9 @@
 engine_flags eng;
 engine_name name_q;
 engine_clip clip_out, clip_in;
+engine_chat chat_out, chat_in;
+engine_shot shot;
+static int scan_ms = SCAN_MS; /* the peer's frames a second, as a scan interval */
 
 static engine_ctx X;
 static uint32_t conn_count;
@@ -176,7 +179,21 @@ static void video_step(void)
         /* A still screen is scanned less often, which is most of the time: a
          * full compare is tens of milliseconds on a 68040. Input from the
          * peer is the best predictor of change, so it resets the pace. */
-        if (now - V.last < (V.still >= IDLE_AFTER ? SCAN_IDLE_MS : SCAN_MS) ||
+        /* A screenshot borrows the frame buffer between frames. */
+        if (shot.state == SHOT_WANTED && X.sess->vstate == VID_FREE) {
+            shot.buf = cdv_big_begin(X.sess, &shot.cap);
+            if (shot.buf)
+                shot.state = SHOT_LENT;
+        }
+        if (shot.state == SHOT_DONE) {
+            if (shot.conn == conn_count)
+                cdv_screenshot_commit(X.sess, shot.len, shot.err[0] ? shot.err : NULL);
+            shot.state = SHOT_NONE;
+            return;
+        }
+        if (shot.state != SHOT_NONE)
+            return;
+        if (now - V.last < (V.still >= IDLE_AFTER ? SCAN_IDLE_MS : (uint32_t)scan_ms) ||
             X.sess->vstate != VID_FREE)
             return;
         V.last = now;
@@ -353,7 +370,12 @@ static void attach(cdv_tcp *t, int secure)
     memset(&C, 0, sizeof C);
     C.sum = 0xFFFFFFFF;
     memset(&V, 0, sizeof V);
+    X.q = X.q_base;       /* the last peer's view settings go with it */
     V.q = X.q;
+    vp8e_set_q(X.enc, V.q);
+    scan_ms = SCAN_MS;
+    if (shot.state == SHOT_WANTED)
+        shot.state = SHOT_NONE; /* asked for by the last peer */
     vp8e_abandon(X.enc); /* the first frame of a session is a keyframe */
 }
 
@@ -383,6 +405,10 @@ static void session_step(void)
         if (clip_out.ready) {
             cdv_send_clipboard(X.sess, clip_out.text, clip_out.len);
             clip_out.ready = 0;
+        }
+        if (chat_out.ready) {
+            cdv_send_chat(X.sess, chat_out.text, chat_out.len);
+            chat_out.ready = 0;
         }
         video_step();
         cursor_step();
@@ -731,9 +757,31 @@ static void lan_step(void)
 
 /* ---- the tick ------------------------------------------------------------- */
 
+void engine_screenshot_request(void)
+{
+    if (shot.state == SHOT_NONE) {
+        shot.err[0] = 0;
+        shot.len = 0;
+        shot.conn = conn_count;
+        shot.state = SHOT_WANTED;
+    }
+}
+
+void engine_set_view(int quality, int fps)
+{
+    if (quality >= 0 && quality <= 127) {
+        X.q = quality;
+        V.q = quality;
+        vp8e_set_q(X.enc, quality);
+    }
+    if (fps > 0)
+        scan_ms = 1000 / fps < SCAN_MS ? SCAN_MS : 1000 / fps;
+}
+
 void engine_setup(const engine_ctx *ctx)
 {
     X = *ctx;
+    X.q_base = X.q;
     /* Also a restart (Stop, then Start, or new settings): nothing of the last
      * run's streams survives -- they were released and made again. */
     S = NULL;

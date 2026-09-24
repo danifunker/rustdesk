@@ -52,7 +52,23 @@ Sharing: Stop Sharing / Start Sharing takes the Mac off the network and puts
   it back; Disconnect Peer ends the current session; Copy ID and Copy
   Password put them on the clipboard; New Password makes one up (the old one
   stops working); Settings... (Command-;) is below.
+  Chat... opens the chat window (it also opens by itself when the person at
+  the other end writes; in the background, C-Desk-Vint beeps and marks its
+  menu).
 File: Hide Status Window (Command-W) and Show Status Window; Quit.
+
+From the other computer
+-----------------------
+- Screenshots (the client's screenshot button) come as PNG pictures of
+  exactly what the Mac's monitor shows.
+- Chat, both ways.
+- The scroll wheel: this system has no scroll events, so the wheel sends
+  Page Up and Page Down (and, sideways, the arrow keys) -- which scroll in
+  almost every program.
+- The client's image quality and frame rate settings are followed.
+- "Restart remote device" restarts the Mac the way Special > Restart does,
+  so every program is asked to quit first (not from Classic under Mac OS X,
+  where it would restart the whole machine).
 The Control Strip module shows the same state -- the screen in its little
 Mac is dark while someone is connected, grey while waiting, crossed out when
 sharing is off -- and its menu can stop, start or show C-Desk-Vint.

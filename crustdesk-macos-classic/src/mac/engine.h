@@ -45,6 +45,7 @@ typedef struct {
     volatile int rdv_state;     /* RS_* */
     volatile int rdv_refused;   /* RegisterPkResponse result when refused */
     volatile unsigned long server_ip;
+    volatile int restart_req;   /* the peer asked for a restart */
     volatile unsigned long frames, bytes, ticks;
 } engine_flags;
 
@@ -74,6 +75,7 @@ typedef struct {
     uint8_t *outq, *inq;
     size_t outcap, incap;
     int q;
+    int q_base;              /* q as set up; a peer's settings last one session */
 } engine_ctx;
 
 void engine_setup(const engine_ctx *ctx);
@@ -101,6 +103,35 @@ typedef struct {
 } engine_clip;
 extern engine_clip clip_out; /* main -> peer */
 extern engine_clip clip_in;  /* peer -> main */
+
+/* Chat, a line at a time each way; one writer each, like the clipboard. */
+#define CHAT_MAX 512
+typedef struct {
+    char text[CHAT_MAX];
+    volatile size_t len;
+    volatile int ready;
+} engine_chat;
+extern engine_chat chat_out; /* main -> peer */
+extern engine_chat chat_in;  /* peer -> main */
+
+/* A screenshot. The peer asks (WANTED); the engine lends the main loop the
+ * video frame's buffer once no frame is in it (LENT: buf, cap); the main loop
+ * writes a PNG there (DONE: len, or err) and the engine sends it. Video waits
+ * meanwhile, so the buffer has one user at a time. */
+enum { SHOT_NONE, SHOT_WANTED, SHOT_LENT, SHOT_DONE };
+typedef struct {
+    volatile int state;
+    uint8_t *buf;
+    size_t cap;
+    volatile size_t len;
+    char err[64];
+    unsigned long conn;         /* the session it is for */
+} engine_shot;
+extern engine_shot shot;
+
+/* From the session's hooks (deferred-task time). */
+void engine_screenshot_request(void);
+void engine_set_view(int quality, int fps);
 
 /* A name for the main loop to look up with the Mac's own resolver: the
  * engine asks, the main loop answers (ans 1 with ip, or -1). If the main loop

@@ -50,6 +50,7 @@ add_application(C-Desk-Vint
     src/core/dns.c
     src/core/console.c
     src/core/https.c
+    src/core/png.c
     src/core/anchors.c
     ${CDV_NACL_SOURCES}
     ${CDV_BEARSSL_SOURCES}

@@ -8,6 +8,8 @@
 #include "../src/core/console.h"
 #include "../src/core/https.h"
 #include "../src/core/session.h"
+#include "../src/core/png.h"
+#include <stdlib.h>
 #include <sodium.h>
 
 #include <stdio.h>
@@ -277,6 +279,111 @@ int main(void)
             total++;
         }
         CHECK(ok && total == 3 && opened == 3);
+    }
+
+    /* A screenshot and a chat line, as a client would decode them. */
+    {
+        static uint8_t out[64 * 1024], in[1024];
+        static cdv_session s;
+        static const cdv_ident id = { "1", NULL, "pw", "salt", "host", 64, 64, 1 };
+        const uint8_t *p;
+        size_t n, cap;
+        uint8_t *big;
+        int found_data = 0, found_sid = 0, found_chat = 0;
+        pbr r, sr;
+        cdv_init(&s, out, sizeof out, in, sizeof in, NULL, &id, 1);
+        s.state = CDV_LIVE;
+        memcpy(s.shot_sid, "sid-7", 5);
+        s.shot_sid_len = 5;
+        big = cdv_big_begin(&s, &cap);
+        CHECK(big && cap > 1000);
+        memcpy(big, "\x89PNG-ish", 8);
+        cdv_screenshot_commit(&s, 8, NULL);
+        p = cdv_out_peek(&s, &n);
+        CHECK(n > 3 && (p[0] & 3) == 0 && (size_t)(p[0] >> 2) == n - 1);
+        pbr_init(&r, p + 1, n - 1);
+        while (pbr_next(&r))
+            if (r.field == 30 && r.wire == PB_LEN) {
+                pbr_init(&sr, r.data, r.len);
+                while (pbr_next(&sr)) {
+                    if (sr.field == 3 && sr.len == 8 && !memcmp(sr.data, "\x89PNG-ish", 8))
+                        found_data = 1;
+                    if (sr.field == 1 && sr.len == 5 && !memcmp(sr.data, "sid-7", 5))
+                        found_sid = 1;
+                }
+            }
+        CHECK(found_data && found_sid);
+        cdv_out_consume(&s, n);
+        cdv_send_chat(&s, "hello", 5);
+        p = cdv_out_peek(&s, &n);
+        pbr_init(&r, p + 1, n - 1);
+        while (pbr_next(&r))
+            if (r.field == 19 && r.wire == PB_LEN) { /* misc */
+                pbr_init(&sr, r.data, r.len);
+                while (pbr_next(&sr))
+                    if (sr.field == 4 && sr.wire == PB_LEN) { /* chat_message */
+                        pbr t;
+                        pbr_init(&t, sr.data, sr.len);
+                        while (pbr_next(&t))
+                            if (t.field == 1 && t.len == 5 && !memcmp(t.data, "hello", 5))
+                                found_chat = 1;
+                    }
+            }
+        CHECK(found_chat);
+    }
+
+    /* PNG: an indexed and an RGB picture, written for test_png.py to decode
+     * and compare with the raw pixels written beside them. Flat areas,
+     * stripes, noise and a repeated pattern: every path the matcher has. */
+    {
+        int w = 301, h = 203, x, y, idx;
+        size_t cap = 2 * 1024 * 1024, n;
+        png_writer *pw = malloc(png_writer_size());
+        uint8_t *out = malloc(cap), *row = malloc((size_t)w * 3);
+        static uint8_t pal[256][3];
+        uint32_t seed = 12345;
+        for (idx = 0; idx < 2; idx++) {
+            FILE *raw = fopen(idx ? "build/t24.raw" : "build/t8.raw", "wb"), *f;
+            for (x = 0; x < 256; x++) {
+                pal[x][0] = (uint8_t)x;
+                pal[x][1] = (uint8_t)(255 - x);
+                pal[x][2] = (uint8_t)(x * 7);
+            }
+            png_begin(pw, out, cap, w, h, idx ? NULL : (const uint8_t(*)[3])pal, 256);
+            for (y = 0; y < h; y++) {
+                for (x = 0; x < w * (idx ? 3 : 1); x++) {
+                    uint8_t v;
+                    if (y < 50)
+                        v = 200;                        /* flat */
+                    else if (y < 100)
+                        v = (uint8_t)((x / 7) * 13);    /* stripes */
+                    else if (y < 150) {
+                        seed = seed * 1103515245u + 12345u;
+                        v = (uint8_t)(seed >> 16);      /* noise */
+                    } else
+                        v = (uint8_t)((x ^ y) & 0x55);  /* a pattern */
+                    row[x] = v;
+                }
+                png_row(pw, row);
+                fwrite(row, 1, (size_t)w * (idx ? 3 : 1), raw);
+            }
+            n = png_end(pw);
+            fclose(raw);
+            CHECK(n > 0);
+            f = fopen(idx ? "build/t24.png" : "build/t8.png", "wb");
+            fwrite(out, 1, n, f);
+            fclose(f);
+        }
+        {
+            /* Too small a buffer is a clean 0, not an overrun. */
+            png_begin(pw, out, 100, w, h, NULL, 0);
+            for (y = 0; y < h; y++)
+                png_row(pw, row);
+            CHECK(png_end(pw) == 0);
+        }
+        free(pw);
+        free(out);
+        free(row);
     }
 
     printf("%s\n", fails ? "FAIL" : "PASS: core");

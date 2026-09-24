@@ -23,6 +23,7 @@
 #include "../core/rdv.h"
 #include "../core/rng.h"
 #include "../core/sha256.h"
+#include "../core/png.h"
 #include "../core/session.h"
 #include "../core/vp8enc.h"
 
@@ -82,6 +83,11 @@ static int quit;
 static int running;  /* on the network: Sharing > Start/Stop Sharing */
 static int video_ok; /* the screen and encoder are set up */
 static void set_menus(void);
+static DialogPtr chat_dlg;
+static int te_command(DialogPtr d, char c);
+static void chat_show(void);
+static void chat_event(EventRecord *ev);
+static void chat_unnotify(void);
 
 /* ---- the window ------------------------------------------------------------ */
 
@@ -475,7 +481,40 @@ static void hook_log(void *u, const char *m)
     engine_log(m); /* the engine's context: no drawing from here */
 }
 
-static const cdv_hooks hooks = { hook_mouse, hook_key, hook_clipboard, hook_log, NULL };
+/* Deferred-task time, like the clipboard: park it for the main loop. */
+static void hook_chat(void *u, const char *utf8, size_t n)
+{
+    (void)u;
+    if (chat_in.ready)
+        return; /* the last line is not shown yet */
+    if (n > CHAT_MAX - 1)
+        n = CHAT_MAX - 1;
+    memcpy(chat_in.text, utf8, n);
+    chat_in.len = n;
+    chat_in.ready = 1;
+}
+
+static void hook_restart(void *u)
+{
+    (void)u;
+    eng.restart_req = 1; /* the main loop asks the Finder */
+}
+
+static void hook_option(void *u, int quality, int fps)
+{
+    (void)u;
+    engine_set_view(quality, fps);
+}
+
+static void hook_screenshot(void *u)
+{
+    (void)u;
+    engine_screenshot_request();
+}
+
+static const cdv_hooks hooks = { hook_mouse,  hook_key,     hook_clipboard, hook_log,
+                                 hook_chat,   hook_restart, hook_option,    hook_screenshot,
+                                 NULL };
 
 /* Room for a keyframe of a busy screen: about a byte a pixel at q 16. */
 static size_t queue_size(const cdv_screen *s)
@@ -665,6 +704,9 @@ static void renew(cdv_tcp *t, int have);
 
 static void agent_start(void);
 static void agent_stop(void);
+static void chat_received(const char *utf8, size_t n);
+static void restart_mac(void);
+static void take_screenshot(void);
 
 /* The engine asks for a name (the ID server's, a relay's): the Mac's
  * resolver, polled, never waited on. The engine gives up and asks DNS
@@ -713,6 +755,16 @@ static void chores(void)
         say(m);
     clipboard_chores();
 
+    if (chat_in.ready) {
+        chat_received(chat_in.text, chat_in.len);
+        chat_in.ready = 0;
+    }
+    if (eng.restart_req) {
+        eng.restart_req = 0;
+        restart_mac();
+    }
+    if (shot.state == SHOT_LENT)
+        take_screenshot();
     switch (strip_command()) {
     case STRIP_CMD_START:
         agent_start();
@@ -1002,8 +1054,8 @@ static void agent_stop(void)
 enum { M_APPLE = 128, M_FILE, M_EDIT, M_SHARING };
 enum { F_WINDOW = 1, F_QUIT = 3 };
 enum { E_UNDO = 1, E_CUT = 3, E_COPY, E_PASTE, E_CLEAR };
-enum { SH_TOGGLE = 1, SH_DISCONNECT, SH_COPY_ID = 4, SH_COPY_PASSWORD, SH_NEW_PASSWORD,
-       SH_SETTINGS = 8 };
+enum { SH_TOGGLE = 1, SH_DISCONNECT, SH_CHAT, SH_COPY_ID = 5, SH_COPY_PASSWORD,
+       SH_NEW_PASSWORD, SH_SETTINGS = 9 };
 
 static void enable(MenuHandle m, short item, int on)
 {
@@ -1025,11 +1077,13 @@ static void set_menus(void)
     SetMenuItemText(file, F_WINDOW,
                     win && ((WindowPeek)win)->visible ? "\pHide Status Window"
                                                       : "\pShow Status Window");
-    enable(edit, 0, da); /* the whole menu: only a desk accessory has anything to edit */
+    /* The whole menu: a desk accessory, or the chat's reply field. */
+    enable(edit, 0, da || (chat_dlg && FrontWindow() == chat_dlg));
     SetMenuItemText(sh, SH_TOGGLE, running ? "\pStop Sharing" : "\pStart Sharing");
     enable(sh, SH_TOGGLE, video_ok);
     enable(sh, SH_DISCONNECT, running && eng.live);
     enable(sh, SH_COPY_ID, prefs.id[0]);
+    enable(sh, SH_CHAT, running && eng.live);
     DrawMenuBar();
 }
 
@@ -1142,44 +1196,8 @@ static pascal Boolean settings_filter(DialogPtr d, EventRecord *e, short *item)
         *item = S_CANCEL;
         return true;
     }
-    if (!(e->modifiers & cmdKey) || !te)
+    if (!(e->modifiers & cmdKey) || !te || !te_command(d, c))
         return false;
-    if (c == 'a' || c == 'A') {
-        TESetSelect(0, 32767, te);
-    } else if (c == 'c' || c == 'C' || c == 'x' || c == 'X') {
-        TEPtr t = *te;
-        /* Nothing selected: the whole field. A double-click selects a
-         * "word", and a base64 key's '+' and '/' end words part-way. */
-        if (t->selEnd == t->selStart && (c == 'c' || c == 'C'))
-            TESetSelect(0, 32767, te);
-        t = *te;
-        if (t->selEnd > t->selStart) {
-            HLock(t->hText);
-            ZeroScrap();
-            PutScrap(t->selEnd - t->selStart, 'TEXT', *t->hText + t->selStart);
-            HUnlock((*te)->hText);
-            if (c == 'x' || c == 'X')
-                TEDelete(te);
-            export_scrap(); /* to the peer now, not when the dialog closes */
-        }
-    } else if (c == 'v' || c == 'V') {
-        Handle h = NewHandle(0);
-        long off, n = h ? GetScrap(h, 'TEXT', &off) : -1;
-        if (n > 0) {
-            /* One line of it: these fields hold a host, a key, a number. */
-            long i;
-            HLock(h);
-            for (i = 0; i < n && (*h)[i] != '\r' && (*h)[i] != '\n'; i++)
-                ;
-            TEDelete(te);
-            TEInsert(*h, i, te);
-            HUnlock(h);
-        }
-        if (h)
-            DisposeHandle(h);
-    } else {
-        return false;
-    }
     *item = 0; /* handled: nothing for ModalDialog's caller */
     return true;
 }
@@ -1289,7 +1307,7 @@ static void make_menus(void)
     AppendMenu(file, "\p(-");
     AppendMenu(file, "\pQuit/Q");
     AppendMenu(edit, "\pUndo/Z;(-;Cut/X;Copy/C;Paste/V;Clear");
-    AppendMenu(sh, "\pStop Sharing;Disconnect Peer;(-;Copy ID;Copy Password;New Password;(-");
+    AppendMenu(sh, "\pStop Sharing;Disconnect Peer;Chat...;(-;Copy ID;Copy Password;New Password;(-");
     AppendMenu(sh, "\pSettings.../;");
     InsertMenu(apple, 0);
     InsertMenu(file, 0);
@@ -1325,7 +1343,13 @@ static void menu_choice(long choice)
         }
         break;
     case M_EDIT:
-        SystemEdit(item - 1); /* for a desk accessory in front */
+        if (chat_dlg && FrontWindow() == chat_dlg) {
+            static const char cmd[] = { 0, 'z', 0, 'x', 'c', 'v', 'b' };
+            if (item < (short)sizeof cmd && cmd[item])
+                te_command(chat_dlg, cmd[item]);
+        } else {
+            SystemEdit(item - 1); /* for a desk accessory in front */
+        }
         break;
     case M_SHARING:
         switch (item) {
@@ -1354,10 +1378,336 @@ static void menu_choice(long choice)
         case SH_SETTINGS:
             settings();
             break;
+        case SH_CHAT:
+            chat_show();
+            break;
         }
         break;
     }
     HiliteMenu(0);
+}
+
+/* ---- editing in a dialog's text field ------------------------------------------- */
+
+/* Cmd-A/C/X/V on a dialog's current field, with TextEdit's own calls (the
+ * Dialog Manager's DialogCut and friends are glue this toolchain lacks) and
+ * the desk scrap, so text moves to and from other programs -- and the peer.
+ * 'z' (Undo) does nothing: TextEdit keeps no undo. Returns 1 if it acted. */
+static int te_command(DialogPtr d, char c)
+{
+    TEHandle te = ((DialogPeek)d)->textH;
+    if (!te)
+        return 0;
+    if (c == 'A')
+        c = 'a';
+    if (c == 'C' || c == 'X' || c == 'V')
+        c = (char)(c + 32);
+    if (c == 'a') {
+        TESetSelect(0, 32767, te);
+    } else if (c == 'c' || c == 'x') {
+        TEPtr t = *te;
+        /* Nothing selected: the whole field. A double-click selects a
+         * "word", and a base64 key's '+' and '/' end words part-way. */
+        if (t->selEnd == t->selStart && c == 'c')
+            TESetSelect(0, 32767, te);
+        t = *te;
+        if (t->selEnd > t->selStart) {
+            HLock(t->hText);
+            ZeroScrap();
+            PutScrap(t->selEnd - t->selStart, 'TEXT', *t->hText + t->selStart);
+            HUnlock((*te)->hText);
+            if (c == 'x')
+                TEDelete(te);
+            export_scrap(); /* to the peer now: a dialog holds up the main loop */
+        }
+    } else if (c == 'v') {
+        Handle h = NewHandle(0);
+        long off, n = h ? GetScrap(h, 'TEXT', &off) : -1;
+        if (n > 0) {
+            /* One line of it: every field here holds one. */
+            long i;
+            HLock(h);
+            for (i = 0; i < n && (*h)[i] != '\r' && (*h)[i] != '\n'; i++)
+                ;
+            TEDelete(te);
+            TEInsert(*h, i, te);
+            HUnlock(h);
+        }
+        if (h)
+            DisposeHandle(h);
+    } else if (c == 'b') { /* Clear */
+        TEDelete(te);
+    } else {
+        return 0;
+    }
+    return 1;
+}
+
+/* ---- chat -------------------------------------------------------------------------- */
+
+/* A modeless window: what was said, a reply field, Send. Items (DLOG 500):
+ * 1 Send, 2 the reply, 3 the history (a user item drawn here). */
+enum { CH_SEND = 1, CH_REPLY, CH_HISTORY };
+#define CHAT_LINES 24
+static char chat_hist[CHAT_LINES][160]; /* Mac Roman, "Name: text" */
+static int chat_n;
+#define nmType 8 /* the Notification Manager's queue type; Multiversal lacks it */
+static NMRec chat_nm;
+static int chat_nm_on;
+
+static void chat_add(const char *who, const char *text)
+{
+    if (chat_n == CHAT_LINES) {
+        memmove(chat_hist[0], chat_hist[1], sizeof chat_hist[0] * (CHAT_LINES - 1));
+        chat_n--;
+    }
+    snprintf(chat_hist[chat_n], sizeof chat_hist[0], "%s: %s", who, text);
+    chat_n++;
+}
+
+/* The history, newest at the bottom, each line wrapped to the box. */
+static pascal void chat_draw(DialogPtr d, short item)
+{
+    short type;
+    Handle h;
+    Rect r;
+    int i, y;
+    GetDialogItem(d, CH_HISTORY, &type, &h, &r);
+    (void)item;
+    EraseRect(&r);
+    FrameRect(&r);
+    TextFont(1);
+    TextSize(9);
+    y = r.bottom - 5;
+    for (i = chat_n - 1; i >= 0 && y > r.top + 11; i--) {
+        /* Break the line into pieces that fit, then draw them bottom-up. */
+        const char *t = chat_hist[i];
+        int starts[16], lens[16], np = 0, len = (int)strlen(t), pos = 0, k;
+        short width = (short)(r.right - r.left - 8);
+        while (pos < len && np < 16) {
+            int fit = 0, last_space = -1;
+            while (pos + fit < len && TextWidth((Ptr)t, (short)pos, (short)(fit + 1)) <= width) {
+                if (t[pos + fit] == ' ')
+                    last_space = fit;
+                fit++;
+            }
+            if (pos + fit < len && last_space > 0)
+                fit = last_space + 1;
+            if (!fit)
+                fit = 1;
+            starts[np] = pos;
+            lens[np] = fit;
+            np++;
+            pos += fit;
+        }
+        for (k = np - 1; k >= 0 && y > r.top + 11; k--) {
+            MoveTo(r.left + 4, y);
+            DrawText((Ptr)t, (short)starts[k], (short)lens[k]);
+            y -= 11;
+        }
+    }
+    TextFont(0);
+    TextSize(0);
+}
+
+static void chat_redraw(void)
+{
+    GrafPtr old;
+    if (!chat_dlg)
+        return;
+    GetPort(&old);
+    SetPort(chat_dlg);
+    chat_draw(chat_dlg, CH_HISTORY);
+    SetPort(old);
+}
+
+static int chat_make(void)
+{
+    static UserItemUPP draw_upp;
+    short type;
+    Handle h;
+    Rect r;
+    if (chat_dlg)
+        return 1;
+    chat_dlg = GetNewDialog(500, NULL, (WindowPtr)-1);
+    if (!chat_dlg)
+        return 0;
+    if (!draw_upp)
+        draw_upp = NewUserItemUPP(chat_draw);
+    GetDialogItem(chat_dlg, CH_HISTORY, &type, &h, &r);
+    SetDialogItem(chat_dlg, CH_HISTORY, userItem, (Handle)draw_upp, &r);
+    SetDialogDefaultItem(chat_dlg, CH_SEND);
+    return 1;
+}
+
+static void chat_show(void)
+{
+    if (!chat_make())
+        return;
+    {
+        Str255 title;
+        char t[96];
+        size_t n;
+        snprintf(t, sizeof t, "Chat with %s", sess.peer_name[0] ? sess.peer_name : "the peer");
+        n = strlen(t);
+        title[0] = (unsigned char)n;
+        memcpy(title + 1, t, n);
+        SetWTitle(chat_dlg, title);
+    }
+    ShowWindow(chat_dlg);
+    SelectWindow(chat_dlg);
+    chat_unnotify();
+}
+
+static void chat_unnotify(void)
+{
+    if (chat_nm_on) {
+        NMRemove(&chat_nm);
+        chat_nm_on = 0;
+    }
+}
+
+/* In the background, a line arrives: a beep and the application menu's
+ * mark, as the Notification Manager does it; the window shows once we are
+ * in front. */
+static void chat_notify(void)
+{
+    ProcessSerialNumber me, front;
+    Boolean same = false;
+    if (GetCurrentProcess(&me) == noErr && cdv_get_front_process(&front) == noErr)
+        SameProcess(&me, &front, &same);
+    if (same || chat_nm_on)
+        return;
+    memset(&chat_nm, 0, sizeof chat_nm);
+    chat_nm.qType = nmType;
+    chat_nm.nmMark = 1;
+    chat_nm.nmSound = (Handle)-1; /* the system alert sound */
+    if (NMInstall(&chat_nm) == noErr)
+        chat_nm_on = 1;
+}
+
+static void chat_received(const char *utf8, size_t n)
+{
+    char mr[CHAT_MAX], line[100];
+    size_t k = utf8_to_macroman((const uint8_t *)utf8, n, (uint8_t *)mr, sizeof mr - 1);
+    mr[k] = 0;
+    chat_add(sess.peer_name[0] ? sess.peer_name : "Peer", mr);
+    snprintf(line, sizeof line, "chat: %.80s", mr);
+    say(line);
+    chat_show();
+    chat_redraw();
+    chat_notify();
+}
+
+static void chat_send(void)
+{
+    short type;
+    Handle h;
+    Rect r;
+    Str255 p;
+    char mr[256];
+    size_t n;
+    GetDialogItem(chat_dlg, CH_REPLY, &type, &h, &r);
+    GetDialogItemText(h, p);
+    if (!p[0])
+        return;
+    if (chat_out.ready || !eng.live) {
+        SysBeep(10); /* the last line is still going, or nobody to send to */
+        return;
+    }
+    memcpy(mr, p + 1, p[0]);
+    mr[p[0]] = 0;
+    n = macroman_to_utf8((const uint8_t *)mr, p[0], (uint8_t *)chat_out.text, CHAT_MAX - 1);
+    chat_out.len = n;
+    chat_out.ready = 1;
+    chat_add("You", mr);
+    SetDialogItemText(h, "\p");
+    chat_redraw();
+}
+
+static void chat_event(EventRecord *ev)
+{
+    DialogPtr d;
+    short item;
+    if (ev->what == keyDown || ev->what == autoKey) {
+        char c = (char)(ev->message & charCodeMask);
+        if (c == '\r' || c == 3) {
+            chat_send();
+            return;
+        }
+    }
+    if (DialogSelect(ev, &d, &item) && d == chat_dlg && item == CH_SEND)
+        chat_send();
+}
+
+/* ---- restart, for the peer ---------------------------------------------------------- */
+
+/* The Finder's own Restart (an Apple Event to it), so every program is asked
+ * to quit and can ask to save -- ShutDwnStart would not ask. Not under Mac
+ * OS X: 'MACS' there is the OS X Finder, and it would restart the whole
+ * machine rather than Classic. */
+static void restart_mac(void)
+{
+    AEAddressDesc finder;
+    AppleEvent ae, reply;
+    OSType sig = 'MACS';
+    long v;
+    OSErr err;
+    if (Gestalt('bbox', &v) == noErr) {
+        say("the peer asked for a restart; not from Classic under Mac OS X");
+        return;
+    }
+    say("the peer asked for a restart");
+    err = AECreateDesc(typeApplSignature, &sig, sizeof sig, &finder);
+    if (err == noErr) {
+        err = AECreateAppleEvent('FNDR', 'rest', &finder, kAutoGenerateReturnID,
+                                 kAnyTransactionID, &ae);
+        if (err == noErr) {
+            err = AESend(&ae, &reply, kAENoReply, kAENormalPriority, kAEDefaultTimeout, NULL,
+                         NULL);
+            AEDisposeDesc(&ae);
+        }
+        AEDisposeDesc(&finder);
+    }
+    if (err != noErr)
+        ShutDwnStart(); /* no Finder to ask */
+}
+
+/* ---- screenshots -------------------------------------------------------------------- */
+
+/* The engine has lent the video buffer (shot.buf): write the PNG there. */
+static void take_screenshot(void)
+{
+    static png_writer *pw;
+    static uint8_t pal[256][3];
+    uint8_t *row;
+    unsigned long t0 = TickCount();
+    int y, n;
+    char line[80];
+    if (!pw)
+        pw = (png_writer *)NewPtr((long)png_writer_size());
+    row = (uint8_t *)NewPtr((long)scr.width * 3);
+    shot.len = 0;
+    if (!pw || !row) {
+        strcpy(shot.err, "Not enough memory on the Mac for a screenshot");
+    } else {
+        n = screen_palette(&scr, pal);
+        png_begin(pw, shot.buf, shot.cap, scr.width, scr.height,
+                  n ? (const uint8_t(*)[3])pal : NULL, n);
+        for (y = 0; y < scr.height; y++) {
+            screen_read_row(&scr, y, row);
+            png_row(pw, row);
+        }
+        shot.len = png_end(pw);
+        if (!shot.len)
+            strcpy(shot.err, "The screenshot was too big to send");
+    }
+    if (row)
+        DisposePtr((Ptr)row);
+    snprintf(line, sizeof line, "screenshot: %lu KB in %lu ms", (unsigned long)shot.len / 1024,
+             (TickCount() - t0) * 50 / 3);
+    say(line);
+    shot.state = SHOT_DONE;
 }
 
 /* ---- Apple Events ------------------------------------------------------------- */
@@ -1413,22 +1763,44 @@ static void handle_event(EventRecord *ev)
         }
         else if (part == inSysWindow)
             SystemClick(ev, w);
-        else if (part == inDrag && w == win) {
+        else if (part == inDrag && (w == win || (chat_dlg && w == chat_dlg))) {
             Rect bounds = qd.screenBits.bounds;
             DragWindow(w, ev->where, &bounds);
-        } else if (part == inContent && w != FrontWindow())
+        } else if (part == inGoAway && chat_dlg && w == chat_dlg) {
+            if (TrackGoAway(w, ev->where))
+                HideWindow(w);
+        } else if (part == inContent && w != FrontWindow()) {
             SelectWindow(w);
+        } else if (part == inContent && chat_dlg && w == chat_dlg) {
+            chat_event(ev);
+        }
         break;
     case keyDown:
+    case autoKey:
         if (ev->modifiers & cmdKey) {
             set_menus();
             menu_choice(MenuKey((char)(ev->message & charCodeMask)));
+        } else if (chat_dlg && FrontWindow() == chat_dlg) {
+            chat_event(ev);
         }
+        break;
+    case activateEvt:
+        if (chat_dlg && (WindowPtr)ev->message == chat_dlg)
+            chat_event(ev);
+        break;
+    case osEvt:
+        /* Brought to the front: a waiting chat notification has done its job. */
+        if (((ev->message >> 24) & 0xFF) == 1 && (ev->message & 1))
+            chat_unnotify();
         break;
     case kHighLevelEvent:
         AEProcessAppleEvent(ev);
         break;
     case updateEvt:
+        if (chat_dlg && (WindowPtr)ev->message == chat_dlg) {
+            chat_event(ev);
+            break;
+        }
         if ((WindowPtr)ev->message == win) {
             BeginUpdate(win);
             redraw();

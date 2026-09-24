@@ -73,6 +73,72 @@ static void build_palette(cdv_screen *s, yuv_clut *dst)
     yuv_clut_build(dst, (const uint8_t(*)[3])rgb, n);
 }
 
+/* ---- for screenshots (main loop) ----------------------------------------------- */
+
+int screen_palette(cdv_screen *s, uint8_t pal[256][3])
+{
+    PixMapHandle pm = main_pixmap();
+    CTabHandle ct = (**pm).pmTable;
+    int i, n = 0;
+    if (s->depth > 8 || !ct)
+        return 0;
+    n = (**ct).ctSize + 1;
+    if (n > 256)
+        n = 256;
+    for (i = 0; i < n; i++) {
+        const RGBColor *c = &(**ct).ctTable[i].rgb;
+        pal[i][0] = s->gamma[0][c->red >> 8];
+        pal[i][1] = s->gamma[1][c->green >> 8];
+        pal[i][2] = s->gamma[2][c->blue >> 8];
+    }
+    return n;
+}
+
+void screen_read_row(cdv_screen *s, int y, uint8_t *dst)
+{
+    const uint8_t *src = s->base + (long)y * s->rowbytes;
+    int x, w = s->width;
+#if !(defined(__powerpc__) || defined(__ppc__))
+    char mode = 1; /* true32b */
+    int swapped = 0;
+    if (!LM_MMU32BIT) {
+        SwapMMUMode((Byte *)&mode);
+        swapped = 1;
+    }
+#endif
+    switch (s->depth) {
+    case 1: case 2: case 4: {
+        int d = s->depth, per = 8 / d, mask = (1 << d) - 1;
+        for (x = 0; x < w; x++)
+            dst[x] = (uint8_t)((src[x / per] >> ((per - 1 - x % per) * d)) & mask);
+        break;
+    }
+    case 8:
+        memcpy(dst, src, (size_t)w);
+        break;
+    case 16:
+        for (x = 0; x < w; x++) {
+            unsigned v = (unsigned)src[2 * x] << 8 | src[2 * x + 1];
+            unsigned r = (v >> 10) & 31, g = (v >> 5) & 31, b = v & 31;
+            dst[3 * x] = s->gamma[0][(r << 3) | (r >> 2)];
+            dst[3 * x + 1] = s->gamma[1][(g << 3) | (g >> 2)];
+            dst[3 * x + 2] = s->gamma[2][(b << 3) | (b >> 2)];
+        }
+        break;
+    default: /* 32: xRGB */
+        for (x = 0; x < w; x++) {
+            dst[3 * x] = s->gamma[0][src[4 * x + 1]];
+            dst[3 * x + 1] = s->gamma[1][src[4 * x + 2]];
+            dst[3 * x + 2] = s->gamma[2][src[4 * x + 3]];
+        }
+        break;
+    }
+#if !(defined(__powerpc__) || defined(__ppc__))
+    if (swapped)
+        SwapMMUMode((Byte *)&mode);
+#endif
+}
+
 OSErr screen_open(cdv_screen *s, int use_gamma)
 {
     PixMapHandle pm = main_pixmap();

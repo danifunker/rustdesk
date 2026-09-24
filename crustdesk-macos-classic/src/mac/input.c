@@ -166,8 +166,30 @@ void input_mouse(int mask, int x, int y)
         }
         break;
     }
+    case 3: { /* wheel: y > 0 up, x > 0 left (RustDesk's own server flips
+               * both for enigo on non-Windows systems) */
+        /* No scroll events on this system: Page Up and Page Down scroll in
+         * almost every program that scrolls, and the arrows sideways. At
+         * most one every tenth of a second, or a fast spin queues pages. */
+        static unsigned long last;
+        cdv_key k;
+        if (TickCount() - last < 6 || (!x && !y))
+            break;
+        last = TickCount();
+        memset(&k, 0, sizeof k);
+        k.down = 1;
+        k.press = 1;
+        k.kind = KEY_CONTROL;
+        k.mode = KMODE_MAP;
+        if (y)
+            k.value = y > 0 ? CK_PAGEUP : CK_PAGEDOWN;
+        else
+            k.value = x > 0 ? CK_LEFT : CK_RIGHT;
+        input_key(&k);
+        break;
+    }
     default:
-        break; /* wheel, trackpad: no scroll events on this system */
+        break; /* trackpad gestures, relative moves: nothing to map to */
     }
 }
 

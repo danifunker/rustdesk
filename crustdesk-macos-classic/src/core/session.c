@@ -548,11 +548,13 @@ int cdv_take_refresh(cdv_session *s)
 
 /* ---- inbound ---------------------------------------------------------------- */
 
+static void option(cdv_session *s, const uint8_t *b, size_t n);
+
 static void login(cdv_session *s, const uint8_t *b, size_t n)
 {
     pbr r;
-    const uint8_t *pw = NULL;
-    size_t pwlen = 0;
+    const uint8_t *pw = NULL, *login_option = NULL;
+    size_t pwlen = 0, login_option_len = 0;
 
     pbr_init(&r, b, n);
     while (pbr_next(&r)) {
@@ -561,6 +563,9 @@ static void login(cdv_session *s, const uint8_t *b, size_t n)
         if (r.field == 2) {
             pw = r.data;
             pwlen = r.len;
+        } else if (r.field == 6) {
+            login_option = r.data;
+            login_option_len = r.len;
         } else if (r.field == 5 || r.field == 11 || r.field == 13) {
             char *dst = r.field == 5 ? s->peer_name : r.field == 11 ? s->peer_version : s->peer_platform;
             size_t cap = r.field == 5    ? sizeof s->peer_name
@@ -615,6 +620,8 @@ static void login(cdv_session *s, const uint8_t *b, size_t n)
     send_peer_info(s);
     s->state = CDV_LIVE;
     s->refresh = 1;
+    if (login_option)
+        option(s, login_option, login_option_len);
     say3(s, s->peer_name, " logged in, client ",
          s->peer_version[0] ? s->peer_version : "unknown");
 }
@@ -698,13 +705,53 @@ static void mouse_event(cdv_session *s, const uint8_t *b, size_t n)
         s->hooks->mouse(s->hooks->user, mask, x, y);
 }
 
+/* OptionMessage: image_quality (2 Low, 3 Balanced, 4 Best), a custom
+ * quality in percent, and frames a second. */
+static void option(cdv_session *s, const uint8_t *b, size_t n)
+{
+    pbr r;
+    int quality = -1, fps = 0;
+    pbr_init(&r, b, n);
+    while (pbr_next(&r)) {
+        if (r.field == 1 && r.wire == PB_VARINT) {
+            if (r.v == 2)
+                quality = 40;
+            else if (r.v == 3)
+                quality = 16;
+            else if (r.v == 4)
+                quality = 4;
+        } else if (r.field == 6 && r.wire == PB_VARINT) {
+            /* Newer clients pack a percentage in the low byte. */
+            int pct = (int)(r.v & 0xFF);
+            if (pct > 0 && pct <= 100)
+                quality = 60 - pct * 58 / 100; /* 10% -> 55, 100% -> 2 */
+        } else if (r.field == 11 && r.wire == PB_VARINT && r.v > 0 && r.v <= 120) {
+            fps = (int)r.v;
+        }
+    }
+    if ((quality >= 0 || fps) && s->hooks->option)
+        s->hooks->option(s->hooks->user, quality, fps);
+}
+
 static void misc(cdv_session *s, const uint8_t *b, size_t n)
 {
     pbr r;
     pbr_init(&r, b, n);
     while (pbr_next(&r)) {
-        if ((r.field == 10 && r.v) || r.field == 31)
+        if ((r.field == 10 && r.v) || r.field == 31) {
             s->refresh = 1;
+        } else if (r.field == 4 && r.wire == PB_LEN) { /* chat_message */
+            pbr c;
+            pbr_init(&c, r.data, r.len);
+            while (pbr_next(&c))
+                if (c.field == 1 && c.wire == PB_LEN && s->hooks->chat)
+                    s->hooks->chat(s->hooks->user, (const char *)c.data, c.len);
+        } else if (r.field == 7 && r.wire == PB_LEN) {
+            option(s, r.data, r.len);
+        } else if (r.field == 14 && r.wire == PB_VARINT && r.v) { /* restart_remote_device */
+            if (s->hooks->restart)
+                s->hooks->restart(s->hooks->user);
+        }
     }
 }
 
@@ -758,6 +805,16 @@ static void screenshot(cdv_session *s, const uint8_t *b, size_t n)
     pbw w;
     pbr r;
     pbr_init(&r, b, n);
+    if (s->hooks->screenshot) {
+        s->shot_sid_len = 0;
+        while (pbr_next(&r))
+            if (r.field == 2 && r.wire == PB_LEN && r.len <= sizeof s->shot_sid) {
+                memcpy(s->shot_sid, r.data, r.len);
+                s->shot_sid_len = r.len;
+            }
+        s->hooks->screenshot(s->hooks->user);
+        return;
+    }
     if (!msg_begin(s, &w))
         return;
     pbw_begin(&w, M_SCREENSHOT_RESPONSE);
@@ -887,4 +944,69 @@ void cdv_tick(cdv_session *s, uint32_t now_ms)
         s->delay_sent = now_ms;
         s->delay_outstanding = 1;
     }
+}
+
+void cdv_send_chat(cdv_session *s, const char *utf8, size_t n)
+{
+    pbw w;
+    if (s->state != CDV_LIVE || !msg_begin(s, &w))
+        return;
+    pbw_begin(&w, M_MISC);
+    pbw_begin(&w, 4); /* chat_message */
+    pbw_bytes(&w, 1, (const uint8_t *)utf8, n);
+    pbw_end(&w);
+    pbw_end(&w);
+    msg_end(s, &w);
+}
+
+#define BIG_SUFFIX 160 /* the sid and a message after the data, and the MAC */
+
+uint8_t *cdv_big_begin(cdv_session *s, size_t *cap)
+{
+    if (s->state != CDV_LIVE || s->vstate != VID_FREE || s->vidcap < VIDEO_PREFIX + BIG_SUFFIX + 64)
+        return NULL;
+    s->vstate = VID_ENCODING;
+    *cap = s->vidcap - VIDEO_PREFIX - BIG_SUFFIX;
+    return s->vid + VIDEO_PREFIX;
+}
+
+/* Message{screenshot_response(30): {data(3), sid(1), msg(2)}}, built around
+ * the data where it lies. Fields may come in any order; data goes first so
+ * its headers fit in front of it. */
+void cdv_screenshot_commit(cdv_session *s, size_t len, const char *err)
+{
+    uint8_t *data = s->vid + VIDEO_PREFIX, *p = data + len, pre[VIDEO_PREFIX], *msg, h[4];
+    size_t inner, l0, n = 0, hl, total, el = err ? strlen(err) : 0;
+    if (el > 96)
+        el = 96;
+    if (s->shot_sid_len) {
+        *p++ = (1 << 3) | PB_LEN;
+        p += pb_put_varint(p, s->shot_sid_len);
+        memcpy(p, s->shot_sid, s->shot_sid_len);
+        p += s->shot_sid_len;
+    }
+    if (el) {
+        *p++ = (2 << 3) | PB_LEN;
+        p += pb_put_varint(p, el);
+        memcpy(p, err, el);
+        p += el;
+    }
+    inner = (size_t)(p - data) + 1 + pb_varint_size(len);
+    pre[n++] = (uint8_t)(((M_SCREENSHOT_RESPONSE << 3) | PB_LEN) | 0x80); /* field 30: */
+    pre[n++] = (uint8_t)(((M_SCREENSHOT_RESPONSE << 3) | PB_LEN) >> 7);  /* two bytes */
+    n += pb_put_varint(pre + n, inner);
+    pre[n++] = (3 << 3) | PB_LEN; /* data */
+    n += pb_put_varint(pre + n, len);
+    l0 = n + (size_t)(p - data);
+    msg = data - n;
+    memcpy(msg, pre, n);
+    total = s->enc ? l0 + MAC : l0;
+    s->vmsg = (size_t)(msg - s->vid);
+    s->vmsglen = l0;
+    s->vneedseal = s->enc;
+    hl = frame_header(h, total);
+    memcpy(msg - hl, h, hl);
+    s->voff = (size_t)(msg - hl - s->vid);
+    s->vlen = (size_t)(msg + total - s->vid);
+    s->vstate = VID_READY;
 }

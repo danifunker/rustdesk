@@ -50,6 +50,12 @@ int screen_geometry_changed(const cdv_screen *s);
 /* Rebuild and publish the colour table if it changed. */
 void screen_check_palette(cdv_screen *s);
 
+/* For a screenshot (main loop). screen_palette: the colours as the monitor
+ * shows them, for indexed depths (the count; 0 for direct depths).
+ * screen_read_row: row y as 8-bit indices (depth <= 8) or R G B. */
+int screen_palette(cdv_screen *s, uint8_t pal[256][3]);
+void screen_read_row(cdv_screen *s, int y, uint8_t *dst);
+
 /* Engine. Compare macroblock rows [my0, my1) and mark what changed, or all of
  * them. In the one row `band`, also mark what changed since that row was last
  * refined and is not already exact: coding it again against the peer's

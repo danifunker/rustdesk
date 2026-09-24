@@ -114,7 +114,7 @@ resource 'CDVt' (0) {
 
 /* About C-Desk-Vint: ^0 the ID, ^1 which half and when it was built. */
 resource 'ALRT' (400) {
-    { 0, 0, 170, 380 },
+    { 0, 0, 212, 400 },
     400,
     {
         OK, visible, silent;
@@ -127,11 +127,34 @@ resource 'ALRT' (400) {
 
 resource 'DITL' (400) {
     {
-        { 138, 290, 158, 368 },
+        { 180, 310, 200, 388 },
         Button { enabled, "OK" };
-        { 12, 64, 130, 368 },
+        { 12, 64, 170, 388 },
         StaticText { disabled, "C-Desk-Vint 0.1d\rRustDesk for classic Mac OS: System 7.5.5 to Mac OS 9.2.2, 68k and PowerPC (^1).\r\rThis Mac's ID: ^0\r\rUses libsodium (ISC) and BearSSL (MIT)." };
         { 12, 16, 44, 48 },
         Icon { disabled, 128 };
+    }
+};
+
+/* Chat: 1 Send, 2 the reply, 3 the history (drawn by src/mac/main.c). */
+resource 'DLOG' (500, "Chat") {
+    { 0, 0, 236, 360 },
+    noGrowDocProc,
+    invisible,
+    goAway,
+    0x0,
+    500,
+    "Chat",
+    alertPositionMainScreen
+};
+
+resource 'DITL' (500) {
+    {
+        { 206, 284, 226, 350 },
+        Button { enabled, "Send" };
+        { 208, 12, 224, 272 },
+        EditText { enabled, "" };
+        { 10, 10, 196, 350 },
+        UserItem { disabled };
     }
 };

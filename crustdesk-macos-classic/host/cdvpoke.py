@@ -24,6 +24,12 @@ Steps:
     clip TEXT         put TEXT on the Mac's clipboard (Clipboard, uncompressed)
     save FILE         from now on, append every VP8 frame to FILE (4-byte
                       big-endian length, then the data) for host/build/vp8dump
+    chat TEXT         a chat line to the Mac (Misc.chat_message)
+    shot FILE         ask for a screenshot, wait for it, write the PNG to FILE
+    wheel DY [DX]     a wheel event (DY > 0 up, DX > 0 left)
+    quality N         image_quality: 2 Low, 3 Balanced, 4 Best
+    fps N             custom_fps
+    restart           ask the Mac to restart (Misc.restart_remote_device)
 
 Only the handful of protobuf fields involved are encoded, by hand.
 """
@@ -118,6 +124,7 @@ class Peer:
         self.save = None
         self.cursors, self.positions = [], []
         self.box_key = None  # set by the secure handshake
+        self.shot = None
 
     def send(self, body):
         if self.box_key:
@@ -191,6 +198,15 @@ class Peer:
                     print('clipboard from the Mac (%s, %s): %r' % (
                         'multi' if f == 28 else 'single',
                         'compressed' if c.get(1, [0])[0] else 'plain', text.decode('utf-8', 'replace')))
+            if 19 in m:  # misc: a chat line from the Mac
+                mi = parse(m[19][0])
+                if 4 in mi:
+                    text = parse(mi[4][0]).get(1, [b''])[0]
+                    print('chat from the Mac: %r' % text.decode('utf-8', 'replace'))
+            if 30 in m:  # screenshot_response
+                sr = parse(m[30][0])
+                self.shot = (sr.get(3, [b''])[0], sr.get(2, [b''])[0].decode('utf-8', 'replace'),
+                             sr.get(1, [b''])[0])
             if 12 in m:  # cursor_data
                 cd = parse(m[12][0])
                 self.cursors.append(cd)
@@ -290,6 +306,38 @@ def main():
         elif op == 'save':
             p.save = open(args[i], 'wb')
             i += 1
+        elif op == 'chat':
+            p.send(field(19, 2, field(4, 2, field(1, 2, args[i].encode('utf-8')))))
+            i += 1
+        elif op == 'shot':
+            p.shot = None
+            p.send(field(29, 2, field(1, 0, 0) + field(2, 2, b'cdvpoke')))
+            t0 = time.time()
+            while p.shot is None and time.time() - t0 < 60:
+                p.pump(0.5)
+            if p.shot is None:
+                print('no screenshot in 60 s')
+            else:
+                data, msg, sid = p.shot
+                print('screenshot: %d bytes, sid %r, %s, %.1f s' % (
+                    len(data), sid.decode('utf-8', 'replace'), msg or 'no error', time.time() - t0))
+                if data:
+                    open(args[i], 'wb').write(data)
+            i += 1
+        elif op == 'wheel':
+            dy = int(args[i])
+            i += 1
+            dx = 0
+            if i < len(args) and args[i].lstrip('-').isdigit():
+                dx = int(args[i])
+                i += 1
+            p.mouse(3, dx, dy)
+        elif op in ('quality', 'fps'):
+            num = 1 if op == 'quality' else 11
+            p.send(field(19, 2, field(7, 2, field(num, 0, int(args[i])))))
+            i += 1
+        elif op == 'restart':
+            p.send(field(19, 2, field(14, 0, 1)))
         elif op == 'refresh':
             p.send(field(19, 2, field(10, 0, 1)))
         elif op == 'frames':
