@@ -34,6 +34,7 @@ add_application(C-Desk-Vint
     src/mac/traps.c
     src/mac/cursor.c
     src/mac/mem.c
+    src/mac/dnr.c
     ${CDV_ARCH_SOURCES}
     src/core/session.c
     src/core/pb.c
@@ -42,6 +43,7 @@ add_application(C-Desk-Vint
     src/core/macroman.c
     src/core/rng.c
     src/core/rdv.c
+    src/core/dns.c
     ${CDV_NACL_SOURCES}
     src/core/vp8enc.c
     rsrc/cdeskvint.r
@@ -67,7 +69,25 @@ if(CDV_68K)
     # Loader must never be asked to bring anything in.
     target_link_options(C-Desk-Vint PRIVATE -m${CDV_CPU} -msoft-float -Wl,-gc-sections
         -Wl,--mac-single)
+    # Elf2Mac lays .data straight after .text, but the startup code finds
+    # the data and the relocation table at their linked addresses: any gap
+    # between the two (an over-aligned .data) and every global, and every
+    # relocation, lands a few bytes off -- a crash before main. libsodium
+    # aligns two tables to 16 for SIMD, which a 68k has none of.
+    target_compile_options(C-Desk-Vint PRIVATE "-DCRYPTO_ALIGN(x)=")
+    add_custom_command(TARGET C-Desk-Vint POST_BUILD
+        COMMAND ${CMAKE_OBJDUMP} -h $<TARGET_FILE:C-Desk-Vint>.gdb > sections.txt
+        COMMAND ${CMAKE_COMMAND} -DSECTIONS=sections.txt
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/check-sections.cmake
+        VERBATIM)
 else()
     target_compile_options(C-Desk-Vint PRIVATE -mcpu=750)
     target_link_options(C-Desk-Vint PRIVATE -Wl,-gc-sections)
+endif()
+
+# An ID server other than the public one, as the default for a fresh prefs file.
+set(CDV_SERVER "" CACHE STRING "default ID server, host[:port]")
+set(CDV_KEY "" CACHE STRING "that server's public key")
+if(CDV_SERVER)
+    target_compile_definitions(C-Desk-Vint PRIVATE DEFAULT_SERVER="${CDV_SERVER}" DEFAULT_KEY="${CDV_KEY}")
 endif()

@@ -17,6 +17,9 @@
 # a PRAM image with 32-bit addressing on, and qm.py, the monitor client. See
 # docs/TESTING.md for where each came from.
 #
+# QEMU_EXTRA adds arguments: "-d int -D int.log" logs every exception, which
+# is how to find where a bus error happened without a debugger on the Mac.
+#
 # ICOUNT=5 paces the CPU at roughly a real 33 MHz 68040 (one instruction per
 # 32 ns), which is what makes timings mean anything; without it QEMU runs
 # several times faster than the hardware.
@@ -70,7 +73,7 @@ start)
         -nic user,model=dp83932,hostfwd=tcp:127.0.0.1:$port-:21118 \
         -display none -vnc 127.0.0.1:${VNC:-23} \
         -monitor unix:mon.sock,server,nowait ${ICOUNT:+-icount shift=$ICOUNT,align=off} \
-        > qemu.log 2>&1 &
+        ${QEMU_EXTRA:-} > qemu.log 2>&1 &
     echo $! > qemu.pid
     echo "booting (pid $(cat qemu.pid)); agent will be on 127.0.0.1:$port"
     ;;

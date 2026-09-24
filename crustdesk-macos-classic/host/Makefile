@@ -10,7 +10,7 @@ NACL    := ../third_party/libsodium-min
 NACLSRC := $(shell find $(NACL) -name '*.c')
 NACLINC := -I$(NACL)/include -I$(NACL)/include/sodium -I$(CORE)
 CORESRC := $(CORE)/vp8enc.c $(CORE)/pb.c $(CORE)/sha256.c $(CORE)/session.c $(CORE)/yuv.c \
-           $(CORE)/macroman.c $(CORE)/rng.c $(CORE)/rdv.c $(NACLSRC)
+           $(CORE)/macroman.c $(CORE)/rng.c $(CORE)/rdv.c $(CORE)/dns.c $(NACLSRC)
 B       := build
 
 all: $(B)/test_vp8 $(B)/hostagent $(B)/test_core $(B)/vp8dump $(B)/test_crypto

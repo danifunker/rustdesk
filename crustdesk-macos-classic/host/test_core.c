@@ -3,6 +3,8 @@
 #include "../src/core/sha256.h"
 #include "../src/core/yuv.h"
 #include "../src/core/macroman.h"
+#include "../src/core/dns.h"
+#include "../src/core/rdv.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -105,6 +107,37 @@ int main(void)
         CHECK(nb == sizeof mac && !memcmp(back, mac, sizeof mac));
         nb = utf8_to_macroman((const uint8_t *)"a\r\nb\xe2\x82\xac", 7, back, sizeof back);
         CHECK(nb == 4 && back[1] == '\r' && back[3] == 0xDB); /* the euro, since Mac OS 8.5 */
+    }
+
+    /* DNS: a query, and an answer with a CNAME before the A record. */
+    {
+        uint8_t q[128], a[128];
+        uint32_t ip = 0;
+        size_t n = dns_query(q, sizeof q, 0x1234, "relay.home.dani.tech");
+        static const uint8_t ans_tail[] = {
+            0xC0, 0x0C, 0, 5, 0, 1, 0, 0, 0, 60, 0, 2, 0xC0, 0x0C, /* CNAME -> itself */
+            0xC0, 0x0C, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 50, 4, 7, 36 /* A */
+        };
+        CHECK(n == 12 + 22 + 4 && q[12] == 5 && !memcmp(q + 13, "relay", 5));
+        memcpy(a, q, n);
+        a[2] = 0x81;
+        a[3] = 0x80;
+        a[7] = 2; /* two answers */
+        memcpy(a + n, ans_tail, sizeof ans_tail);
+        CHECK(dns_answer(a, n + sizeof ans_tail, 0x1234, &ip) == 1 && ip == 0x32040724);
+        CHECK(dns_answer(a, n + sizeof ans_tail, 0x9999, &ip) == 0);
+        CHECK(dns_parse_ip("192.168.99.67", &ip) && ip == 0xC0A86343);
+        CHECK(!dns_parse_ip("relay.home.dani.tech", &ip));
+    }
+
+    /* hbbs's address mangling round-trips (rendezvous.rs mangle/unmangle). */
+    {
+        uint8_t m[16];
+        uint32_t ip;
+        uint16_t port;
+        size_t n = rdv_mangle(0xC0A86343, 21118, 0x9e3779b9u, m);
+        rdv_unmangle(m, n, &ip, &port);
+        CHECK(ip == 0xC0A86343 && port == 21118);
     }
 
     printf("%s\n", fails ? "FAIL" : "PASS: core");

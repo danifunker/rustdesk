@@ -1,5 +1,5 @@
-/* The part of MacTCP's interface C-Desk-Vint uses: TCP streams on the .IPP
- * driver, and the driver's own address.
+/* The part of MacTCP's interface C-Desk-Vint uses: TCP and UDP streams on
+ * the .IPP driver, and the driver's own address.
  *
  * Retro68's Multiversal Interfaces have no MacTCP.h. These declarations are
  * the ABI -- the parameter blocks cross into MacTCP, so their layout is fixed
@@ -33,6 +33,7 @@ typedef struct {
 /* Driver control codes. */
 enum {
     ipctlGetAddr = 15,
+    UDPCreate = 20, UDPRead = 21, UDPBfrReturn = 22, UDPWrite = 23, UDPRelease = 24,
     TCPCreate = 30, TCPPassiveOpen = 31, TCPActiveOpen = 32, TCPSend = 34,
     TCPNoCopyRcv = 35, TCPRcvBfrReturn = 36, TCPRcv = 37, TCPClose = 38,
     TCPAbort = 39, TCPStatus = 40, TCPRelease = 42
@@ -138,6 +139,58 @@ typedef struct {
     ip_addr ourAddress;
     long ourNetMask;
 } IPGetAddrPB;
+
+typedef unsigned short udp_port;
+
+typedef struct {
+    Ptr rcvBuff;
+    unsigned long rcvBuffLen;
+    ProcPtr notifyProc;
+    unsigned short localPort;
+    Ptr userDataPtr;
+    udp_port endingPort;
+} UDPCreatePB;
+
+typedef struct {
+    unsigned short reserved;
+    ip_addr remoteHost;
+    udp_port remotePort;
+    Ptr wdsPtr;
+    Boolean checkSum;
+    SInt8 filler;
+    unsigned short sendLength;
+    Ptr userDataPtr;
+    udp_port localPort;
+} UDPSendPB;
+
+typedef struct {
+    unsigned short timeOut; /* seconds */
+    ip_addr remoteHost;
+    udp_port remotePort;
+    Ptr rcvBuff;
+    unsigned short rcvBuffLen;
+    unsigned short secondTimeStamp;
+    Ptr userDataPtr;
+    ip_addr destHost;
+    udp_port destPort;
+} UDPReceivePB;
+
+typedef struct {
+    SInt8 fill12[12];
+    ProcPtr ioCompletion;
+    volatile short ioResult;
+    Ptr ioNamePtr;
+    short ioVRefNum;
+    short ioCRefNum;
+    short csCode;
+    StreamPtr udpStream;
+    union {
+        UDPCreatePB create;
+        UDPSendPB send;
+        UDPReceivePB receive;
+        char pad[64];
+    } csParam;
+} UDPiopb;
 
 #if defined(__powerpc__) || defined(__ppc__)
 #pragma pack(pop)

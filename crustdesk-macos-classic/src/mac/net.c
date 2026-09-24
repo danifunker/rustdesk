@@ -3,33 +3,26 @@
 #include <stdio.h>
 #include <string.h>
 
-#define STREAM_BUFFER (32 * 1024L) /* MacTCP's own buffer for the stream */
-#define RX_BUFFER (8 * 1024)
-#define SEND_CHUNK 16384           /* per TCPSend; one wdsEntry holds < 64 KB */
-#define ULP_TIMEOUT 60             /* seconds of unacknowledged data before giving up */
+#define ULP_TIMEOUT 60   /* seconds of unacknowledged data before giving up */
+#define SEND_CHUNK 16384 /* per TCPSend; one wdsEntry holds < 64 KB */
+#define CONNECT_TIMEOUT 10
 
-static void pb_prep(cdv_net *n, TCPiopb *pb, short cs)
-{
-    memset(pb, 0, sizeof *pb);
-    pb->ioCRefNum = n->refnum;
-    pb->csCode = cs;
-    pb->tcpStream = n->stream;
-}
+static short ipp; /* the .IPP driver */
 
-static void listen_async(cdv_net *n)
+OSErr net_open(ip_addr *local, long *netmask)
 {
-    TCPiopb *pb = &n->open_pb;
-    pb_prep(n, pb, TCPPassiveOpen);
-    pb->csParam.open.ulpTimeoutValue = ULP_TIMEOUT;
-    pb->csParam.open.ulpTimeoutAction = 1; /* abort */
-    pb->csParam.open.validityFlags = (SInt8)0xC0;
-    pb->csParam.open.commandTimeoutValue = 0; /* wait for ever */
-    pb->csParam.open.localPort = n->port;
-    pb->ioResult = inProgress;
-    PBControlAsync((ParmBlkPtr)pb);
-    n->state = NET_LISTENING;
-    n->rcv_busy = n->snd_busy = 0;
-    n->err = noErr;
+    IPGetAddrPB ga;
+    OSErr err = OpenDriver("\p.IPP", &ipp);
+    if (err != noErr)
+        return err;
+    memset(&ga, 0, sizeof ga);
+    ga.ioCRefNum = ipp;
+    ga.csCode = ipctlGetAddr;
+    if (PBControlSync((ParmBlkPtr)&ga) == noErr) {
+        *local = ga.ourAddress;
+        *netmask = ga.ourNetMask;
+    }
+    return noErr;
 }
 
 void net_addr_string(ip_addr a, char *out)
@@ -37,190 +30,363 @@ void net_addr_string(ip_addr a, char *out)
     sprintf(out, "%lu.%lu.%lu.%lu", (a >> 24) & 255, (a >> 16) & 255, (a >> 8) & 255, a & 255);
 }
 
-OSErr net_init(cdv_net *n, unsigned short port)
+/* ---- TCP ------------------------------------------------------------------ */
+
+static void pb_prep(cdv_tcp *t, TCPiopb *pb, short cs)
 {
-    IPGetAddrPB ga;
+    memset(pb, 0, sizeof *pb);
+    pb->ioCRefNum = ipp;
+    pb->csCode = cs;
+    pb->tcpStream = t->stream;
+}
+
+static void go(TCPiopb *pb)
+{
+    pb->ioResult = inProgress;
+    PBControlAsync((ParmBlkPtr)pb);
+}
+
+OSErr tcp_create(cdv_tcp *t, long bufsize, size_t rxcap)
+{
     TCPiopb pb;
     OSErr err;
-
-    memset(n, 0, sizeof *n);
-    n->port = port;
-    err = OpenDriver("\p.IPP", &n->refnum);
-    if (err != noErr)
-        return err;
-
-    memset(&ga, 0, sizeof ga);
-    ga.ioCRefNum = n->refnum;
-    ga.csCode = ipctlGetAddr;
-    if (PBControlSync((ParmBlkPtr)&ga) == noErr)
-        n->local = ga.ourAddress;
-
-    n->streambuf = NewPtr(STREAM_BUFFER);
-    n->rxbuf = (uint8_t *)NewPtr(RX_BUFFER);
-    if (!n->streambuf || !n->rxbuf)
+    memset(t, 0, sizeof *t);
+    t->streambuf = NewPtr(bufsize);
+    t->rx = (uint8_t *)NewPtr((long)rxcap);
+    if (!t->streambuf || !t->rx)
         return memFullErr;
-    n->rxcap = RX_BUFFER;
-
-    pb_prep(n, &pb, TCPCreate);
-    pb.csParam.create.rcvBuff = n->streambuf;
-    pb.csParam.create.rcvBuffLen = STREAM_BUFFER;
+    t->rxcap = rxcap;
+    t->bufsize = bufsize;
+    pb_prep(t, &pb, TCPCreate);
+    pb.csParam.create.rcvBuff = t->streambuf;
+    pb.csParam.create.rcvBuffLen = (unsigned long)bufsize;
     err = PBControlSync((ParmBlkPtr)&pb);
-    if (err != noErr)
-        return err;
-    n->stream = pb.tcpStream;
-    listen_async(n);
-    return noErr;
+    if (err == noErr)
+        t->stream = pb.tcpStream;
+    t->state = T_IDLE;
+    return err;
 }
 
-void net_reset_async(cdv_net *n)
+void tcp_release(cdv_tcp *t)
 {
-    TCPiopb *pb = &n->abort_pb;
-    if (n->state == NET_RESETTING)
+    TCPiopb pb;
+    if (!t->stream)
         return;
-    pb_prep(n, pb, TCPAbort);
-    pb->ioResult = inProgress;
-    PBControlAsync((ParmBlkPtr)pb);
-    n->state = NET_RESETTING;
+    pb_prep(t, &pb, TCPAbort);
+    PBControlSync((ParmBlkPtr)&pb);
+    pb_prep(t, &pb, TCPRelease);
+    PBControlSync((ParmBlkPtr)&pb);
+    t->stream = 0;
 }
 
-int net_accepted(cdv_net *n)
+OSErr tcp_renew(cdv_tcp *t)
+{
+    TCPiopb pb;
+    OSErr err;
+    tcp_release(t);
+    pb_prep(t, &pb, TCPCreate);
+    pb.csParam.create.rcvBuff = t->streambuf;
+    pb.csParam.create.rcvBuffLen = (unsigned long)t->bufsize;
+    err = PBControlSync((ParmBlkPtr)&pb);
+    if (err == noErr)
+        t->stream = pb.tcpStream;
+    t->state = T_IDLE;
+    t->rcv_busy = t->snd_busy = 0;
+    t->used = 0;
+    t->renew_req = 0;
+    return err;
+}
+
+static void open_common(cdv_tcp *t, int active, ip_addr ip, tcp_port port)
+{
+    TCPiopb *pb = &t->open_pb;
+    pb_prep(t, pb, active ? TCPActiveOpen : TCPPassiveOpen);
+    pb->csParam.open.ulpTimeoutValue = ULP_TIMEOUT;
+    pb->csParam.open.ulpTimeoutAction = 1; /* abort */
+    pb->csParam.open.validityFlags = (SInt8)0xC0;
+    pb->csParam.open.commandTimeoutValue = active ? CONNECT_TIMEOUT : 0; /* 0: for ever */
+    if (active) {
+        /* A fresh local port each time. Left at 0, Open Transport's MacTCP
+         * gives the stream the port of its last connection, which is still
+         * in TIME_WAIT: openFailed (-23015) at once, every time. */
+        static tcp_port next;
+        if (!next)
+            next = (tcp_port)(49152 + TickCount() % 8192);
+        if (++next < 49152)
+            next = 49152;
+        pb->csParam.open.remoteHost = ip;
+        pb->csParam.open.remotePort = port;
+        pb->csParam.open.localPort = next;
+    } else {
+        pb->csParam.open.localPort = port;
+    }
+    t->err = noErr;
+    t->rcv_busy = t->snd_busy = 0;
+    t->used = 1;
+    t->state = active ? T_CONNECT : T_LISTEN;
+    go(pb);
+}
+
+void tcp_listen(cdv_tcp *t, tcp_port port)
+{
+    t->local_port = port;
+    open_common(t, 0, 0, port);
+}
+
+void tcp_connect(cdv_tcp *t, ip_addr ip, tcp_port port)
+{
+    open_common(t, 1, ip, port);
+}
+
+static int all_back(const cdv_tcp *t)
+{
+    return t->open_pb.ioResult != inProgress && t->ctl_pb.ioResult != inProgress &&
+           !(t->rcv_busy && t->rcv_pb.ioResult == inProgress) &&
+           !(t->snd_busy && t->snd_pb.ioResult == inProgress);
+}
+
+int tcp_poll(cdv_tcp *t)
 {
     short r;
-    if (n->state == NET_RESETTING) {
-        /* The abort completes every call in flight with an error; once all
-         * of them are back, listen again. */
-        if (n->abort_pb.ioResult == inProgress ||
-            (n->rcv_busy && n->rcv_pb.ioResult == inProgress) ||
-            (n->snd_busy && n->snd_pb.ioResult == inProgress) ||
-            n->open_pb.ioResult == inProgress)
+    switch (t->state) {
+    case T_LISTEN:
+    case T_CONNECT:
+        r = t->open_pb.ioResult;
+        if (r == inProgress)
             return 0;
-        listen_async(n);
+        if (r != noErr) {
+            t->err = r;
+            tcp_abort(t);
+            return -1;
+        }
+        t->remote = t->open_pb.csParam.open.remoteHost;
+        t->remote_port = t->open_pb.csParam.open.remotePort;
+        t->local_port = t->open_pb.csParam.open.localPort;
+        t->state = T_OPEN;
+        return 1;
+    case T_CLOSING:
+        if (t->ctl_pb.ioResult == inProgress)
+            return 0;
+        tcp_abort(t); /* the FIN is out; now reset the stream for reuse */
+        return 0;
+    case T_ABORTING:
+        if (all_back(t)) {
+            t->state = T_IDLE;
+            t->rcv_busy = t->snd_busy = 0;
+        }
+        return 0;
+    default:
         return 0;
     }
-    if (n->state != NET_LISTENING)
-        return 0;
-    r = n->open_pb.ioResult;
-    if (r == inProgress)
-        return 0;
-    if (r != noErr) {
-        /* A listen that failed (or timed out). Resetting takes synchronous
-         * calls, which only the main loop may make. */
-        n->err = r;
-        return 0;
-    }
-    n->remote = n->open_pb.csParam.open.remoteHost;
-    n->state = NET_CONNECTED;
-    return 1;
 }
 
-static void recv_async(cdv_net *n)
+int tcp_recv(cdv_tcp *t, const uint8_t **data, size_t *len)
 {
-    TCPiopb *pb = &n->rcv_pb;
-    pb_prep(n, pb, TCPRcv);
-    pb->csParam.receive.commandTimeoutValue = 0;
-    pb->csParam.receive.rcvBuff = (Ptr)n->rxbuf;
-    pb->csParam.receive.rcvBuffLen = (unsigned short)n->rxcap;
-    pb->ioResult = inProgress;
-    PBControlAsync((ParmBlkPtr)pb);
-    n->rcv_busy = 1;
-}
-
-int net_recv(cdv_net *n, const uint8_t **data, size_t *len)
-{
+    TCPiopb *pb = &t->rcv_pb;
     short r;
-    if (n->state != NET_CONNECTED || n->err)
+    if (t->state != T_OPEN || t->err)
         return 0;
-    if (!n->rcv_busy) {
-        recv_async(n);
+    if (!t->rcv_busy) {
+        pb_prep(t, pb, TCPRcv);
+        pb->csParam.receive.commandTimeoutValue = 0;
+        pb->csParam.receive.rcvBuff = (Ptr)t->rx;
+        pb->csParam.receive.rcvBuffLen = (unsigned short)t->rxcap;
+        t->rcv_busy = 1;
+        go(pb);
         return 0;
     }
-    r = n->rcv_pb.ioResult;
+    r = pb->ioResult;
     if (r == inProgress)
         return 0;
-    n->rcv_busy = 0;
-    if (r == commandTimeout) /* nothing arrived; ask again */
+    t->rcv_busy = 0;
+    if (r == commandTimeout)
         return 0;
     if (r != noErr) {
-        n->err = r;
+        t->err = r;
         return 0;
     }
-    *data = n->rxbuf;
-    *len = n->rcv_pb.csParam.receive.rcvBuffLen;
+    *data = t->rx;
+    *len = pb->csParam.receive.rcvBuffLen;
     return *len != 0;
 }
 
-void net_send(cdv_net *n, const uint8_t *data, size_t len)
+void tcp_send(cdv_tcp *t, const uint8_t *data, size_t len)
 {
-    TCPiopb *pb = &n->snd_pb;
-    if (n->state != NET_CONNECTED || n->snd_busy || n->err || !len)
+    TCPiopb *pb = &t->snd_pb;
+    if (t->state != T_OPEN || t->snd_busy || t->err || !len)
         return;
     if (len > SEND_CHUNK)
         len = SEND_CHUNK;
-    n->wds[0].length = (unsigned short)len;
-    n->wds[0].ptr = (Ptr)data;
-    n->wds[1].length = 0;
-    n->wds[1].ptr = NULL;
-    pb_prep(n, pb, TCPSend);
+    t->wds[0].length = (unsigned short)len;
+    t->wds[0].ptr = (Ptr)data;
+    t->wds[1].length = 0;
+    t->wds[1].ptr = NULL;
+    pb_prep(t, pb, TCPSend);
     pb->csParam.send.ulpTimeoutValue = ULP_TIMEOUT;
     pb->csParam.send.ulpTimeoutAction = 1;
     pb->csParam.send.validityFlags = (SInt8)0xC0;
     pb->csParam.send.pushFlag = 1;
-    pb->csParam.send.wdsPtr = (Ptr)n->wds;
-    pb->ioResult = inProgress;
-    PBControlAsync((ParmBlkPtr)pb);
-    n->snd_busy = 1;
-    n->snd_len = len;
+    pb->csParam.send.wdsPtr = (Ptr)t->wds;
+    t->snd_busy = 1;
+    t->snd_len = len;
+    go(pb);
 }
 
-size_t net_sent(cdv_net *n)
+size_t tcp_sent(cdv_tcp *t)
 {
     short r;
-    if (!n->snd_busy)
+    if (!t->snd_busy)
         return 0;
-    r = n->snd_pb.ioResult;
+    r = t->snd_pb.ioResult;
     if (r == inProgress)
         return 0;
-    n->snd_busy = 0;
+    t->snd_busy = 0;
     if (r != noErr) {
-        n->err = r;
+        t->err = r;
         return 0;
     }
-    return n->snd_len;
+    return t->snd_len;
 }
 
-int net_send_idle(const cdv_net *n)
+int tcp_send_idle(const cdv_tcp *t)
 {
-    return !n->snd_busy;
+    return !t->snd_busy;
 }
 
-int net_failed(const cdv_net *n)
+int tcp_failed(const cdv_tcp *t)
 {
-    return n->err != noErr;
+    return t->state == T_OPEN && t->err != noErr;
 }
 
-void net_reset(cdv_net *n)
+void tcp_close(cdv_tcp *t)
 {
-    TCPiopb pb;
-    /* Abort completes any receive or send still in flight with an error,
-     * so every parameter block is free again afterwards. */
-    pb_prep(n, &pb, TCPAbort);
-    PBControlSync((ParmBlkPtr)&pb);
-    while (n->rcv_busy && n->rcv_pb.ioResult == inProgress)
-        ;
-    while (n->snd_busy && n->snd_pb.ioResult == inProgress)
-        ;
-    listen_async(n);
-}
-
-void net_shutdown(cdv_net *n)
-{
-    TCPiopb pb;
-    if (!n->stream)
+    TCPiopb *pb = &t->ctl_pb;
+    if (t->state != T_OPEN) {
+        tcp_abort(t);
         return;
-    pb_prep(n, &pb, TCPAbort);
+    }
+    pb_prep(t, pb, TCPClose);
+    pb->csParam.close.ulpTimeoutValue = 10;
+    pb->csParam.close.ulpTimeoutAction = 1;
+    pb->csParam.close.validityFlags = (SInt8)0xC0;
+    t->state = T_CLOSING;
+    go(pb);
+}
+
+void tcp_abort(cdv_tcp *t)
+{
+    TCPiopb *pb = &t->ctl_pb;
+    if (t->state == T_ABORTING || !t->stream)
+        return;
+    if (pb->ioResult == inProgress && t->state == T_CLOSING) {
+        /* a close is still out; abort anyway -- it completes the close too */
+    }
+    pb_prep(t, pb, TCPAbort);
+    t->state = T_ABORTING;
+    go(pb);
+}
+
+/* ---- UDP ------------------------------------------------------------------ */
+
+static void upb_prep(cdv_udp *u, UDPiopb *pb, short cs)
+{
+    memset(pb, 0, sizeof *pb);
+    pb->ioCRefNum = ipp;
+    pb->csCode = cs;
+    pb->udpStream = u->stream;
+}
+
+OSErr udp_create(cdv_udp *u, uint16_t port, long bufsize)
+{
+    UDPiopb pb;
+    OSErr err;
+    memset(u, 0, sizeof *u);
+    u->streambuf = NewPtr(bufsize);
+    if (!u->streambuf)
+        return memFullErr;
+    upb_prep(u, &pb, UDPCreate);
+    pb.csParam.create.rcvBuff = u->streambuf;
+    pb.csParam.create.rcvBuffLen = (unsigned long)bufsize;
+    pb.csParam.create.localPort = port;
+    err = PBControlSync((ParmBlkPtr)&pb);
+    if (err == noErr) {
+        u->stream = pb.udpStream;
+        u->port = pb.csParam.create.localPort;
+    }
+    return err;
+}
+
+void udp_release(cdv_udp *u)
+{
+    UDPiopb pb;
+    if (!u->stream)
+        return;
+    upb_prep(u, &pb, UDPRelease);
     PBControlSync((ParmBlkPtr)&pb);
-    pb_prep(n, &pb, TCPRelease);
-    PBControlSync((ParmBlkPtr)&pb);
-    n->stream = 0;
-    n->state = NET_DOWN;
+    u->stream = 0;
+}
+
+int udp_recv(cdv_udp *u, const uint8_t **data, size_t *len, ip_addr *from, uint16_t *port)
+{
+    UDPiopb *pb = &u->rcv_pb;
+    short r;
+    if (!u->stream || u->have)
+        return 0;
+    if (u->ret_pb.ioResult == inProgress)
+        return 0; /* the last buffer is still going back */
+    if (!u->rcv_busy) {
+        upb_prep(u, pb, UDPRead);
+        pb->csParam.receive.timeOut = 0;
+        u->rcv_busy = 1;
+        pb->ioResult = inProgress;
+        PBControlAsync((ParmBlkPtr)pb);
+        return 0;
+    }
+    r = pb->ioResult;
+    if (r == inProgress)
+        return 0;
+    u->rcv_busy = 0;
+    if (r != noErr)
+        return 0;
+    *data = (const uint8_t *)pb->csParam.receive.rcvBuff;
+    *len = pb->csParam.receive.rcvBuffLen;
+    *from = pb->csParam.receive.remoteHost;
+    *port = pb->csParam.receive.remotePort;
+    u->have = 1;
+    return 1;
+}
+
+void udp_done(cdv_udp *u)
+{
+    UDPiopb *pb = &u->ret_pb;
+    if (!u->have)
+        return;
+    upb_prep(u, pb, UDPBfrReturn);
+    pb->csParam.receive.rcvBuff = u->rcv_pb.csParam.receive.rcvBuff;
+    pb->ioResult = inProgress;
+    PBControlAsync((ParmBlkPtr)pb);
+    u->have = 0;
+}
+
+int udp_send(cdv_udp *u, ip_addr to, uint16_t port, const uint8_t *data, size_t len)
+{
+    UDPiopb *pb = &u->snd_pb;
+    if (!u->stream || len > sizeof u->sbuf)
+        return 0;
+    if (u->snd_busy && pb->ioResult == inProgress)
+        return 0;
+    memcpy(u->sbuf, data, len);
+    u->wds[0].length = (unsigned short)len;
+    u->wds[0].ptr = (Ptr)u->sbuf;
+    u->wds[1].length = 0;
+    u->wds[1].ptr = NULL;
+    upb_prep(u, pb, UDPWrite);
+    pb->csParam.send.remoteHost = to;
+    pb->csParam.send.remotePort = port;
+    pb->csParam.send.wdsPtr = (Ptr)u->wds;
+    pb->csParam.send.checkSum = 1;
+    u->snd_busy = 1;
+    pb->ioResult = inProgress;
+    PBControlAsync((ParmBlkPtr)pb);
+    return 1;
 }

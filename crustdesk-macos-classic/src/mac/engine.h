@@ -27,14 +27,21 @@
 #include "../core/session.h"
 #include "../core/vp8enc.h"
 
+/* What the ID server made of us, for the window. */
+enum { RS_OFF, RS_RESOLVING, RS_NO_DNS, RS_REGISTERING, RS_REGISTERED, RS_REFUSED };
+
 typedef struct {
     /* main -> engine */
     volatile int suspend_req;   /* stop touching the screen and encoder */
+    volatile int drop_req;      /* end the session (the screen outgrew the queue) */
     volatile int announce;      /* tell the peer the display changed */
     /* engine -> main */
     volatile int suspended;
-    volatile int need_reset;    /* the connection is over; reset the stream */
     volatile int live;          /* a peer is logged in */
+    volatile int secure;        /* ...and the session is encrypted */
+    volatile int rdv_state;     /* RS_* */
+    volatile int rdv_refused;   /* RegisterPkResponse result when refused */
+    volatile unsigned long server_ip;
     volatile unsigned long frames, bytes, ticks;
 } engine_flags;
 
@@ -42,7 +49,20 @@ extern engine_flags eng;
 
 /* Everything the engine works on. Set up by the main loop before start. */
 typedef struct {
-    cdv_net *net;
+    cdv_tcp *direct;         /* listens on the direct port: unencrypted sessions */
+    cdv_tcp *local;          /* listens for a peer hbbs sent our local address to */
+    cdv_tcp *relay;          /* joins hbbr */
+    cdv_tcp *helper;         /* short messages to hbbs */
+    cdv_udp *rdv;            /* registration and DNS */
+    cdv_udp *lan;            /* discovery broadcasts, port 21119 */
+    ip_addr my_ip;
+    unsigned short direct_port, local_port;
+    const char *server;      /* "host[:port]", or "" for no ID server */
+    const char *relay_host;  /* override for the relay hbbs names, or "" */
+    const char *key;         /* the server's key, for a relay started with -k */
+    const uint8_t *uuid, *pk;
+    ip_addr dns[3];
+    int ndns;
     cdv_screen *scr;
     cdv_session *sess;
     const cdv_hooks *hooks;
@@ -78,6 +98,16 @@ typedef struct {
 } engine_clip;
 extern engine_clip clip_out; /* main -> peer */
 extern engine_clip clip_in;  /* peer -> main */
+
+/* A name for the main loop to look up with the Mac's own resolver: the
+ * engine asks, the main loop answers (ans 1 with ip, or -1). If the main loop
+ * is held up -- a menu is open -- the engine falls back on its own DNS. */
+typedef struct {
+    volatile int req, ans;
+    char name[64];
+    volatile unsigned long ip;
+} engine_name;
+extern engine_name name_q;
 
 /* Log lines the engine produced, for the main loop to show. Returns NULL
  * when there are none. */

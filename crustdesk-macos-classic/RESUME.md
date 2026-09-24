@@ -48,6 +48,22 @@ compatibility layer, so this covers 7.5.5-9.2.2); the directory is
   mode because PeerInfo says "Mac OS"; those are ADB codes; KeyTranslate
   gives the character.
 
+## 2a. The ID server
+
+Registration (UDP to hbbs), PunchHole/RequestRelay -> relay (hbbr), and
+FetchLocalAddr -> the local listener (port 21120); every such session is
+encrypted like the stock client's. LAN discovery answers on UDP 21119. Names
+go to the Mac's own resolver (the 'dnrp' resource: MacTCP's DNR, or OT's),
+with a DNS client of our own as the fallback when the main loop is held up.
+The first run makes a 9-digit ID, a uuid and an Ed25519 seed, and keeps them
+in the prefs file. The default server is the public one unless the build
+names another: `cmake -DCDV_SERVER=host -DCDV_KEY=key`.
+
+Proven in QEMU against rustdesk.home.dani.tech with RustDesk 1.4.9 by ID
+through the relay (`ID/r`): q800 7.5.5 (68k) and mac99 OS 9.2.2 (PPC), both
+encrypted, reconnects included. Not yet: the local-address path from a real
+LAN (QEMU's NAT hides the Mac), and the console/API heartbeat (needs TLS).
+
 ## 3. Measured
 
 Under `ICOUNT=5` (QEMU paced ~a 33 MHz 68040; guest time, see TESTING.md):
@@ -99,6 +115,17 @@ bytes 5x and the time 25%.
 - **`pkill -f` matching the command line kills the Bash tool's own shell**;
   kill QEMU by the pid in `$CDV_TESTENV/qemu.pid`, the host agent with
   `pgrep -x`.
+- **An over-aligned `.data` crashes the 68k app before `main`.** Elf2Mac
+  packs `.data` straight after `.text`, but Retro68's startup finds the
+  data and the relocation table at their linked addresses; a gap (libsodium's
+  `CRYPTO_ALIGN(16)`) puts every relocation a few bytes off, and the first
+  jump goes to low memory. `CRYPTO_ALIGN` is defined empty on 68k and
+  `tools/check-sections.cmake` fails the build if a gap comes back. Found with
+  `QEMU_EXTRA="-d int -D int.log"` (the faulting PC) and the monitor's `xp`.
+- **Open Transport's MacTCP cannot reuse a stream for a second outgoing
+  connection** (TCPActiveOpen fails at once with -23015, whatever the local
+  port). The engine sets `renew_req` and the main loop releases and
+  re-creates the stream (`tcp_renew`). Real MacTCP does not need it.
 - **Emulator time under -icount runs ahead of wall time**; only the Mac's own
   logged durations mean anything.
 

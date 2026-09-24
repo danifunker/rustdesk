@@ -82,6 +82,20 @@ password: read it from a screenshot. The agent is on `127.0.0.1:31129`.
 QEMU's mac99 display ignores the gamma table in direct-colour modes, where a
 real card applies it; so a decoded peer picture is lighter than QEMU's own.
 
+### Getting files back off a disk image
+
+`rb-cli get` copies only the data fork; `rb-cli get-binhex IMG@N PATH
+OUT.hqx` keeps both forks and the type and creator. To make an `.hqx` of a
+build: `rb-cli new --fs hfs --size 2M x.hfv`, `rb-cli put-macbinary x.hfv
+C-Desk-Vint-fat.bin`, then `get-binhex`.
+
+### When the Mac crashes
+
+`QEMU_EXTRA="-d int -D int.log" scripts/q800.sh start` logs every exception
+with its PC (a large file: the timer interrupts are in it too). The last
+Address Error or Access Fault, and the A-line traps before it, locate the
+crash; `qm.py "xp /8wx ADDR"` reads memory afterwards.
+
 ## 3. Driving it
 
 `host/cdvpoke.py HOST:PORT PASSWORD steps...` logs in like a client and plays

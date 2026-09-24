@@ -5,8 +5,8 @@
  * stays usable at the console while a peer watches or drives it.
  *
  * Settings live in "C-Desk-Vint Prefs" in the Preferences folder, a text file
- * of key=value lines (password, port, quality). The first run writes one with
- * a random password, which the window shows.
+ * of key=value lines (password, port, quality, the ID server...). The first
+ * run writes one with a random ID, key and password, which the window shows.
  */
 #include "cursor.h"
 #include "engine.h"
@@ -14,12 +14,17 @@
 #include "mem.h"
 #include "traps.h"
 #include "net.h"
+#include "dnr.h"
 #include "screen.h"
+#include "../core/dns.h"
 #include "../core/macroman.h"
+#include "../core/rdv.h"
+#include "../core/rng.h"
 #include "../core/session.h"
 #include "../core/vp8enc.h"
 
 #include <Multiverse.h>
+#include <sodium.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,6 +33,16 @@
 #define PREFS_NAME "\pC-Desk-Vint Prefs"
 #define DEFAULT_PORT 21118
 #define DEFAULT_Q 16
+#define LOCAL_PORT 21120  /* for a peer hbbs sent our local address to */
+/* The ID server, until the prefs say otherwise: the public one, unless the
+ * build names another (cmake -DCDV_SERVER=... -DCDV_KEY=...). */
+#ifndef DEFAULT_SERVER
+#define DEFAULT_SERVER "rs-ny.rustdesk.com"
+#define DEFAULT_KEY "OeVuKk5nlHiXp+APNn0Y3pC1Iwpwn44JGqrQCsWqmBw="
+#endif
+#ifndef DEFAULT_KEY
+#define DEFAULT_KEY ""
+#endif
 #define LOG_LINES 9
 
 /* What Multiversal does not declare. */
@@ -39,12 +54,20 @@ static struct {
     int q;
     int gamma; /* apply the video driver's gamma table (default on) */
     int cursor_separate; /* send the pointer's shape even if it is in VRAM */
+    char id[16];         /* RustDesk ID */
+    uint8_t uuid[16];
+    uint8_t seed[32];    /* Ed25519 seed: the key that signs our ID */
+    int have_seed, have_uuid;
+    char server[64];     /* hbbs "host[:port]"; "" for none */
+    char key[64];        /* the server's public key */
+    char relay[64];      /* hbbr override; "" to take the one hbbs names */
+    char dns[20];        /* a DNS server, if the Mac's resolver is not enough */
 } prefs;
 
 static WindowPtr win;
 static char loglines[LOG_LINES][80];
 static int nlog;
-static char status[80], addr_line[80];
+static char status[80], addr_line[80], id_line[80];
 static int quit;
 
 /* ---- the window ------------------------------------------------------------ */
@@ -89,15 +112,16 @@ static void redraw(void)
     TextSize(9);
     TextMode(srcCopy);
     TextFace(1); /* bold */
-    draw_line(14, addr_line);
-    TextFace(0);
+    draw_line(14, id_line);
     snprintf(line, sizeof line, "Password: %s", prefs.password);
     draw_line(27, line);
-    draw_line(40, status);
-    MoveTo(0, 46);
-    LineTo(r.right, 46);
+    TextFace(0);
+    draw_line(40, addr_line);
+    draw_line(53, status);
+    MoveTo(0, 59);
+    LineTo(r.right, 59);
     for (i = 0; i < LOG_LINES; i++)
-        draw_line(58 + 11 * i, i < nlog ? loglines[i] : "");
+        draw_line(71 + 11 * i, i < nlog ? loglines[i] : "");
     SetPort(old);
 }
 
@@ -170,6 +194,14 @@ static void say(const char *msg)
     invalidate();
 }
 
+static void set_id_line(const char *s)
+{
+    if (strcmp(s, id_line)) {
+        strncpy(id_line, s, sizeof id_line - 1);
+        invalidate();
+    }
+}
+
 static void set_status(const char *s)
 {
     if (strcmp(s, status)) {
@@ -179,6 +211,27 @@ static void set_status(const char *s)
 }
 
 /* ---- prefs ------------------------------------------------------------------ */
+
+static int unhex(const char *s, uint8_t *out, size_t n)
+{
+    size_t i;
+    for (i = 0; i < n; i++) {
+        unsigned v;
+        if (sscanf(s + 2 * i, "%2x", &v) != 1)
+            return 0;
+        out[i] = (uint8_t)v;
+    }
+    return 1;
+}
+
+static char *hex(const uint8_t *b, size_t n, char *out)
+{
+    size_t i;
+    for (i = 0; i < n; i++)
+        sprintf(out + 2 * i, "%02x", b[i]);
+    out[2 * n] = 0;
+    return out;
+}
 
 static void parse_prefs(char *text)
 {
@@ -200,6 +253,20 @@ static void parse_prefs(char *text)
                 prefs.gamma = atoi(eq);
             else if (!strcmp(line, "cursor"))
                 prefs.cursor_separate = !strcmp(eq, "separate");
+            else if (!strcmp(line, "id"))
+                strncpy(prefs.id, eq, sizeof prefs.id - 1);
+            else if (!strcmp(line, "uuid"))
+                prefs.have_uuid = unhex(eq, prefs.uuid, sizeof prefs.uuid);
+            else if (!strcmp(line, "seed"))
+                prefs.have_seed = unhex(eq, prefs.seed, sizeof prefs.seed);
+            else if (!strcmp(line, "server"))
+                strncpy(prefs.server, eq, sizeof prefs.server - 1);
+            else if (!strcmp(line, "key"))
+                strncpy(prefs.key, eq, sizeof prefs.key - 1);
+            else if (!strcmp(line, "relay"))
+                strncpy(prefs.relay, eq, sizeof prefs.relay - 1);
+            else if (!strcmp(line, "dns"))
+                strncpy(prefs.dns, eq, sizeof prefs.dns - 1);
         }
         line = next;
     }
@@ -233,7 +300,7 @@ static void write_prefs_file(void)
     long dir, len;
     FSSpec spec;
     HParamBlockRec pb;
-    char text[200];
+    char text[700], u[33], k[65];
     if (FindFolder(kOnSystemDisk, kPreferencesFolderType, 1, &vref, &dir) != noErr)
         return;
     FSMakeFSSpec(vref, dir, PREFS_NAME, &spec);
@@ -245,11 +312,46 @@ static void write_prefs_file(void)
     pb.ioParam.ioPermssn = fsWrPerm;
     if (PBHOpenDFSync(&pb) != noErr)
         return;
-    len = snprintf(text, sizeof text, "password=%s\rport=%u\rquality=%d\r", prefs.password,
-                   prefs.port, prefs.q);
+    len = snprintf(text, sizeof text,
+                   "password=%s\rport=%u\rquality=%d\rgamma=%d\rcursor=%s\r"
+                   "id=%s\ruuid=%s\rseed=%s\rserver=%s\rkey=%s\rrelay=%s\rdns=%s\r",
+                   prefs.password, prefs.port, prefs.q, prefs.gamma,
+                   prefs.cursor_separate ? "separate" : "auto", prefs.id,
+                   hex(prefs.uuid, 16, u), hex(prefs.seed, 32, k), prefs.server, prefs.key,
+                   prefs.relay, prefs.dns);
+    if (len > (long)sizeof text - 1)
+        len = sizeof text - 1;
     FSWrite(pb.ioParam.ioRefNum, &len, text);
     SetEOF(pb.ioParam.ioRefNum, len);
     FSClose(pb.ioParam.ioRefNum);
+}
+
+/* Entropy for the first run's keys. A classic Mac has no /dev/random, but
+ * the microsecond timer drifts against the tick and the system tasks, the
+ * pointer is wherever the user left it, and the screen is the screen. */
+static void gather_entropy(void)
+{
+    uint32_t us;
+    unsigned long t;
+    int i;
+    for (i = 0; i < 64; i++) {
+        us = cdv_microseconds();
+        rng_add(&us, sizeof us);
+        t = TickCount();
+        rng_add(&t, sizeof t);
+        if (i % 8 == 0) {
+            long free = FreeMem();
+            rng_add(&free, sizeof free);
+            SystemTask(); /* let the timer drift against something */
+        }
+    }
+    rng_add((void *)0x830, 4); /* Mouse */
+    rng_add(&qd.randSeed, sizeof qd.randSeed);
+    {
+        GDHandle gd = GetMainDevice();
+        PixMapHandle pm = (**gd).gdPMap;
+        rng_add((**pm).baseAddr, 4096);
+    }
 }
 
 static void init_prefs(void)
@@ -260,20 +362,37 @@ static void init_prefs(void)
     prefs.q = DEFAULT_Q;
     prefs.gamma = 1;
     prefs.password[0] = 0;
+    strcpy(prefs.server, DEFAULT_SERVER);
+    strcpy(prefs.key, DEFAULT_KEY);
     if (read_prefs_file(buf, sizeof buf - 1, &len)) {
         buf[len] = 0;
         parse_prefs(buf);
     }
-    if (!prefs.password[0]) {
-        /* First run: a password nobody chose, shown in the window. */
+    gather_entropy();
+    if (!prefs.password[0] || !prefs.id[0] || !prefs.have_uuid || !prefs.have_seed) {
+        /* First run: a password nobody chose, an ID and a key of our own. */
         static const char a[] = "abcdefghjkmnpqrstuvwxyz23456789";
-        unsigned long s = TickCount() * 2654435761UL ^ (unsigned long)qd.randSeed;
+        static const char digits[] = "123456789";
         int i;
-        for (i = 0; i < 8; i++) {
-            s = s * 1103515245UL + 12345UL;
-            prefs.password[i] = a[(s >> 16) % (sizeof a - 1)];
+        if (!prefs.password[0]) {
+            for (i = 0; i < 8; i++)
+                prefs.password[i] = a[rng_u32() % (sizeof a - 1)];
+            prefs.password[8] = 0;
         }
-        prefs.password[8] = 0;
+        if (!prefs.id[0]) {
+            /* Nine digits, like RustDesk's own: what a person can read out. */
+            for (i = 0; i < 9; i++)
+                prefs.id[i] = digits[rng_u32() % (sizeof digits - 1)];
+            prefs.id[9] = 0;
+        }
+        if (!prefs.have_uuid) {
+            rng_bytes(prefs.uuid, sizeof prefs.uuid);
+            prefs.have_uuid = 1;
+        }
+        if (!prefs.have_seed) {
+            rng_bytes(prefs.seed, sizeof prefs.seed);
+            prefs.have_seed = 1;
+        }
         write_prefs_file();
     }
     if (prefs.q < 0 || prefs.q > 127)
@@ -284,7 +403,14 @@ static void init_prefs(void)
 
 /* ---- the agent: set up here, run by the engine ---------------------------- */
 
-static cdv_net net;
+static cdv_tcp t_direct, t_local, t_relay, t_helper;
+static cdv_udp u_rdv, u_lan;
+static int have_direct, have_local, have_relay, have_helper, have_rdv, have_lan;
+static ip_addr my_ip;
+static long my_mask;
+static uint8_t sign_pk[32], sign_sk[64];
+static char server_addr[80]; /* the server as the engine gets it: dotted, with the port */
+static int have_dnr;
 static cdv_screen scr;
 static cdv_session sess;
 static cdv_ident ident;
@@ -379,8 +505,9 @@ static void screen_changed(void)
     if (queue_size(&scr) > outcap) {
         /* A bigger picture than the queue was sized for: drop the peer,
          * which will reconnect to a fresh one. */
-        eng.need_reset = 1;
-        while (!net_send_idle(&net))
+        eng.drop_req = 1;
+        t0 = TickCount();
+        while (eng.drop_req && TickCount() - t0 < 5 * 60)
             ;
         big_free(outq);
         outcap = queue_size(&scr);
@@ -501,6 +628,8 @@ static void clipboard_chores(void)
 }
 
 /* Main-loop chores: everything the engine may not do itself. */
+static void renew(cdv_tcp *t, int have);
+
 static void chores(void)
 {
     static unsigned long last_status, last_kchr, frames0, bytes0;
@@ -512,10 +641,17 @@ static void chores(void)
         say(m);
     clipboard_chores();
 
-    if (eng.need_reset) {
-        net_reset(&net);
-        eng.need_reset = 0;
-        set_status("Waiting for a connection");
+    renew(&t_helper, have_helper);
+    renew(&t_relay, have_relay);
+    if (name_q.req && !name_q.ans) {
+        /* The engine wants a relay's address: the Mac's resolver first. */
+        uint32_t ip;
+        if (have_dnr && dnr_lookup(name_q.name, &ip, 5 * 60)) {
+            name_q.ip = ip;
+            name_q.ans = 1;
+        } else {
+            name_q.ans = -1;
+        }
     }
     if (now - last_kchr > 60) {
         input_set_kchr((Ptr)GetScriptManagerVariable(smKCHRCache));
@@ -532,14 +668,116 @@ static void chores(void)
             snprintf(line, sizeof line, "Live: %lu frames, %lu KB in 2s", eng.frames - frames0,
                      (eng.bytes - bytes0) / 1024);
             set_status(line);
-        } else if (net.state == NET_CONNECTED) {
-            set_status("Logging in...");
         } else {
-            set_status("Waiting for a connection");
+            static const char *const rs[] = {
+                "no ID server", "looking up the ID server", "cannot find the ID server",
+                "registering with the ID server", "ready", "the ID server refused us"
+            };
+            snprintf(line, sizeof line, "Waiting: %s", rs[eng.rdv_state]);
+            set_status(line);
+            snprintf(line, sizeof line, "ID: %s%s", prefs.id,
+                     eng.rdv_state == RS_REGISTERED ? "" : "  (not registered)");
+            set_id_line(line);
         }
         frames0 = eng.frames;
         bytes0 = eng.bytes;
         last_status = now;
+    }
+}
+
+/* ---- the network ---------------------------------------------------------------- */
+
+static void close_network(void)
+{
+    /* MacTCP owns each stream's buffer until it is released; quitting
+     * without this leaves it writing into a heap that no longer exists. */
+    if (have_direct) tcp_release(&t_direct);
+    if (have_local) tcp_release(&t_local);
+    if (have_relay) tcp_release(&t_relay);
+    if (have_helper) tcp_release(&t_helper);
+    if (have_rdv) udp_release(&u_rdv);
+    if (have_lan) udp_release(&u_lan);
+    have_direct = have_local = have_relay = have_helper = have_rdv = have_lan = 0;
+}
+
+/* The streams a session can arrive on, and the ones that find it. Only the
+ * direct one is essential; without the others it is a direct-IP agent. */
+static OSErr open_network(void)
+{
+    char line[100], host[64], a[20];
+    unsigned short port;
+    uint32_t ip;
+    OSErr err = net_open(&my_ip, &my_mask);
+    if (err != noErr) {
+        snprintf(line, sizeof line, "MacTCP did not open (%d)", err);
+        say(line);
+        return err;
+    }
+    err = tcp_create(&t_direct, 32 * 1024L, 8 * 1024);
+    if (err != noErr) {
+        snprintf(line, sizeof line, "no TCP stream (%d)", err);
+        say(line);
+        return err;
+    }
+    have_direct = 1;
+    have_local = tcp_create(&t_local, 32 * 1024L, 8 * 1024) == noErr;
+    have_relay = tcp_create(&t_relay, 32 * 1024L, 8 * 1024) == noErr;
+    have_helper = tcp_create(&t_helper, 4 * 1024L, 1024) == noErr;
+    have_rdv = udp_create(&u_rdv, 0, 4 * 1024L) == noErr;
+    have_lan = udp_create(&u_lan, LAN_PORT, 4 * 1024L) == noErr;
+    if (!have_lan)
+        say("another program has the discovery port; no LAN discovery");
+    if (!have_local || !have_relay || !have_helper || !have_rdv)
+        say("not enough memory for every stream: direct connections only");
+
+    /* The ID server's address, with the Mac's own resolver if it has one;
+     * the engine asks DNS itself if not. */
+    server_addr[0] = 0;
+    if (prefs.server[0] && have_rdv && have_relay && have_helper) {
+        rdv_split_host(prefs.server, host, sizeof host, &port, RDV_PORT);
+        if (dns_parse_ip(host, &ip)) {
+            strcpy(server_addr, prefs.server);
+        } else {
+            have_dnr = dnr_open() == noErr;
+            if (!have_dnr)
+                say("no resolver in this System; asking DNS directly");
+            if (have_dnr && dnr_lookup(host, &ip, 10 * 60)) {
+                net_addr_string(ip, a);
+                snprintf(server_addr, sizeof server_addr, "%s:%u", a, port);
+                snprintf(line, sizeof line, "%s is %s", host, a);
+                say(line);
+            } else {
+                strncpy(server_addr, prefs.server, sizeof server_addr - 1);
+            }
+        }
+    }
+    return noErr;
+}
+
+/* DNS servers for when the engine resolves a name itself: the prefs', the
+ * router's (a guess: the first host of our network), and a public one. */
+static void pick_dns(ip_addr *dns, int *n)
+{
+    uint32_t ip;
+    *n = 0;
+    if (prefs.dns[0] && dns_parse_ip(prefs.dns, &ip))
+        dns[(*n)++] = ip;
+    if (my_mask && my_mask != -1L)
+        dns[(*n)++] = (my_ip & (ip_addr)my_mask) | 1;
+    dns[(*n)++] = 0x08080808UL;
+}
+
+/* The engine wants a fresh stream for an outgoing connection. Only once it
+ * has gone idle: the engine is not using it then. */
+static void renew(cdv_tcp *t, int have)
+{
+    if (have && t->renew_req && t->state == T_IDLE) {
+        OSErr err = tcp_renew(t);
+        if (err != noErr) {
+            char line[60];
+            snprintf(line, sizeof line, "could not renew a TCP stream (%d)", err);
+            say(line);
+        }
     }
 }
 
@@ -623,7 +861,7 @@ int main(void)
     make_menus();
 
     r = qd.screenBits.bounds;
-    SetRect(&r, r.right - 330, r.bottom - 170, r.right - 10, r.bottom - 10);
+    SetRect(&r, r.right - 330, r.bottom - 183, r.right - 10, r.bottom - 10);
     win = NewWindow(NULL, &r, "\pC-Desk-Vint", 1, noGrowDocProc, (WindowPtr)-1, 0, 0);
 
     init_prefs();
@@ -634,6 +872,10 @@ int main(void)
     say(APP_NAME " 0.1d, 68k");
 #endif
     strcpy(status, "Starting");
+    snprintf(id_line, sizeof id_line, "ID: %s", prefs.id);
+    crypto_sign_ed25519_seed_keypair(sign_pk, sign_sk, prefs.seed);
+    ident.id = prefs.id;
+    ident.sign_sk = sign_sk;
     strcpy(hostname, "Macintosh");
     ident.password = prefs.password;
     ident.salt = "cdeskvint";
@@ -666,18 +908,28 @@ int main(void)
             snprintf(line, sizeof line, "no gamma table from the driver (%d); colours as drawn",
                      scr.gamma_err);
         say(line);
-        err = net_init(&net, prefs.port);
-        if (err != noErr) {
-            snprintf(line, sizeof line, "MacTCP did not open (%d)", err);
-            say(line);
-        }
+        err = open_network();
     }
     if (err == noErr) {
         engine_ctx ctx;
         char a[20];
         input_set_kchr((Ptr)GetScriptManagerVariable(smKCHRCache));
         memset(&ctx, 0, sizeof ctx);
-        ctx.net = &net;
+        ctx.direct = have_direct ? &t_direct : NULL;
+        ctx.local = have_local ? &t_local : NULL;
+        ctx.relay = have_relay ? &t_relay : NULL;
+        ctx.helper = have_helper ? &t_helper : NULL;
+        ctx.rdv = have_rdv ? &u_rdv : NULL;
+        ctx.lan = have_lan ? &u_lan : NULL;
+        ctx.my_ip = my_ip;
+        ctx.direct_port = prefs.port;
+        ctx.local_port = LOCAL_PORT;
+        ctx.server = server_addr;
+        ctx.relay_host = prefs.relay;
+        ctx.key = prefs.key;
+        ctx.uuid = prefs.uuid;
+        ctx.pk = sign_pk;
+        pick_dns(ctx.dns, &ctx.ndns);
         ctx.scr = &scr;
         ctx.sess = &sess;
         ctx.hooks = &hooks;
@@ -690,9 +942,11 @@ int main(void)
         ctx.q = prefs.q;
         engine_setup(&ctx);
         engine_start();
-        net_addr_string(net.local, a);
-        snprintf(addr_line, sizeof addr_line, "Connect to %s  (port %u)", a, prefs.port);
-        set_status("Waiting for a connection");
+        net_addr_string(my_ip, a);
+        snprintf(addr_line, sizeof addr_line, "Or by address: %s  (port %u)", a, prefs.port);
+        snprintf(line, sizeof line, "ID: %s", prefs.id);
+        set_id_line(line);
+        set_status("Starting");
     } else {
         strcpy(addr_line, "Not running");
     }
@@ -710,8 +964,9 @@ int main(void)
         input_release_all();
         /* MacTCP owns the stream's buffer until it is released; quitting
          * without this leaves it writing into a heap that no longer exists. */
-        net_shutdown(&net);
+        close_network();
     }
+    dnr_close();
     if (logref)
         FSClose(logref);
     return 0;
