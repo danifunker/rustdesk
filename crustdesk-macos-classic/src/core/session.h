@@ -16,6 +16,10 @@
  * frame behind it. A frame can be encoded -- a few rows at a time, on the Mac
  * -- while keepalives and replies keep flowing, and messages never interleave
  * on the wire: whichever queue starts sending finishes before the other goes.
+ * On an encrypted session a message is sealed when its queue is claimed for
+ * sending, not when it is queued: the nonce is a sequence number, and the
+ * peer opens messages in the order they arrive, so the order they are sealed
+ * in must be the order they go out -- which only the sending side knows.
  * Bytes handed to the platform stay where they are until they are consumed,
  * which is what lets MacTCP send straight out of them.
  */
@@ -100,6 +104,9 @@ typedef struct {
     size_t vidcap, voff, vlen;
     int vstate;              /* VID_FREE, VID_ENCODING, VID_READY */
     int sending;             /* which queue is mid-message: 0 none, 1 control, 2 video */
+    size_t osealed;          /* control queue: bytes before this are ready to send */
+    size_t vmsg, vmsglen;    /* the video message's plaintext, until it is sealed */
+    int vneedseal;
 
     uint8_t *in;
     size_t incap, ilen, skip;

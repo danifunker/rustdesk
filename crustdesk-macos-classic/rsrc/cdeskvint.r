@@ -37,7 +37,7 @@ resource 'SIZE' (-1) {
  * 6 key, 8 relay, 10 console, 12 password, 14 port, 16 quality), 17 help,
  * 18 New Password, then 19/20 the name (first on screen, last in number). src/mac/settings.c knows these numbers. */
 resource 'DLOG' (200, "Settings") {
-    { 0, 0, 320, 416 },
+    { 0, 0, 320, 540 },
     movableDBoxProc,
     invisible,
     noGoAway,
@@ -49,45 +49,45 @@ resource 'DLOG' (200, "Settings") {
 
 resource 'DITL' (200) {
     {
-        { 288, 334, 308, 404 },
+        { 288, 458, 308, 528 },
         Button { enabled, "Save" };
-        { 288, 250, 308, 320 },
+        { 288, 374, 308, 444 },
         Button { enabled, "Cancel" };
         { 41, 12, 57, 104 },
         StaticText { disabled, "ID server:" };
-        { 40, 112, 56, 404 },
+        { 40, 112, 56, 528 },
         EditText { enabled, "" };
         { 67, 12, 83, 104 },
         StaticText { disabled, "Server key:" };
-        { 66, 112, 82, 404 },
+        { 66, 112, 82, 528 },
         EditText { enabled, "" };
         { 93, 12, 109, 104 },
         StaticText { disabled, "Relay:" };
-        { 92, 112, 108, 404 },
+        { 92, 112, 108, 528 },
         EditText { enabled, "" };
         { 119, 12, 135, 104 },
         StaticText { disabled, "Console:" };
-        { 118, 112, 134, 404 },
+        { 118, 112, 134, 528 },
         EditText { enabled, "" };
         { 145, 12, 161, 104 },
         StaticText { disabled, "Password:" };
-        { 144, 112, 160, 404 },
+        { 144, 112, 160, 528 },
         EditText { enabled, "" };
         { 171, 12, 187, 104 },
         StaticText { disabled, "Direct port:" };
-        { 170, 112, 186, 404 },
+        { 170, 112, 186, 528 },
         EditText { enabled, "" };
         { 197, 12, 213, 104 },
         StaticText { disabled, "Quality:" };
-        { 196, 112, 212, 404 },
+        { 196, 112, 212, 528 },
         EditText { enabled, "" };
-        { 220, 12, 278, 404 },
+        { 220, 12, 278, 528 },
         StaticText { disabled, "Name: shown in the console and to peers. Relay: empty for the one the ID server names. Console: the API server's URL, or empty. Quality: 0 best to 127 smallest." };
         { 288, 12, 308, 132 },
         Button { enabled, "New Password" };
         { 15, 12, 31, 104 },
         StaticText { disabled, "Name:" };
-        { 14, 112, 30, 404 },
+        { 14, 112, 30, 528 },
         EditText { enabled, "" };
     }
 };

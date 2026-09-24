@@ -7,6 +7,8 @@
 #include "../src/core/rdv.h"
 #include "../src/core/console.h"
 #include "../src/core/https.h"
+#include "../src/core/session.h"
+#include <sodium.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -219,6 +221,62 @@ int main(void)
             CHECK(https_needs_reconnect(&h) == (i >= 2));
         }
         CHECK(h.status == 200);
+    }
+
+    /* Encrypted sessions: messages leave in the order they were sealed.
+     * A control message, then a video frame, then another control message
+     * queued while the first is still going out: the peer opens them by
+     * sequence number, so any other order is a "decryption error". */
+    {
+        static uint8_t out[256 * 1024], in[4096], wire[256 * 1024];
+        static cdv_session s;
+        static const cdv_ident id = { "123456789", NULL, "pw", "salt", "host", 64, 64, 1 };
+        size_t wl = 0, n, off, total = 0;
+        const uint8_t *p;
+        uint8_t *v;
+        uint64_t seq = 0;
+        int opened = 0, ok = 1, i;
+        cdv_init(&s, out, sizeof out, in, sizeof in, NULL, &id, 1);
+        s.state = CDV_LIVE;
+        s.enc = 1;
+        for (i = 0; i < 32; i++)
+            s.key[i] = (uint8_t)i;
+        cdv_send_cursor_pos(&s, 1, 1);
+        p = cdv_out_peek(&s, &n); /* the control queue is claimed... */
+        memcpy(wire + wl, p, 1);  /* ...and one byte of it goes */
+        wl += 1;
+        cdv_out_consume(&s, 1);
+        v = cdv_video_begin(&s, &n);
+        CHECK(v != NULL);
+        if (v) {
+            memset(v, 0x5A, 100);
+            cdv_video_commit(&s, 100, 1);
+        }
+        cdv_send_cursor_pos(&s, 2, 2); /* queued behind the first, ahead of the frame */
+        while ((p = cdv_out_peek(&s, &n)) != NULL && n) {
+            memcpy(wire + wl, p, n);
+            wl += n;
+            cdv_out_consume(&s, n);
+        }
+        /* Open them as a client does: frame by frame, nonce = next sequence. */
+        for (off = 0; off < wl;) {
+            size_t hl = (size_t)(wire[off] & 3) + 1, len = 0, k;
+            uint8_t nonce[24] = { 0 }, plain[1024];
+            for (k = 0; k < hl; k++)
+                len |= (size_t)wire[off + k] << (8 * k);
+            len >>= 2;
+            seq++;
+            for (k = 0; k < 8; k++)
+                nonce[k] = (uint8_t)(seq >> (8 * k));
+            if (len - 16 <= sizeof plain &&
+                crypto_secretbox_open_easy(plain, wire + off + hl, len, nonce, s.key) == 0)
+                opened++;
+            else
+                ok = 0;
+            off += hl + len;
+            total++;
+        }
+        CHECK(ok && total == 3 && opened == 3);
     }
 
     printf("%s\n", fails ? "FAIL" : "PASS: core");

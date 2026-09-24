@@ -120,22 +120,39 @@ static size_t seal(cdv_session *s, uint8_t *p, size_t n)
     return n + MAC;
 }
 
+/* Queued with the frame header it will have once sealed, and room for the
+ * MAC after it; sealed by seal_queued() when it is about to go. */
 static int msg_end(cdv_session *s, pbw *w)
 {
     uint8_t *body = s->out + s->olen + 4, h[4];
-    size_t n = pbw_len(w, body), hl;
+    size_t n = pbw_len(w, body), hl, framed;
     if (w->overflow) {
         say(s, "outbound queue full; message dropped");
         return 0;
     }
-    if (s->enc)
-        n = seal(s, body, n);
-    hl = frame_header(h, n);
+    framed = s->enc ? n + MAC : n;
+    hl = frame_header(h, framed);
     if (hl < 4)
         memmove(s->out + s->olen + hl, body, n);
     memcpy(s->out + s->olen, h, hl);
-    s->olen += hl + n;
+    s->olen += hl + framed;
+    if (!s->enc)
+        s->osealed = s->olen; /* nothing to seal: ready as it is */
     return 1;
+}
+
+/* Seal the control messages queued since the last call, in queue order. */
+static void seal_queued(cdv_session *s)
+{
+    while (s->osealed < s->olen) {
+        uint8_t *m = s->out + s->osealed;
+        size_t hl = (size_t)(m[0] & 3) + 1, len = 0, i;
+        for (i = 0; i < hl; i++)
+            len |= (size_t)m[i] << (8 * i);
+        len >>= 2;
+        seal(s, m + hl, len - MAC);
+        s->osealed += hl + len;
+    }
 }
 
 /* Peeking claims the queue it returns: bytes handed to the platform must be
@@ -147,10 +164,15 @@ const uint8_t *cdv_out_peek(cdv_session *s, size_t *n)
         s->sending = s->olen > s->ooff ? 1 : s->vstate == VID_READY ? 2 : 0;
     src = s->sending;
     if (src == 1) {
+        seal_queued(s);
         *n = s->olen - s->ooff;
         return s->out + s->ooff;
     }
     if (src == 2) {
+        if (s->vneedseal) {
+            seal(s, s->vid + s->vmsg, s->vmsglen);
+            s->vneedseal = 0;
+        }
         *n = s->vlen - s->voff;
         return s->vid + s->voff;
     }
@@ -165,7 +187,7 @@ void cdv_out_consume(cdv_session *s, size_t n)
     if (s->sending == 1) {
         s->ooff += n;
         if (s->ooff >= s->olen) {
-            s->ooff = s->olen = 0;
+            s->ooff = s->olen = s->osealed = 0;
             s->sending = 0;
         }
     } else {
@@ -447,6 +469,7 @@ static void public_key(cdv_session *s, const uint8_t *b, size_t n)
         return;
     } else {
         s->enc = 1;
+        s->osealed = s->olen; /* what is queued already goes as it is */
         say(s, "session encrypted");
     }
     s->state = CDV_WAIT_LOGIN;
@@ -504,9 +527,11 @@ void cdv_video_commit(cdv_session *s, size_t len, int key)
 
     msg = data - n;
     memcpy(msg, pre, n);
-    total = l0;
-    if (s->enc)
-        total = seal(s, msg, l0);
+    /* Sealed when it is claimed for sending (cdv_out_peek), not now. */
+    total = s->enc ? l0 + MAC : l0;
+    s->vmsg = (size_t)(msg - s->vid);
+    s->vmsglen = l0;
+    s->vneedseal = s->enc;
     hl = frame_header(h, total);
     memcpy(msg - hl, h, hl);
     s->voff = (size_t)(msg - hl - s->vid);

@@ -168,6 +168,14 @@ bytes 5x and the time 25%.
   connection** (TCPActiveOpen fails at once with -23015, whatever the local
   port). The engine sets `renew_req` and the main loop releases and
   re-creates the stream (`tcp_renew`). Real MacTCP does not need it.
+- **Seal when sending, not when queueing.** The nonce is a sequence number
+  and the peer opens messages in arrival order; with two queues (control and
+  video) a message sealed later could leave earlier -- a control message
+  queued behind one being sent went out ahead of a frame sealed before it --
+  and the client reported "decryption error" and dropped the session.
+  `cdv_out_peek` seals; `host/test_core.c` replays that exact order.
+- **The desk scrap waits for the main loop**, so the Settings dialog exports
+  a copy itself (`export_scrap`), or the peer would get it on closing.
 - **Retro68 specifics met here**: `pascal` functions' symbols are
   upper-cased (a code resource's `-Wl,-e` names `CSTRIP_MAIN`); Rez wants
   `rect, Case { ... };` per DITL item, no braces around each; `\n` in a Rez

@@ -604,6 +604,8 @@ static void bounce_step(void)
  * does whatever is on the clipboard when a peer logs in; text from the peer
  * goes onto the scrap, and its scrapCount is then taken as ours so it does
  * not bounce straight back. */
+static void export_scrap(void);
+
 static void clipboard_chores(void)
 {
     static int was_live;
@@ -626,6 +628,16 @@ static void clipboard_chores(void)
         return;
     last_poll = TickCount();
     if (InfoScrap()->scrapCount == last_count && !just_live)
+        return;
+    export_scrap();
+}
+
+/* The desk scrap's text, to the peer. Also called from the Settings
+ * dialog, which holds up the main loop -- a copy made there would otherwise
+ * wait until the dialog closed. */
+static void export_scrap(void)
+{
+    if (!eng.live || clip_out.ready)
         return;
     last_count = InfoScrap()->scrapCount;
     {
@@ -1102,6 +1114,11 @@ static pascal Boolean settings_filter(DialogPtr d, EventRecord *e, short *item)
         TESetSelect(0, 32767, te);
     } else if (c == 'c' || c == 'C' || c == 'x' || c == 'X') {
         TEPtr t = *te;
+        /* Nothing selected: the whole field. A double-click selects a
+         * "word", and a base64 key's '+' and '/' end words part-way. */
+        if (t->selEnd == t->selStart && (c == 'c' || c == 'C'))
+            TESetSelect(0, 32767, te);
+        t = *te;
         if (t->selEnd > t->selStart) {
             HLock(t->hText);
             ZeroScrap();
@@ -1109,6 +1126,7 @@ static pascal Boolean settings_filter(DialogPtr d, EventRecord *e, short *item)
             HUnlock((*te)->hText);
             if (c == 'x' || c == 'X')
                 TEDelete(te);
+            export_scrap(); /* to the peer now, not when the dialog closes */
         }
     } else if (c == 'v' || c == 'V') {
         Handle h = NewHandle(0);
