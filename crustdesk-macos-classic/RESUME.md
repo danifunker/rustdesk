@@ -115,6 +115,33 @@ clipboard text longer than a few words was silently skipped. The decoder
 allocates, so the session hands compressed bytes to the platform with a flag
 and the Mac's main loop opens them.
 
+## 2e. File transfer, and two sessions
+
+- **Protocol**: `src/core/files.c` over `cdv_fs_ops` (hbb_common fs.rs's
+  behaviour: dir, blocks with an empty one closing each file, done; uploads
+  answer the digest with send_confirm offset_blk 0 -- a oneof, written even
+  at zero). Linux: `host/fs_posix.c` in the host agent; `cdvpoke --files`
+  is a file-manager client for testing.
+- **Mac disks**: `src/mac/macfs.c`. "/" is the volumes; '/' in a Mac name
+  shows as ':'. Resource forks: listed as Name.bin, read as MacBinary;
+  uploads named .bin (if really MacBinary) or .hqx (BinHex, streamed) become
+  the Mac file; plain files get a type/creator from the extension.
+  `src/core/macbin.c` has the formats, checked by `host/test_macbin.c`
+  against real files in `host/testdata`.
+- **Two slots** (`engine_slot_t`): every connection is accepted into a free
+  slot; at login a desktop takes the video buffer (one at a time), a file
+  manager is handed to the main loop (O_MAIN), which runs its network,
+  session and disk; O_DONE hands it back. Second direct/local listeners and a
+  second relay stream let a file manager in beside a desktop.
+- Proven in QEMU on 7.5.5 and 9.2.2: listing, MacBinary out, MacBinary and
+  BinHex in (icons on the desktop), a 400 KB round trip byte for byte, all
+  beside a live desktop session. Not yet with a real client's UI (this
+  machine's client window stopped drawing; its protocol side is what
+  cdvpoke plays).
+- **Keep awake** (Settings, off by default): `cdv_keep_awake` resets the
+  Power Manager's idle timer every 5 s -- `_IdleUpdate`, checked for first,
+  since a Mac without a Power Manager does not have it.
+
 ## 2a. The ID server
 
 Registration (UDP to hbbs), PunchHole/RequestRelay -> relay (hbbr), and

@@ -39,6 +39,7 @@ add_application(C-Desk-Vint
     src/mac/dnr.c
     src/mac/report.c
     src/mac/strip.c
+    src/mac/macfs.c
     ${CDV_ARCH_SOURCES}
     src/core/session.c
     src/core/pb.c
@@ -52,6 +53,8 @@ add_application(C-Desk-Vint
     src/core/https.c
     src/core/png.c
     src/core/unzstd.c
+    src/core/files.c
+    src/core/macbin.c
     third_party/zstd-decoder/zstddeclib.c
     src/core/anchors.c
     ${CDV_NACL_SOURCES}

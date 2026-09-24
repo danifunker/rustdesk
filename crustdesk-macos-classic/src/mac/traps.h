@@ -22,6 +22,8 @@ void cdv_ins_xtime(void *task);
 uint32_t cdv_microseconds(void);
 OSErr cdv_get_front_process(ProcessSerialNumber *psn);
 long cdv_gmt_delta(void);
+/* Tell the Power Manager someone is here (no sleep, no dimming). */
+void cdv_keep_awake(void);
 OSErr cdv_fsp_create(const FSSpec *spec, OSType creator, OSType type, short script);
 
 #endif

@@ -53,9 +53,9 @@ extern engine_flags eng;
 
 /* Everything the engine works on. Set up by the main loop before start. */
 typedef struct {
-    cdv_tcp *direct;         /* listens on the direct port: unencrypted sessions */
-    cdv_tcp *local;          /* listens for a peer hbbs sent our local address to */
-    cdv_tcp *relay;          /* joins hbbr */
+    cdv_tcp *direct, *direct2; /* listen on the direct port: unencrypted sessions */
+    cdv_tcp *local, *local2; /* listen for a peer hbbs sent our local address to */
+    cdv_tcp *relay, *relay2; /* join hbbr */
     cdv_tcp *helper;         /* short messages to hbbs */
     cdv_udp *rdv;            /* registration and DNS */
     cdv_udp *lan;            /* discovery broadcasts, port 21119 */
@@ -68,12 +68,17 @@ typedef struct {
     ip_addr dns[3];
     int ndns;
     cdv_screen *scr;
-    cdv_session *sess;
+    /* Each of the two session slots: its control queue and its input
+     * buffer (big enough for a client's 128 KB file block). */
+    uint8_t *slot_ctl[2], *slot_in[2];
+    size_t slot_ctlcap, slot_incap;
+    /* A file manager's message, for the main loop (see engine_slot). */
+    void (*file_hook)(int slot, int field, const uint8_t *d, size_t n);
     const cdv_hooks *hooks;
     const cdv_ident *ident;
     vp8e *enc;
-    uint8_t *outq, *inq;
-    size_t outcap, incap;
+    uint8_t *outq;           /* the video frame, for whichever slot is the desktop */
+    size_t outcap;
     int q;
     int q_base;              /* q as set up; a peer's settings last one session */
 } engine_ctx;
@@ -143,6 +148,25 @@ typedef struct {
     volatile unsigned long ip;
 } engine_name;
 extern engine_name name_q;
+
+/* Two sessions at once: a desktop and a file manager (a client opens the
+ * latter on a connection of its own). The engine accepts every connection
+ * into a free slot and runs it until it logs in; a desktop stays with the
+ * engine, a file manager is handed to the main loop (owner O_MAIN), which
+ * may use the File Manager. When the main loop is finished with one it sets
+ * O_DONE and the engine frees the slot. */
+enum { O_ENGINE, O_MAIN, O_DONE };
+enum { K_PENDING, K_DESKTOP, K_FILE };
+typedef struct {
+    cdv_tcp *t;              /* NULL: free */
+    cdv_session sess;
+    unsigned long since;
+    volatile int kind, owner;
+    cdv_hooks hooks;         /* the caller's, with this slot as user */
+} engine_slot_t;
+engine_slot_t *engine_slot(int i);
+/* The desktop session's peer, for the window (NULL if none). */
+const char *engine_peer_name(void);
 
 /* Log lines the engine produced, for the main loop to show. Returns NULL
  * when there are none. */

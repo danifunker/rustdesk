@@ -15,6 +15,8 @@
 #include "traps.h"
 #include "net.h"
 #include "report.h"
+#include "macfs.h"
+#include "../core/files.h"
 #include "strip.h"
 #include "dnr.h"
 #include "screen.h"
@@ -74,6 +76,7 @@ static struct {
     char dns[20];        /* a DNS server, if the Mac's resolver is not enough */
     char api[96];        /* the console, for its device list; "" for none */
     char name[64];       /* what peers and the console call this Mac; "" to derive it */
+    int awake;           /* keep the Mac from sleeping while sharing (off unless chosen) */
 } prefs;
 
 static WindowPtr win;
@@ -84,6 +87,7 @@ static int quit;
 static int running;  /* on the network: Sharing > Start/Stop Sharing */
 static int video_ok; /* the screen and encoder are set up */
 static void set_menus(void);
+static void file_hook(int slot, int field, const uint8_t *d, size_t n);
 static DialogPtr chat_dlg;
 static int te_command(DialogPtr d, char c);
 static void chat_show(void);
@@ -285,6 +289,8 @@ static void parse_prefs(char *text)
                 strncpy(prefs.key, eq, sizeof prefs.key - 1);
             else if (!strcmp(line, "relay"))
                 strncpy(prefs.relay, eq, sizeof prefs.relay - 1);
+            else if (!strcmp(line, "awake"))
+                prefs.awake = atoi(eq) != 0;
             else if (!strcmp(line, "name"))
                 strncpy(prefs.name, eq, sizeof prefs.name - 1);
             else if (!strcmp(line, "api"))
@@ -339,11 +345,11 @@ static void write_prefs_file(void)
     len = snprintf(text, sizeof text,
                    "password=%s\rport=%u\rquality=%d\rgamma=%d\rcursor=%s\r"
                    "id=%s\ruuid=%s\rseed=%s\rserver=%s\rkey=%s\rrelay=%s\rdns=%s\rapi=%s\r"
-                   "name=%s\r",
+                   "name=%s\rawake=%d\r",
                    prefs.password, prefs.port, prefs.q, prefs.gamma,
                    prefs.cursor_separate ? "separate" : "auto", prefs.id,
                    hex(prefs.uuid, 16, u), hex(prefs.seed, 32, k), prefs.server, prefs.key,
-                   prefs.relay, prefs.dns, prefs.api, prefs.name);
+                   prefs.relay, prefs.dns, prefs.api, prefs.name, prefs.awake);
     if (len > (long)sizeof text - 1)
         len = sizeof text - 1;
     FSWrite(pb.ioParam.ioRefNum, &len, text);
@@ -430,8 +436,10 @@ static void init_prefs(void)
 /* ---- the agent: set up here, run by the engine ---------------------------- */
 
 static cdv_tcp t_direct, t_local, t_relay, t_helper, t_api;
+static cdv_tcp t_direct2, t_local2, t_relay2; /* a file manager's, beside a desktop */
 static cdv_udp u_rdv, u_lan;
 static int have_direct, have_local, have_relay, have_helper, have_rdv, have_lan, have_api;
+static int have_direct2, have_local2, have_relay2;
 static ip_addr my_ip;
 static long my_mask;
 static uint8_t sign_pk[32], sign_sk[64];
@@ -439,16 +447,19 @@ static char server_addr[80]; /* the server as the engine gets it: dotted, with t
 static int net_wait;              /* no address yet: agent_start tries again */
 static unsigned long net_retry_at;
 static cdv_screen scr;
-static cdv_session sess;
 static cdv_ident ident;
 static char hostname[64], username[64]; /* Mac Roman */
 static char hostname_utf8[192];          /* for peers: protobuf strings are UTF-8 */
 static vp8e *enc;
 static void *encmem;
-static uint8_t *outq, *inq;
+static uint8_t *outq, *slot_ctl[2], *slot_in[2];
 static size_t outcap;
 
-#define INQ_SIZE (64 * 1024L)
+/* Each session slot's buffers: its control queue (a file manager's listings
+ * and blocks go there too) and its input (a client's file blocks are up to
+ * 128 KB). */
+#define SLOT_CTL (96 * 1024L)
+#define SLOT_IN (160 * 1024L)
 
 static void hook_mouse(void *u, int mask, int x, int y)
 {
@@ -727,6 +738,7 @@ static void renew(cdv_tcp *t, int have);
 
 static void agent_start(void);
 static void agent_stop(void);
+static void files_chores(void);
 static void chat_received(const char *utf8, size_t n);
 static void restart_mac(void);
 static void take_screenshot(void);
@@ -804,9 +816,20 @@ static void chores(void)
     }
     strip_update(running, eng.live, eng.rdv_state == RS_REGISTERED,
                  !strcmp(report_status(), "console: listed"), prefs.id);
+    if (running)
+        files_chores();
+    if (running && prefs.awake) {
+        /* Chosen in Settings: no idle sleep or dimming while sharing. */
+        static unsigned long last_awake;
+        if (now - last_awake > 5 * 60) {
+            cdv_keep_awake();
+            last_awake = now;
+        }
+    }
     if (running) {
         renew(&t_helper, have_helper);
         renew(&t_relay, have_relay);
+        renew(&t_relay2, have_relay2);
         report_step();
     }
     if (!running && net_wait && video_ok && now >= net_retry_at)
@@ -893,11 +916,15 @@ static void close_network(void)
     if (have_direct) tcp_release(&t_direct);
     if (have_local) tcp_release(&t_local);
     if (have_relay) tcp_release(&t_relay);
+    if (have_direct2) tcp_release(&t_direct2);
+    if (have_local2) tcp_release(&t_local2);
+    if (have_relay2) tcp_release(&t_relay2);
     if (have_helper) tcp_release(&t_helper);
     if (have_api) tcp_release(&t_api);
     if (have_rdv) udp_release(&u_rdv);
     if (have_lan) udp_release(&u_lan);
     have_direct = have_local = have_relay = have_helper = have_rdv = have_lan = have_api = 0;
+    have_direct2 = have_local2 = have_relay2 = 0;
 }
 
 /* The streams a session can arrive on, and the ones that find it. Only the
@@ -928,6 +955,11 @@ static OSErr open_network(void)
     have_direct = 1;
     have_local = tcp_create(&t_local, 32 * 1024L, 8 * 1024) == noErr;
     have_relay = tcp_create(&t_relay, 32 * 1024L, 8 * 1024) == noErr;
+    /* The file manager's own way in, beside a desktop session: a client
+     * opens it on a connection of its own. Not essential. */
+    have_direct2 = tcp_create(&t_direct2, 32 * 1024L, 8 * 1024) == noErr;
+    have_local2 = tcp_create(&t_local2, 32 * 1024L, 8 * 1024) == noErr;
+    have_relay2 = tcp_create(&t_relay2, 32 * 1024L, 8 * 1024) == noErr;
     have_helper = tcp_create(&t_helper, 4 * 1024L, 1024) == noErr;
     have_api = tcp_create(&t_api, 16 * 1024L, 4 * 1024) == noErr;
     have_rdv = udp_create(&u_rdv, 0, 4 * 1024L) == noErr;
@@ -1006,6 +1038,16 @@ static void agent_start(void)
     ctx.direct = have_direct ? &t_direct : NULL;
     ctx.local = have_local ? &t_local : NULL;
     ctx.relay = have_relay ? &t_relay : NULL;
+    ctx.direct2 = have_direct2 ? &t_direct2 : NULL;
+    ctx.local2 = have_local2 ? &t_local2 : NULL;
+    ctx.relay2 = have_relay2 ? &t_relay2 : NULL;
+    ctx.slot_ctl[0] = slot_ctl[0];
+    ctx.slot_ctl[1] = slot_ctl[1];
+    ctx.slot_in[0] = slot_in[0];
+    ctx.slot_in[1] = slot_in[1];
+    ctx.slot_ctlcap = SLOT_CTL;
+    ctx.slot_incap = SLOT_IN;
+    ctx.file_hook = file_hook;
     ctx.helper = have_helper ? &t_helper : NULL;
     ctx.rdv = have_rdv ? &u_rdv : NULL;
     ctx.lan = have_lan ? &u_lan : NULL;
@@ -1019,14 +1061,11 @@ static void agent_start(void)
     ctx.pk = sign_pk;
     pick_dns(ctx.dns, &ctx.ndns);
     ctx.scr = &scr;
-    ctx.sess = &sess;
     ctx.hooks = &hooks;
     ctx.ident = &ident;
     ctx.enc = enc;
     ctx.outq = outq;
     ctx.outcap = outcap;
-    ctx.inq = inq;
-    ctx.incap = INQ_SIZE;
     ctx.q = prefs.q;
     engine_setup(&ctx);
     engine_start();
@@ -1140,7 +1179,7 @@ static void about(void)
 /* ---- settings ------------------------------------------------------------------- */
 
 enum { S_SAVE = 1, S_CANCEL, S_SERVER = 4, S_KEY = 6, S_RELAY = 8, S_API = 10, S_PASSWORD = 12,
-       S_PORT = 14, S_QUALITY = 16, S_NEWPW = 18, S_NAME = 20 };
+       S_PORT = 14, S_QUALITY = 16, S_NEWPW = 18, S_NAME = 20, S_AWAKE = 21 };
 
 static void set_field(DialogPtr d, short item, const char *c)
 {
@@ -1245,6 +1284,13 @@ static void settings(void)
     set_field(d, S_PORT, num);
     snprintf(num, sizeof num, "%d", prefs.q);
     set_field(d, S_QUALITY, num);
+    {
+        short type;
+        Handle h;
+        Rect r;
+        GetDialogItem(d, S_AWAKE, &type, &h, &r);
+        SetControlValue((ControlHandle)h, prefs.awake);
+    }
     SetDialogDefaultItem(d, S_SAVE);
     SetDialogCancelItem(d, S_CANCEL);
     SelectDialogItemText(d, S_NAME, 0, 255);
@@ -1257,6 +1303,14 @@ static void settings(void)
         ModalDialog(filter, &item);
         if (item == S_CANCEL)
             break;
+        if (item == S_AWAKE) {
+            short type;
+            Handle h;
+            Rect r;
+            GetDialogItem(d, S_AWAKE, &type, &h, &r);
+            SetControlValue((ControlHandle)h, !GetControlValue((ControlHandle)h));
+            continue;
+        }
         if (item == S_NEWPW) {
             char p[9];
             new_password(p);
@@ -1303,6 +1357,13 @@ static void settings(void)
                 strcpy(prefs.name, name);
             mac_names();
             strcpy(prefs.password, pw);
+            {
+                short type;
+                Handle h;
+                Rect r;
+                GetDialogItem(d, S_AWAKE, &type, &h, &r);
+                prefs.awake = GetControlValue((ControlHandle)h) != 0;
+            }
             prefs.port = (unsigned short)port;
             prefs.q = (int)q;
             write_prefs_file();
@@ -1571,7 +1632,7 @@ static void chat_show(void)
         Str255 title;
         char t[96];
         size_t n;
-        snprintf(t, sizeof t, "Chat with %s", sess.peer_name[0] ? sess.peer_name : "the peer");
+        snprintf(t, sizeof t, "Chat with %s", engine_peer_name() ? engine_peer_name() : "the peer");
         n = strlen(t);
         title[0] = (unsigned char)n;
         memcpy(title + 1, t, n);
@@ -1614,7 +1675,7 @@ static void chat_received(const char *utf8, size_t n)
     char mr[CHAT_MAX], line[100];
     size_t k = utf8_to_macroman((const uint8_t *)utf8, n, (uint8_t *)mr, sizeof mr - 1);
     mr[k] = 0;
-    chat_add(sess.peer_name[0] ? sess.peer_name : "Peer", mr);
+    chat_add(engine_peer_name() ? engine_peer_name() : "Peer", mr);
     snprintf(line, sizeof line, "chat: %.80s", mr);
     say(line);
     chat_show();
@@ -1731,6 +1792,83 @@ static void take_screenshot(void)
              (TickCount() - t0) * 50 / 3);
     say(line);
     shot.state = SHOT_DONE;
+}
+
+/* ---- file transfer --------------------------------------------------------------- */
+
+/* A file manager's session, once the engine has handed it over (O_MAIN): its
+ * network, its session and the disk, all from here, where the File Manager
+ * may be called. */
+static cdv_files *fsvc[2];
+static int fstarted[2];
+static uint8_t *fwork;
+#define FWORK (160 * 1024L)
+
+static void file_hook(int slot, int field, const uint8_t *d, size_t n)
+{
+    if (fsvc[slot] && fstarted[slot])
+        cdv_files_message(fsvc[slot], field, d, n);
+}
+
+static int files_active(void)
+{
+    return fstarted[0] || fstarted[1];
+}
+
+static void files_chores(void)
+{
+    int i;
+    for (i = 0; i < 2; i++) {
+        engine_slot_t *s = engine_slot(i);
+        const uint8_t *d;
+        size_t n;
+        int k;
+        if (s->owner != O_MAIN) {
+            fstarted[i] = 0;
+            continue;
+        }
+        if (!fstarted[i]) {
+            char line[96];
+            if (!fsvc[i])
+                fsvc[i] = (cdv_files *)big_alloc((long)cdv_files_size());
+            if (!fwork)
+                fwork = (uint8_t *)big_alloc(FWORK);
+            if (!fsvc[i] || !fwork) {
+                say("not enough memory for file transfer");
+                tcp_abort(s->t);
+                s->owner = O_DONE;
+                continue;
+            }
+            cdv_files_init(fsvc[i], &s->sess, macfs(), fwork, FWORK);
+            fstarted[i] = 1;
+            snprintf(line, sizeof line, "file transfer with %s",
+                     s->sess.peer_name[0] ? s->sess.peer_name : "a peer");
+            say(line);
+            cdv_files_start(fsvc[i]);
+        }
+        for (k = 0; k < 8 && tcp_recv(s->t, &d, &n); k++)
+            cdv_feed(&s->sess, d, n);
+        n = tcp_sent(s->t);
+        if (n)
+            cdv_out_consume(&s->sess, n);
+        cdv_files_pump(fsvc[i]);
+        cdv_tick(&s->sess, (uint32_t)(TickCount() * 50UL / 3UL));
+        if (tcp_send_idle(s->t)) {
+            const uint8_t *o = cdv_out_peek(&s->sess, &n);
+            if (n)
+                tcp_send(s->t, o, n);
+        }
+        cdv_out_peek(&s->sess, &n);
+        if (tcp_failed(s->t) || s->t->state != T_OPEN ||
+            (s->sess.state == CDV_CLOSED && !n && tcp_send_idle(s->t))) {
+            cdv_files_close(fsvc[i]);
+            if (s->t->state != T_IDLE)
+                tcp_abort(s->t);
+            say("file transfer ended");
+            fstarted[i] = 0;
+            s->owner = O_DONE;
+        }
+    }
 }
 
 /* ---- Apple Events ------------------------------------------------------------- */
@@ -1875,8 +2013,11 @@ int main(void)
     ident.salt = "cdeskvint";
     ident.hostname = hostname_utf8;
 
-    inq = (uint8_t *)NewPtr(INQ_SIZE);
-    err = inq ? open_video() : memFullErr;
+    slot_ctl[0] = (uint8_t *)big_alloc(SLOT_CTL);
+    slot_ctl[1] = (uint8_t *)big_alloc(SLOT_CTL);
+    slot_in[0] = (uint8_t *)big_alloc(SLOT_IN);
+    slot_in[1] = (uint8_t *)big_alloc(SLOT_IN);
+    err = slot_ctl[0] && slot_ctl[1] && slot_in[0] && slot_in[1] ? open_video() : memFullErr;
     if (err == noErr) {
         outcap = queue_size(&scr);
         outq = (uint8_t *)big_alloc((long)outcap);
@@ -1909,7 +2050,7 @@ int main(void)
 
     while (!quit) {
         EventRecord ev;
-        if (WaitNextEvent(everyEvent, &ev, 6, NULL))
+        if (WaitNextEvent(everyEvent, &ev, files_active() ? 0 : 6, NULL))
             handle_event(&ev);
         if (video_ok)
             chores();

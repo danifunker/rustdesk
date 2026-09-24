@@ -65,6 +65,12 @@ From the other computer
 - The scroll wheel: this system has no scroll events, so the wheel sends
   Page Up and Page Down (and, sideways, the arrow keys) -- which scroll in
   almost every program.
+- File transfer (the client's file manager), while you are connected or on
+  its own. The Mac's disks are the top level. A file with a resource fork
+  (applications, most documents made on a Mac) is offered as Name.bin --
+  MacBinary, which keeps both forks and its icon -- and a .bin or .hqx sent
+  to the Mac becomes the Mac file it holds, icon and all. Other files arrive
+  as they are, given a type and creator their extension suggests.
 - The client's image quality and frame rate settings are followed.
 - "Restart remote device" restarts the Mac the way Special > Restart does,
   so every program is asked to quit first (not from Classic under Mac OS X,
@@ -87,6 +93,12 @@ Sharing > Settings...:
   Password    what a peer must give
   Direct port the TCP port for connections by IP address (21118)
   Quality     0 (best) to 127 (smallest); 16 is a good start
+  Keep this Mac awake while sharing
+              off unless you tick it: while sharing is on, the Mac does not
+              go to sleep or dim its screen by itself (on Macs with a Power
+              Manager: PowerBooks, and Mac OS 8.6 and later). Choosing Sleep
+              still works. Classic under Mac OS X cannot keep Mac OS X
+              awake -- set that in its Energy Saver.
 The same settings are lines in "C-Desk-Vint Prefs" (a SimpleText file; quit
 C-Desk-Vint before editing it), with two more: gamma=1 shows colours as this
 Mac's monitor does (0: as drawn), and dns= names a DNS server if the Mac's

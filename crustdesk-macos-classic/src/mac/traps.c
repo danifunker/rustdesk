@@ -8,6 +8,7 @@ pascal void Microseconds(void *microTickCount);
 
 pascal OSErr GetFrontProcess(ProcessSerialNumber *psn);
 pascal void ReadLocation(void *loc);
+pascal long IdleUpdate(void);
 
 OSErr cdv_ppost_event(short what, long message, EvQElPtr *q)
 {
@@ -39,6 +40,11 @@ uint32_t cdv_microseconds(void)
 static void read_location(long loc[3])
 {
     ReadLocation(loc);
+}
+
+static void idle_update(void)
+{
+    IdleUpdate();
 }
 
 #else
@@ -91,12 +97,33 @@ uint32_t cdv_microseconds(void)
     return (uint32_t)d0;
 }
 
+/* _IdleUpdate: the result in D0, nothing in. */
+static void idle_update(void)
+{
+    register long d0 __asm__("d0");
+    __asm__ volatile(".short 0xA285" : "=d"(d0) : : "d1", "d2", "a0", "a1", "cc", "memory");
+    (void)d0;
+}
+
 /* _ReadLocation is _ReadXPRam of 12 bytes at 0xE4: A0 the record, D0 the
  * length and address. */
 static pascal void read_location(long loc[3])
     M68K_INLINE(0x205F, 0x203C, 0x000C, 0x00E4, 0xA051);
 
 #endif
+
+/* The Power Manager's idle timer, reset: what an ADB keypress does, so
+ * neither sleep nor dimming comes while it is kept up. Macs without a Power
+ * Manager have no _IdleUpdate, and calling an unimplemented trap is a
+ * crash: look first. */
+void cdv_keep_awake(void)
+{
+    static int avail = -1;
+    if (avail < 0)
+        avail = NGetTrapAddress(0xA285, kOSTrapType) != NGetTrapAddress(0xA89F, kToolboxTrapType);
+    if (avail)
+        idle_update();
+}
 
 /* Seconds east of GMT, from the Map control panel's setting. The low 24
  * bits of the third longword, sign-extended; the top byte is daylight saving. */

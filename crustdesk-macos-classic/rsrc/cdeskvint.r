@@ -35,9 +35,10 @@ resource 'SIZE' (-1) {
 
 /* Settings. Items: 1 Save, 2 Cancel, then label/field pairs (4 ID server,
  * 6 key, 8 relay, 10 console, 12 password, 14 port, 16 quality), 17 help,
- * 18 New Password, then 19/20 the name (first on screen, last in number). src/mac/settings.c knows these numbers. */
+ * 18 New Password, then 19/20 the name (first on screen, last in number),
+ * 21 keep awake. src/mac/settings.c knows these numbers. */
 resource 'DLOG' (200, "Settings") {
-    { 0, 0, 320, 540 },
+    { 0, 0, 348, 540 },
     movableDBoxProc,
     invisible,
     noGoAway,
@@ -49,9 +50,9 @@ resource 'DLOG' (200, "Settings") {
 
 resource 'DITL' (200) {
     {
-        { 288, 458, 308, 528 },
+        { 316, 458, 336, 528 },
         Button { enabled, "Save" };
-        { 288, 374, 308, 444 },
+        { 316, 374, 336, 444 },
         Button { enabled, "Cancel" };
         { 41, 12, 57, 104 },
         StaticText { disabled, "ID server:" };
@@ -81,14 +82,16 @@ resource 'DITL' (200) {
         StaticText { disabled, "Quality:" };
         { 196, 112, 212, 528 },
         EditText { enabled, "" };
-        { 220, 12, 278, 528 },
+        { 248, 12, 306, 528 },
         StaticText { disabled, "Name: shown in the console and to peers. Relay: empty for the one the ID server names. Console: the API server's URL, or empty. Quality: 0 best to 127 smallest." };
-        { 288, 12, 308, 132 },
+        { 316, 12, 336, 132 },
         Button { enabled, "New Password" };
         { 15, 12, 31, 104 },
         StaticText { disabled, "Name:" };
         { 14, 112, 30, 528 },
         EditText { enabled, "" };
+        { 222, 112, 240, 528 },
+        CheckBox { enabled, "Keep this Mac awake while sharing" };
     }
 };
 

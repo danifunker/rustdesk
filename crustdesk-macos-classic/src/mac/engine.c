@@ -23,6 +23,8 @@ engine_shot shot;
 static int scan_ms = SCAN_MS; /* the peer's frames a second, as a scan interval */
 
 static engine_ctx X;
+static engine_slot_t SL[2];     /* the two sessions (see engine.h) */
+static engine_slot_t *DS;       /* the desktop's slot, or NULL */
 static uint32_t conn_count;
 
 /* ---- the log ring: one writer here, one reader in the main loop ----------- */
@@ -164,7 +166,8 @@ static void video_reset(void)
 {
     if (V.state == V_ENC) {
         vp8e_abandon(X.enc);
-        cdv_video_abort(X.sess);
+        if (DS)
+            cdv_video_abort(&DS->sess);
     }
     V.state = V_IDLE;
 }
@@ -180,24 +183,24 @@ static void video_step(void)
          * full compare is tens of milliseconds on a 68040. Input from the
          * peer is the best predictor of change, so it resets the pace. */
         /* A screenshot borrows the frame buffer between frames. */
-        if (shot.state == SHOT_WANTED && X.sess->vstate == VID_FREE) {
-            shot.buf = cdv_big_begin(X.sess, &shot.cap);
+        if (shot.state == SHOT_WANTED && (&DS->sess)->vstate == VID_FREE) {
+            shot.buf = cdv_big_begin((&DS->sess), &shot.cap);
             if (shot.buf)
                 shot.state = SHOT_LENT;
         }
         if (shot.state == SHOT_DONE) {
             if (shot.conn == conn_count)
-                cdv_screenshot_commit(X.sess, shot.len, shot.err[0] ? shot.err : NULL);
+                cdv_screenshot_commit((&DS->sess), shot.len, shot.err[0] ? shot.err : NULL);
             shot.state = SHOT_NONE;
             return;
         }
         if (shot.state != SHOT_NONE)
             return;
         if (now - V.last < (V.still >= IDLE_AFTER ? SCAN_IDLE_MS : (uint32_t)scan_ms) ||
-            X.sess->vstate != VID_FREE)
+            (&DS->sess)->vstate != VID_FREE)
             return;
         V.last = now;
-        V.key = cdv_take_refresh(X.sess);
+        V.key = cdv_take_refresh((&DS->sess));
         if (scr->clut_seq != V.clut_seen) {
             V.clut_seen = scr->clut_seq;
             V.key = 1;
@@ -229,7 +232,7 @@ static void video_step(void)
         }
         V.still = 0;
         V.t_scanned = TickCount();
-        V.dst = cdv_video_begin(X.sess, &V.cap);
+        V.dst = cdv_video_begin((&DS->sess), &V.cap);
         {
             vp8e_src src;
             src.y = scr->Y;
@@ -238,7 +241,7 @@ static void video_step(void)
             src.ystride = scr->ystride;
             src.uvstride = scr->uvstride;
             if (!V.dst || !vp8e_begin(X.enc, &src, V.key ? NULL : scr->dirty, V.key, V.dst, V.cap)) {
-                cdv_video_abort(X.sess);
+                cdv_video_abort((&DS->sess));
                 V.state = V_IDLE;
                 return;
             }
@@ -259,17 +262,17 @@ static void video_step(void)
             vp8e_last_stats(X.enc, &st);
             if (!len) {
                 /* Did not fit. Coarser, and a keyframe, next time. */
-                cdv_video_abort(X.sess);
+                cdv_video_abort((&DS->sess));
                 V.q = V.q + 16 > 127 ? 127 : V.q + 16;
                 vp8e_set_q(X.enc, V.q);
-                X.sess->refresh = 1;
+                (&DS->sess)->refresh = 1;
                 engine_log("frame too large; lowering quality");
             } else if (!st.changed) {
                 /* Nothing the peer would see: the reconstruction is exactly
                  * what it already has, so the frame need not go at all. */
-                cdv_video_abort(X.sess);
+                cdv_video_abort((&DS->sess));
             } else {
-                cdv_video_commit(X.sess, len, st.key);
+                cdv_video_commit((&DS->sess), len, st.key);
                 if (st.key || (eng.frames & 63) == 0) {
                     log_timing(st.key, V.t_scanned - V.t_start, TickCount() - V.t_scanned, len,
                                st.mbs - st.skipped);
@@ -307,11 +310,11 @@ static void cursor_step(void)
     sum = cursor_shape(rgba, &hx, &hy);
     if (sum != C.sum) {
         C.sum = sum;
-        cdv_send_cursor(X.sess, sum, hx, hy, 16, 16, rgba);
+        cdv_send_cursor((&DS->sess), sum, hx, hy, 16, 16, rgba);
     }
     cursor_where(&x, &y);
     if ((x != C.x || y != C.y) && TickCount() >= C.quiet_until) {
-        cdv_send_cursor_pos(X.sess, x, y);
+        cdv_send_cursor_pos((&DS->sess), x, y);
     }
     C.x = x;
     C.y = y;
@@ -322,51 +325,71 @@ void engine_peer_moved_pointer(void)
     C.quiet_until = TickCount() + 20; /* a third of a second */
 }
 
-/* ---- the session, on whichever connection carries it ----------------------- */
+/* ---- the sessions, one per slot ------------------------------------------------ */
 
-static cdv_tcp *S;           /* the connection carrying the session, or NULL */
-static unsigned long S_since; /* ticks: when it began */
 
 #define LOGIN_TIMEOUT (20 * 60) /* ticks a connection may take to log in */
 
-static void end_session(const char *why)
+engine_slot_t *engine_slot(int i)
 {
-    if (!S)
-        return;
-    engine_log(why);
-    video_reset();
-    input_release_all();
-    eng.live = 0;
-    eng.secure = 0;
-    tcp_abort(S);
-    S = NULL;
+    return &SL[i];
 }
 
-/* A connection is up and wants a session. One peer at a time: a logged-in
- * session keeps the machine and the newcomer is turned away; one still
- * waiting for its login gives way -- a client may open one route and then
- * take another, and the first never logs in. */
-static void attach(cdv_tcp *t, int secure)
+const char *engine_peer_name(void)
 {
-    char line[48];
-    if (S && S != t) {
-        if (X.sess->state == CDV_LIVE) {
-            engine_log("a second peer was turned away");
-            tcp_abort(t);
-            return;
-        }
-        end_session("an earlier connection gave way");
+    return DS && DS->sess.peer_name[0] ? DS->sess.peer_name : NULL;
+}
+
+/* Is this stream carrying a session? */
+static engine_slot_t *slot_of(const cdv_tcp *t)
+{
+    int i;
+    for (i = 0; i < 2; i++)
+        if (SL[i].t == t)
+            return &SL[i];
+    return NULL;
+}
+
+static void end_slot(engine_slot_t *s, const char *why)
+{
+    if (!s->t)
+        return;
+    engine_log(why);
+    if (s == DS) {
+        video_reset();
+        input_release_all();
+        eng.live = 0;
+        eng.secure = 0;
+        DS = NULL;
     }
-    net_addr_string(t->remote, line);
-    engine_log(secure ? "connection through the ID server" : "connection");
-    engine_log(line);
-    S = t;
-    S_since = TickCount();
-    conn_count++;
-    rng_add(&S_since, sizeof S_since);
-    cdv_init(X.sess, X.outq, X.outcap, X.inq, X.incap, X.hooks, X.ident,
-             TickCount() ^ (conn_count << 16) ^ rng_u32());
-    cdv_start(X.sess, now_ms(), secure);
+    if (s->t->state != T_IDLE)
+        tcp_abort(s->t);
+    s->t = NULL;
+    s->kind = K_PENDING;
+    s->owner = O_ENGINE;
+}
+
+/* The desktop: what the drop request and a new desktop end. */
+static void end_session(const char *why)
+{
+    if (DS)
+        end_slot(DS, why);
+}
+
+/* At deferred-task time, from the session's login: a desktop takes the
+ * video buffer (one at a time); a file manager is fine alongside it. */
+static int hook_login(void *u, int file_transfer)
+{
+    engine_slot_t *s = (engine_slot_t *)u;
+    if (file_transfer) {
+        s->kind = K_FILE;
+        return 1;
+    }
+    if (DS && DS != s)
+        return 0;
+    DS = s;
+    s->kind = K_DESKTOP;
+    cdv_set_video(&s->sess, X.outq, X.outcap);
     memset(&C, 0, sizeof C);
     C.sum = 0xFFFFFFFF;
     memset(&V, 0, sizeof V);
@@ -377,56 +400,134 @@ static void attach(cdv_tcp *t, int secure)
     if (shot.state == SHOT_WANTED)
         shot.state = SHOT_NONE; /* asked for by the last peer */
     vp8e_abandon(X.enc); /* the first frame of a session is a keyframe */
+    return 1;
 }
 
-static void session_step(void)
+/* File messages belong to the main loop, which feeds a file manager's
+ * session once it owns the slot. */
+static void hook_file(void *u, int field, const uint8_t *d, size_t n)
+{
+    engine_slot_t *s = (engine_slot_t *)u;
+    if (s->owner == O_MAIN && X.file_hook)
+        X.file_hook(s == &SL[0] ? 0 : 1, field, d, n);
+}
+
+/* A connection is up and wants a session: a free slot, or one still waiting
+ * for its login, which gives way -- a client may open one route and then
+ * take another, and the first never logs in. Two logged-in sessions (a
+ * desktop and a file manager) and the newcomer is turned away. */
+static void attach(cdv_tcp *t, int secure)
+{
+    char line[48];
+    engine_slot_t *s = NULL;
+    int i;
+    for (i = 0; i < 2 && !s; i++)
+        if (!SL[i].t)
+            s = &SL[i];
+    for (i = 0; i < 2 && !s; i++)
+        if (SL[i].owner == O_ENGINE && SL[i].sess.state != CDV_LIVE) {
+            end_slot(&SL[i], "an earlier connection gave way");
+            s = &SL[i];
+        }
+    if (!s) {
+        engine_log("a third peer was turned away");
+        tcp_abort(t);
+        return;
+    }
+    net_addr_string(t->remote, line);
+    engine_log(secure ? "connection through the ID server" : "connection");
+    engine_log(line);
+    s->t = t;
+    s->since = TickCount();
+    s->kind = K_PENDING;
+    s->owner = O_ENGINE;
+    s->hooks = *X.hooks;
+    s->hooks.login = hook_login;
+    s->hooks.file = hook_file;
+    s->hooks.user = s;
+    conn_count++;
+    rng_add(&s->since, sizeof s->since);
+    cdv_init2(&s->sess, X.slot_ctl[s - SL], X.slot_ctlcap, NULL, 0, X.slot_in[s - SL],
+              X.slot_incap, &s->hooks, X.ident, TickCount() ^ (conn_count << 16) ^ rng_u32());
+    cdv_start(&s->sess, now_ms(), secure);
+}
+
+static void slot_step(engine_slot_t *s)
 {
     const uint8_t *data;
     size_t len;
-    int i;
+    int i, desk = s == DS;
 
-    for (i = 0; i < 4 && tcp_recv(S, &data, &len); i++) {
-        cdv_feed(X.sess, data, len);
-        V.still = 0; /* the peer is doing something: look sooner */
+    for (i = 0; i < 4 && s->owner == O_ENGINE && tcp_recv(s->t, &data, &len); i++) {
+        cdv_feed(&s->sess, data, len);
+        if (desk)
+            V.still = 0; /* the peer is doing something: look sooner */
     }
-    len = tcp_sent(S);
+    /* A file manager that has logged in goes to the main loop. */
+    if (s->kind == K_FILE && s->sess.state == CDV_LIVE && s->owner == O_ENGINE) {
+        s->owner = O_MAIN;
+        return;
+    }
+    desk = s == DS;
+    len = tcp_sent(s->t);
     if (len)
-        cdv_out_consume(X.sess, len);
-    cdv_tick(X.sess, now_ms());
-    eng.live = X.sess->state == CDV_LIVE;
-    eng.secure = X.sess->enc;
+        cdv_out_consume(&s->sess, len);
+    cdv_tick(&s->sess, now_ms());
+    if (desk) {
+        eng.live = s->sess.state == CDV_LIVE;
+        eng.secure = s->sess.enc;
+    }
 
-    if (eng.live) {
+    if (desk && eng.live) {
         if (eng.announce) {
             eng.announce = 0;
-            cdv_send_display(X.sess, X.scr->width, X.scr->height);
-            X.sess->refresh = 1;
+            cdv_send_display(&s->sess, X.scr->width, X.scr->height);
+            s->sess.refresh = 1;
         }
         if (clip_out.ready) {
-            cdv_send_clipboard(X.sess, clip_out.text, clip_out.len);
+            cdv_send_clipboard(&s->sess, clip_out.text, clip_out.len);
             clip_out.ready = 0;
         }
         if (chat_out.ready) {
-            cdv_send_chat(X.sess, chat_out.text, chat_out.len);
+            cdv_send_chat(&s->sess, chat_out.text, chat_out.len);
             chat_out.ready = 0;
         }
         video_step();
         cursor_step();
     }
-    if (tcp_send_idle(S)) {
-        const uint8_t *o = cdv_out_peek(X.sess, &len);
+    if (tcp_send_idle(s->t)) {
+        const uint8_t *o = cdv_out_peek(&s->sess, &len);
         if (len)
-            tcp_send(S, o, len);
+            tcp_send(s->t, o, len);
     }
 
-    if (tcp_failed(S) || S->state != T_OPEN) {
-        end_session("connection lost");
-    } else if (X.sess->state == CDV_CLOSED && tcp_send_idle(S)) {
-        cdv_out_peek(X.sess, &len);
+    if (tcp_failed(s->t) || s->t->state != T_OPEN) {
+        end_slot(s, "connection lost");
+    } else if (s->sess.state == CDV_CLOSED && tcp_send_idle(s->t)) {
+        cdv_out_peek(&s->sess, &len);
         if (!len)
-            end_session("session closed");
-    } else if (!eng.live && TickCount() - S_since > LOGIN_TIMEOUT) {
-        end_session("no login; dropped");
+            end_slot(s, "session closed");
+    } else if (s->sess.state != CDV_LIVE && TickCount() - s->since > LOGIN_TIMEOUT) {
+        end_slot(s, "no login; dropped");
+    }
+}
+
+static void session_step(void)
+{
+    int i;
+    for (i = 0; i < 2; i++) {
+        engine_slot_t *s = &SL[i];
+        if (!s->t)
+            continue;
+        if (s->owner == O_ENGINE)
+            slot_step(s);
+        else if (s->owner == O_DONE) {
+            /* The main loop is finished with a file manager: the stream has
+             * been reset (or is being) -- the slot is free again. */
+            s->t = NULL;
+            s->kind = K_PENDING;
+            s->owner = O_ENGINE;
+        }
     }
 }
 
@@ -498,6 +599,7 @@ static struct {
     ip_addr cached_ip;
     unsigned long asked_at;
     int fallback;
+    cdv_tcp *rs;                /* the relay stream this request is using */
     int srv;                    /* SRV_*: how the server's address is being found */
     unsigned long srv_asked;
     uint8_t msg[512];
@@ -516,8 +618,8 @@ static void action_step(void)
         }
         log_stream("helper", X.helper);
         tcp_abort(X.helper);
-        if (S != X.relay)
-            tcp_abort(X.relay);
+        if (R.rs && !slot_of(R.rs))
+            tcp_abort(R.rs);
         R.step = A_NONE;
         return;
     }
@@ -599,33 +701,49 @@ static void action_step(void)
         R.step = A_RELAY_CONNECT;
         break;
     case A_RELAY_CONNECT:
-        if (S == X.relay && X.sess->state == CDV_LIVE) {
-            R.step = A_NONE; /* busy with a peer already */
-            break;
+        /* A relay stream no session is on: two, for a desktop and a file
+         * manager at once. Both busy with logged-in sessions: turn it down. */
+        if (!R.rs) {
+            cdv_tcp *c[2];
+            int k;
+            c[0] = X.relay;
+            c[1] = X.relay2;
+            for (k = 0; k < 2 && !R.rs; k++)
+                if (c[k] && !slot_of(c[k]))
+                    R.rs = c[k];
+            for (k = 0; k < 2 && !R.rs; k++) {
+                engine_slot_t *o = c[k] ? slot_of(c[k]) : NULL;
+                if (o && o->owner == O_ENGINE && o->sess.state != CDV_LIVE) {
+                    end_slot(o, "an earlier relay session gave way");
+                    R.rs = c[k];
+                }
+            }
+            if (!R.rs) {
+                R.step = A_NONE; /* busy with peers already */
+                break;
+            }
         }
-        if (S == X.relay)
-            end_session("an earlier relay session gave way");
-        if (X.relay->state == T_IDLE) {
-            if (X.relay->used)
-                X.relay->renew_req = 1; /* a fresh stream first: see tcp_renew */
-            else if (!X.relay->renew_req)
-                tcp_connect(X.relay, R.relay_ip, R.relay_port);
-        } else if (X.relay->state == T_OPEN) {
+        if (R.rs->state == T_IDLE) {
+            if (R.rs->used)
+                R.rs->renew_req = 1; /* a fresh stream first: see tcp_renew */
+            else if (!R.rs->renew_req)
+                tcp_connect(R.rs, R.relay_ip, R.relay_port);
+        } else if (R.rs->state == T_OPEN) {
             R.msglen = rdv_request_relay(&R.r, &R.act, R.msg, sizeof R.msg);
-            tcp_send(X.relay, R.msg, R.msglen);
+            tcp_send(R.rs, R.msg, R.msglen);
             R.step = A_RELAY_SEND;
         }
         break;
     case A_RELAY_SEND:
-        if (X.relay->state != T_OPEN) {
+        if (R.rs->state != T_OPEN) {
             engine_log("the relay closed the connection");
             R.step = A_NONE;
             break;
         }
-        if (tcp_sent(X.relay) || tcp_send_idle(X.relay)) {
+        if (tcp_sent(R.rs) || tcp_send_idle(R.rs)) {
             engine_log("joined the relay");
             R.step = A_NONE;
-            attach(X.relay, 1);
+            attach(R.rs, 1);
         }
         break;
     }
@@ -718,6 +836,7 @@ static void rdv_step(void)
                 R.act = act;
                 R.step = A_HELPER_CONNECT;
                 R.step_since = TickCount();
+                R.rs = NULL; /* a relay stream is chosen when it is needed */
                 engine_log(kind == RDV_LOCAL ? "a peer on this network asks for us"
                                              : "a peer asks for us through the relay");
             }
@@ -784,7 +903,8 @@ void engine_setup(const engine_ctx *ctx)
     X.q_base = X.q;
     /* Also a restart (Stop, then Start, or new settings): nothing of the last
      * run's streams survives -- they were released and made again. */
-    S = NULL;
+    memset(SL, 0, sizeof SL);
+    DS = NULL;
     eng.live = 0;
     eng.secure = 0;
     eng.rdv_state = RS_OFF;
@@ -817,16 +937,25 @@ void engine_replace_video(vp8e *enc, uint8_t *outq, size_t outcap)
     X.enc = enc;
     X.outq = outq;
     X.outcap = outcap;
+    if (DS)
+        cdv_set_video(&DS->sess, outq, outcap);
     memset(&V, 0, sizeof V);
     V.q = X.q;
 }
 
 static void listen_step(cdv_tcp *t, tcp_port port, int secure)
 {
-    int r = tcp_poll(t);
+    int r;
+    if (!t)
+        return;
+    if (slot_of(t)) {
+        /* A session's stream: the main loop polls a file manager's own. */
+        return;
+    }
+    r = tcp_poll(t);
     if (r == 1)
         attach(t, secure);
-    else if (t->state == T_IDLE && S != t)
+    else if (t->state == T_IDLE)
         tcp_listen(t, port);
 }
 
@@ -846,14 +975,19 @@ void engine_tick(void)
     eng.suspended = 0;
 
     listen_step(X.direct, X.direct_port, 0);
-    if (R.enabled)
+    listen_step(X.direct2, X.direct_port, 0);
+    if (R.enabled) {
         listen_step(X.local, X.local_port, 1);
+        listen_step(X.local2, X.local_port, 1);
+    }
     tcp_poll(X.helper);
-    tcp_poll(X.relay);
+    if (X.relay && !slot_of(X.relay))
+        tcp_poll(X.relay);
+    if (X.relay2 && !slot_of(X.relay2))
+        tcp_poll(X.relay2);
     rdv_step();
     lan_step();
-    if (S)
-        session_step();
+    session_step();
 }
 
 /* ---- Time Manager heartbeat and the deferred task -------------------------- */
