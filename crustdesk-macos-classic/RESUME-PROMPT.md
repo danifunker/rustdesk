@@ -30,14 +30,15 @@ Priorities, in order:
    connection ended -- ask for it, read it before guessing. The About box
    (modal) was ruled out: sessions carry on under it.
 
-2. **Publishing the CI build.** The pipeline (RESUME.md 2f) is green. Run
-   36088877830 (commit 4c7fc5780) was downloaded, its checksums and the
-   private-string check (with the key, locally) passed, and its own app ran
-   in QEMU on 7.5.5 and 9.2.2 (sessions, clipboard, screenshot, file round
-   trip). The user publishes it; ask before touching a release (public).
-   Their PowerBook drops: that build fixes a 42-byte line written into a
+2. **Released.** Build 20260925-4c7fc5780 (CI run 36088877830) rides in
+   the `r-deskway-1.5.0` release as `C-Desk-Vint-20260925-4c7fc5780.{hda,
+   sit.hqx,SHA256SUMS,MANIFEST.txt}`, with a section at the end of the notes
+   and a row in the R-DeskVint table (notes are CRLF; keep them so). The
+   MANIFEST and the notes say what was verified: QEMU only for this build.
+   Next time: release a CI artifact, test the artifact itself in QEMU, and
+   ask before touching the release. It fixes a 42-byte line written into a
    40-byte stack buffer at deferred-task time on an ID-server timeout --
-   maybe the cause, unproven; ask for the log if drops continue.
+   maybe the PowerBook's drops, unproven; ask for the log if they continue.
 
 3. **Speed on the 68040** (docs/BACKLOG.md): ~11 s per new TLS connection to
    the console, 2.1 s per keyframe. Measure under `ICOUNT=5` before and
