@@ -126,9 +126,10 @@ cargo_build() {
     export PKG_CONFIG_LIBDIR_riscv64gc_unknown_linux_gnu=$PCDIR:/usr/share/pkgconfig
     export BINDGEN_EXTRA_CLANG_ARGS_riscv64gc_unknown_linux_gnu="--target=$GNU -I/usr/include/$GNU"
     # libsodium-sys would run libsodium's configure with --host=riscv64gc-unknown-linux-gnu, which
-    # autoconf does not know; link Ubuntu's riscv64 libsodium.a instead (static: no new Depends).
-    export SODIUM_LIB_DIR=/usr/lib/$GNU SODIUM_STATIC=yes
-    cargo build --locked --release --target "$T" --bin rustdesk \
+    # autoconf does not know; link Ubuntu's riscv64 libsodium.a instead (static, the default
+    # with SODIUM_LIB_DIR: no new Depends).
+    export SODIUM_LIB_DIR=/usr/lib/$GNU
+    cargo build --locked --release --keep-going --target "$T" --bin rustdesk \
         --features drm,drm-wake,linux-pkg-config
     file "target/$T/release/rustdesk"
 }
