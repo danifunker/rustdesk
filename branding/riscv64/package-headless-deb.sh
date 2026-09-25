@@ -51,7 +51,7 @@ Homepage: https://github.com/danifunker/rustdesk
 Conflicts: rustdesk, rustdesk-unattended-wayland
 Replaces: rustdesk, rustdesk-unattended-wayland
 Provides: rustdesk
-Depends: libc6 (>= $floor), libgtk-3-0t64 | libgtk-3-0, libxcb-randr0, libxdo3, libxfixes3, libxcb-shape0, libxcb-xfixes0, libasound2t64 | libasound2, libpulse0, libsystemd0, curl, libva2, libva-drm2, libva-x11-2, libgstreamer-plugins-base1.0-0, gstreamer1.0-pipewire, libvpx9, libaom3, libopus0, libyuv0, libdrm2 (>= 2.4.101), libegl1, libgles2
+Depends: libc6 (>= $floor), libgtk-3-0t64 | libgtk-3-0, libxcb-randr0, libxdo3, libxfixes3, libxcb-shape0, libxcb-xfixes0, libasound2t64 | libasound2, libpulse0, libsystemd0, curl, libva2, libva-drm2, libva-x11-2, libgstreamer-plugins-base1.0-0, gstreamer1.0-pipewire, libvpx9, libaom3, libopus0, libyuv0, libsodium23, libdrm2 (>= 2.4.101), libegl1, libgles2
 Recommends: libayatana-appindicator3-1
 Installed-Size: $(du -sk --exclude=DEBIAN "$root" | cut -f1)
 Description: R-DeskWay remote desktop, unattended on Wayland (headless riscv64 build)

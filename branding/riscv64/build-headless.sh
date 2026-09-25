@@ -47,7 +47,7 @@ EOF
     sudo apt-get update -y
     sudo apt-get install -y --no-install-recommends \
         gcc-$GNU g++-$GNU binutils-$GNU clang libclang-dev pkg-config meson ninja-build \
-        cmake python3 file dpkg-dev
+        cmake python3 file dpkg-dev libsodium-dev
     sudo apt-get install -y --no-install-recommends \
         libc6-dev:riscv64 libgtk-3-dev:riscv64 libxcb-randr0-dev:riscv64 \
         libxcb-shape0-dev:riscv64 libxcb-xfixes0-dev:riscv64 libxdo-dev:riscv64 \
@@ -126,9 +126,10 @@ cargo_build() {
     export PKG_CONFIG_LIBDIR_riscv64gc_unknown_linux_gnu=$PCDIR:/usr/share/pkgconfig
     export BINDGEN_EXTRA_CLANG_ARGS_riscv64gc_unknown_linux_gnu="--target=$GNU -I/usr/include/$GNU"
     # libsodium-sys would run libsodium's configure with --host=riscv64gc-unknown-linux-gnu, which
-    # autoconf does not know; link Ubuntu's riscv64 libsodium.a instead (static, the default
-    # with SODIUM_LIB_DIR: no new Depends).
-    export SODIUM_LIB_DIR=/usr/lib/$GNU
+    # autoconf does not know. Use pkg-config instead: its target-scoped LIBDIR above finds the
+    # riscv64 libsodium for the target, while build scripts (built for the x86_64 host, and
+    # rustdesk's pulls in hbb_common) find the host's. SODIUM_LIB_DIR cannot be scoped like that.
+    export SODIUM_USE_PKG_CONFIG=1
     cargo build --locked --release --keep-going --target "$T" --bin rustdesk \
         --features drm,drm-wake,linux-pkg-config
     file "target/$T/release/rustdesk"
