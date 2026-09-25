@@ -20,11 +20,11 @@ name: Linux unattended-wayland (DRM) build
 on:
   push:
     branches: [unattended-wayland-ci]
-    # The riscv64 headless build has its own workflow; a change to it alone must not rebuild (and
+    # The riscv64 build has its own workflow; a change to it alone must not rebuild (and
     # republish) the x86_64/aarch64 packages.
     paths-ignore:
       - "branding/riscv64/**"
-      - ".github/workflows/linux-riscv64-headless.yml"
+      - ".github/workflows/linux-riscv64.yml"
   workflow_dispatch:
     inputs:
       release-tag:
