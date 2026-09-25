@@ -1,6 +1,9 @@
 R-DeskWay for riscv64 -- the headless build
 ===========================================
 
+(The released riscv64 package is the full Flutter build, build-flutter.sh. This
+headless one, build-headless.sh, is the fallback if Flutter for riscv64 breaks.)
+
 This build has everything unattended access needs: the root service captures
 the screen through DRM/KMS (no consent dialog, login screen included), talks
 to the ID server and relay, and takes keyboard and mouse input. It has no
