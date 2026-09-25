@@ -1,0 +1,29 @@
+R-DeskWay for riscv64 -- the headless build
+===========================================
+
+This build has everything unattended access needs: the root service captures
+the screen through DRM/KMS (no consent dialog, login screen included), talks
+to the ID server and relay, and takes keyboard and mouse input. It has no
+settings window, because there is no Flutter engine for riscv64 at the Flutter
+version RustDesk is built with. Set it up from a shell instead.
+
+The service starts when the package is installed. Then, as root:
+
+  sudo rustdesk --get-id                  this machine's ID
+  sudo rustdesk --password 'SECRET'       the permanent password peers use
+
+To use your own RustDesk server rather than the public one:
+
+  sudo rustdesk --option custom-rendezvous-server your.server.example
+  sudo rustdesk --option key 'SERVER-PUBLIC-KEY'
+  sudo rustdesk --option relay-server your.server.example     (optional)
+  sudo rustdesk --option api-server https://your.server.example  (optional)
+
+`sudo rustdesk --option NAME` with no value prints the current setting.
+
+Needs, like the other R-DeskWay packages: a Wayland (or X11) session, and an
+active display output (a monitor, an HDMI dummy plug, or a forced kernel
+mode) -- DRM capture reads the scanout, and a headless board has none.
+
+The service is `rustdesk.service` (systemctl status rustdesk); logs are in
+/root/.local/share/logs/RustDesk and ~/.local/share/logs/RustDesk.
