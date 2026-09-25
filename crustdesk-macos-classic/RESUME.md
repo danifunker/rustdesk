@@ -142,6 +142,31 @@ and the Mac's main loop opens them.
   Power Manager's idle timer every 5 s -- `_IdleUpdate`, checked for first,
   since a Mac without a Power Manager does not have it.
 
+## 2f. The build pipeline
+
+`.github/workflows/macos-classic-agent-build.yaml`, in the IRIX workflow's
+shape: on a push to vintage-agents touching this tree (or by hand), the host
+tests on ubuntu-24.04, then `scripts/ci-build.sh compile` inside Retro68's
+container image (pinned by digest), `package` (make-disk.sh with rb-cli
+pinned to a rusty-backup release) and `check`; the artifact `c-desk-vint` is
+C-Desk-Vint.hda, .sit.hqx, BUILD-INFO.txt and SHA256SUMS. Artifacts only:
+releasing is by hand. `scripts/ci-build.sh` runs the same locally (OUT,
+DIST, RETRO68; `docker run ... $IMAGE scripts/ci-build.sh compile` for the
+container's compiler).
+
+- The image's GCC is **16.1**; the local toolchain's is 12.2. The GCC 16
+  build was run in QEMU before the pin (2026-09-24): 7.5.5 on the q800
+  (login, frames, clipboard, screenshot, file manager) and 9.2.2 on mac99
+  (the same, registered with the public ID server); its disk image, made by
+  the pinned rb-cli, mounts on the q800. Bump either pin only after the
+  same.
+- rusty-backup's newer rb-cli makes blank volumes with `new volume hfs`
+  (the old `new --fs hfs` is gone); the scripts use the new form, which the
+  local rb-cli also has.
+- `check` fails on a configured CDV_SERVER/KEY/API, on "dani.tech", and on
+  each line of the optional secret CDV_PRIVATE_STRINGS; and it requires the
+  public server in both halves, which proves the scan still works.
+
 ## 2a. The ID server
 
 Registration (UDP to hbbs), PunchHole/RequestRelay -> relay (hbbr), and
@@ -250,6 +275,12 @@ bytes 5x and the time 25%.
 - **QEMU's mac99 firmware does not come back from a restart inside Mac OS 9**
   (black screen, busy CPU): stop it and `scripts/mac99.sh resume`, which boots
   the same overlay. Restart from the Finder first so the disk is clean.
+- **`grep -a` cannot see the 68k half's server or key.** GCC inlines
+  `strcpy(prefs.server, DEFAULT_SERVER)` as `move.l #'rust',prefs+0x78` and
+  so on: the bytes are in the CODE resource four at a time between opcodes
+  and addresses. A personal 68k build greps clean for its own hostname and
+  key; the PowerPC half does not hide them. `tools/find-strings.py` looks
+  for both forms.
 - **Emulator time under -icount runs ahead of wall time**; only the Mac's own
   logged durations mean anything.
 

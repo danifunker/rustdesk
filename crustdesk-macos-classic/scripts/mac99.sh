@@ -41,7 +41,7 @@ start)
     cd "$env"
     rm -f os9-overlay.qcow2 cd.hfs
     qemu-img create -q -f qcow2 -b "$os9" -F qcow2 os9-overlay.qcow2
-    rb new --fs hfs --size 4M --name C-Desk-Vint cd.hfs >/dev/null
+    rb new volume hfs --size 4M --name C-Desk-Vint cd.hfs >/dev/null
     if [ -n "${ITEMS:-}" ]; then
         # A whole package (e.g. make-disk.sh's items): the installer and all.
         for f in $ITEMS; do rb put-macbinary cd.hfs "$f" >/dev/null; done

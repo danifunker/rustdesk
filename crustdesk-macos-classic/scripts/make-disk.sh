@@ -60,7 +60,7 @@ open(sys.argv[2], 'wb').write(text.replace('\n', '\r').encode('mac_roman'))
 EOF2
 
 flat="$work/flat.hfs"
-rb new --fs hfs --size "$size" --name C-Desk-Vint "$flat"
+rb new volume hfs --size "$size" --name C-Desk-Vint "$flat"
 for f in "$work/items/"*.bin; do
     rb put-macbinary "$flat" "$f"
 done

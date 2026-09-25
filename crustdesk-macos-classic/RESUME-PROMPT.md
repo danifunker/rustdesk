@@ -30,12 +30,12 @@ Priorities, in order:
    connection ended -- ask for it, read it before guessing. The About box
    (modal) was ruled out: sessions carry on under it.
 
-2. **A build pipeline**, if the user says go (they were asked: whether to
-   add it, and whether to release by hand): a workflow beside
-   `.github/workflows/irix-agent-build.yaml` and in its shape -- on pushes to
-   vintage-agents touching this tree, Retro68's container image, `make -C
-   host test`, both halves, `scripts/make-disk.sh -z`, SHA256SUMS, artifacts
-   only, and a step that fails if the user's hostnames or key appear in them.
+2. **The build pipeline's first run.** `.github/workflows/
+   macos-classic-agent-build.yaml` (RESUME.md 2f) is committed but has not
+   run on GitHub yet: it runs on the next push to vintage-agents touching
+   this tree (push only when asked). Then: is it green, and does the user
+   want the CDV_PRIVATE_STRINGS secret set (their key, which the public file
+   cannot name)? Releasing stays by hand, from an artifact tried on a Mac.
 
 3. **Speed on the 68040** (docs/BACKLOG.md): ~11 s per new TLS connection to
    the console, 2.1 s per keyframe. Measure under `ICOUNT=5` before and
@@ -50,7 +50,8 @@ asked. **Builds for sharing carry no personal details**: the repo's
 build-m68k/build-ppc are the generic ones (public ID server, no console);
 the user's own server, key and console go only into the separate personal
 build (RESUME.md section 5), and every served generic file is checked with
-`grep -c -a` for their hostnames and key.
+`tools/find-strings.py --must-not ...` for their hostnames and key -- NOT
+`grep -c -a`, which is blind in the 68k half (RESUME.md section 4).
 
 How to work: `make -C host test` after any core change. `scripts/q800.sh start`
 (NET=restricted / NET=none to take the network away, QEMU_EXTRA for QEMU's

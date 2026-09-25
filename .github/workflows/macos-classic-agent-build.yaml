@@ -1,0 +1,110 @@
+# Build and package C-Desk-Vint, the classic Mac OS agent (fat: 68k for
+# System 7.5.5+, PowerPC for Mac OS 8/9 and Classic), on a HOSTED runner, on
+# every push to vintage-agents that touches it.
+#
+# A BUILD, NOT A RELEASE. Every such push runs the host tests, compiles both
+# halves in Retro68's container image, packages them -- C-Desk-Vint.hda for a
+# BlueSCSI, C-Desk-Vint.sit.hqx for a Mac on the network -- and leaves them as
+# this run's artifact with BUILD-INFO.txt and SHA256SUMS. Nothing is
+# published: no GitHub release, no step that could create one.
+#
+# RELEASING stays a person's job: take the artifact from a green run that has
+# been tried on a real Mac, and attach its files to a release by hand.
+#
+# THE GENERIC BUILD ONLY. It names the public ID server and no console; a
+# personal build (a server, key and console of one's own) is made locally and
+# never here. The check step fails the run if the build is configured with
+# any of them or if a built file holds a forbidden string: "dani.tech", and
+# every line of the OPTIONAL secret CDV_PRIVATE_STRINGS (a key, say, which a
+# public workflow file cannot name). Plain grep is not enough for that -- the
+# 68k compiler inlines strcpy of a constant as move.l immediates, four bytes
+# at a time -- so tools/find-strings.py looks for those too, and the step also
+# requires the public server in both halves to prove it still can.
+#
+# THIN YAML: every step is scripts/ci-build.sh (compile, package, check), the
+# script a person runs locally, or a test target. What lives here is only the
+# runner, its packages, the pinned container image and rb-cli, and artifacts.
+#
+# PINS, bumped by hand after a local build with the new one has run in QEMU
+# on 7.5.5 and 9.2.2 (scripts/q800.sh, scripts/mac99.sh):
+#   RETRO68_IMAGE  ghcr.io/autc04/retro68 by digest (GCC 16.1, 2026-07-21)
+#   RB_CLI_TAG     danifunker/rusty-backup's release that packages the disk
+
+name: Classic Mac OS agent (build)
+
+on:
+  push:
+    branches:
+      - vintage-agents
+    paths:
+      - "crustdesk-macos-classic/**"
+      # libvpx's headers for the host tests' comparison
+      - "rustdesk-ppc-agent/vpx-include/**"
+      - ".github/workflows/macos-classic-agent-build.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-classic-agent-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
+
+env:
+  RETRO68_IMAGE: ghcr.io/autc04/retro68@sha256:459dd3ea9856262162615527021be7b64f198631dc59cca8cedbf197b7656019
+  RB_CLI_TAG: v2026-09-12-11-44
+
+defaults:
+  run:
+    working-directory: crustdesk-macos-classic
+
+jobs:
+  # The portable core on Linux: the VP8 encoder against libvpx, the session,
+  # crypto against libsodium, PNG against PIL, MacBinary/BinHex.
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Runner packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvpx9 python3-nacl python3-pil
+      - name: Host tests
+        run: make -C host test
+
+  build:
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: rb-cli
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/rb"
+          gh release download "$RB_CLI_TAG" -R danifunker/rusty-backup \
+              -p 'rb-cli-linux-x64-*.tar.gz' -O - | tar -xz -C "$RUNNER_TEMP/rb" rb-cli
+          echo "$RUNNER_TEMP/rb" >> "$GITHUB_PATH"
+
+      - name: Compile (Retro68's image)
+        run: >
+          docker run --rm -u "$(id -u):$(id -g)"
+          -v "$GITHUB_WORKSPACE:/w" -w /w/crustdesk-macos-classic
+          "$RETRO68_IMAGE" scripts/ci-build.sh compile
+
+      - name: Package
+        run: scripts/ci-build.sh package
+
+      - name: Nothing personal in it
+        env:
+          CDV_PRIVATE_STRINGS: ${{ secrets.CDV_PRIVATE_STRINGS }}
+        run: scripts/ci-build.sh check
+
+      - name: Upload the product
+        uses: actions/upload-artifact@v4
+        with:
+          name: c-desk-vint
+          path: crustdesk-macos-classic/dist/
+          if-no-files-found: error
