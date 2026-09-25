@@ -24,9 +24,10 @@ here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo=$(cd "$here/../.." && pwd)
 cd "$repo"
 
-T=riscv64gc-unknown-linux-gnu
-GNU=riscv64-linux-gnu
-PCDIR=/usr/lib/$GNU/pkgconfig
+. "$here/cross-env.sh"
+T=$RV_TARGET
+GNU=$RV_GNU
+PCDIR=$RV_PCDIR
 step=${1:-all}
 
 deps() {
@@ -47,7 +48,10 @@ EOF
     sudo apt-get update -y
     sudo apt-get install -y --no-install-recommends \
         gcc-$GNU g++-$GNU binutils-$GNU clang libclang-dev pkg-config meson ninja-build \
-        cmake python3 file dpkg-dev libsodium-dev
+        cmake python3 file dpkg-dev libsodium-dev libssl-dev qemu-user-static
+    # qemu-user-static first: libglib2.0-dev:riscv64 depends on `python3 | qemu-user |
+    # qemu-user-static`, and an unqualified python3 must be riscv64 -- which apt would install in
+    # place of the host's (it cannot run its own postinst). The qemu alternative satisfies it.
     sudo apt-get install -y --no-install-recommends \
         libc6-dev:riscv64 libgtk-3-dev:riscv64 libxcb-randr0-dev:riscv64 \
         libxcb-shape0-dev:riscv64 libxcb-xfixes0-dev:riscv64 libxdo-dev:riscv64 \
@@ -118,30 +122,8 @@ EOF
 cargo_build() {
     # Only the rlib is needed under the binary; the cdylib/staticlib are the Flutter bridge's.
     sed -i 's/\["cdylib", "staticlib", "rlib"\]/["rlib"]/' Cargo.toml
-    export CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_LINKER=$GNU-gcc
-    export CC_riscv64gc_unknown_linux_gnu=$GNU-gcc
-    export CXX_riscv64gc_unknown_linux_gnu=$GNU-g++
-    export AR_riscv64gc_unknown_linux_gnu=$GNU-ar
-    export PKG_CONFIG_ALLOW_CROSS=1
-    export PKG_CONFIG_LIBDIR_riscv64gc_unknown_linux_gnu=$PCDIR:/usr/share/pkgconfig
-    export BINDGEN_EXTRA_CLANG_ARGS_riscv64gc_unknown_linux_gnu="--target=$GNU -I/usr/include/$GNU"
-    # libsodium-sys would run libsodium's configure with --host=riscv64gc-unknown-linux-gnu, which
-    # autoconf does not know. Use pkg-config instead: its target-scoped LIBDIR above finds the
-    # riscv64 libsodium for the target, while build scripts (built for the x86_64 host, and
-    # rustdesk's pulls in hbb_common) find the host's. SODIUM_LIB_DIR cannot be scoped like that.
-    export SODIUM_USE_PKG_CONFIG=1
-    # mozjpeg-sys 2.2.2 (camera support, via nokhwa-core) enables SIMD on any arch with a GNU
-    # assembler but has no riscv64 SIMD code, and then leaves out its jsimd_none.c fallback, so
-    # the jsimd_* hooks are undefined at the final link. Build the crate once so its generated
-    # headers exist, compile its own jsimd_none.c against them, and link that object in.
-    cargo build --locked --release --target "$T" -p mozjpeg-sys
-    local mzv mzsrc mzout
-    mzv=$(grep -A1 '^name = "mozjpeg-sys"$' Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p')
-    mzsrc=$(ls -d "${CARGO_HOME:-$HOME/.cargo}"/registry/src/*/mozjpeg-sys-"$mzv" | head -1)
-    mzout=$(ls -d target/"$T"/release/build/mozjpeg-sys-*/out | head -1)
-    $GNU-gcc -O2 -fPIC -c "$mzsrc/vendor/jsimd_none.c" -I"$mzout/include" -I"$mzsrc/vendor" \
-        -o target/jsimd_none-riscv64.o
-    export CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C link-arg=$repo/target/jsimd_none-riscv64.o"
+    riscv64_cargo_env
+    riscv64_mozjpeg_fallback "$repo"
     cargo build --locked --release --keep-going --target "$T" --bin rustdesk \
         --features drm,drm-wake,linux-pkg-config
     file "target/$T/release/rustdesk"
