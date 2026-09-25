@@ -86,7 +86,7 @@ real card applies it; so a decoded peer picture is lighter than QEMU's own.
 
 `rb-cli get` copies only the data fork; `rb-cli get-binhex IMG@N PATH
 OUT.hqx` keeps both forks and the type and creator. To make an `.hqx` of a
-build: `rb-cli new volume hfs --size 2M x.hfv`, `rb-cli put-macbinary x.hfv
+build: `rb-cli new volume hfs --size 2M x.hfv` (older rb-cli: `new --fs hfs`), `rb-cli put-macbinary x.hfv
 C-Desk-Vint-fat.bin`, then `get-binhex`.
 
 ### When the Mac crashes

@@ -160,9 +160,10 @@ container's compiler).
   (the same, registered with the public ID server); its disk image, made by
   the pinned rb-cli, mounts on the q800. Bump either pin only after the
   same.
-- rusty-backup's newer rb-cli makes blank volumes with `new volume hfs`
-  (the old `new --fs hfs` is gone); the scripts use the new form, which the
-  local rb-cli also has.
+- rusty-backup's newer rb-cli makes blank volumes with `new volume hfs`;
+  the local one (0.1.0, June) only knows `new --fs hfs`, and each rejects
+  the other. The scripts' `new_hfs` tries both. (`rb-cli new volume --help`
+  exits 0 on either, so it proves nothing.)
 - `check` fails on a configured CDV_SERVER/KEY/API, on "dani.tech", and on
   each line of the optional secret CDV_PRIVATE_STRINGS; and it requires the
   public server in both halves, which proves the scan still works.

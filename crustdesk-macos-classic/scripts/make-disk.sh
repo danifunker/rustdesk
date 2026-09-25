@@ -44,6 +44,9 @@ done
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 rb() { rb-cli --progress never -q "$@"; }
+# A blank HFS volume: rb-cli releases since mid-2026 spell it `new volume hfs`,
+# older ones `new --fs hfs`.
+new_hfs() { rb new volume hfs "$@" 2>/dev/null || rb new --fs hfs "$@"; }
 
 # The four items, named as the Mac will show them.
 mkdir "$work/items"
@@ -60,7 +63,7 @@ open(sys.argv[2], 'wb').write(text.replace('\n', '\r').encode('mac_roman'))
 EOF2
 
 flat="$work/flat.hfs"
-rb new volume hfs --size "$size" --name C-Desk-Vint "$flat"
+new_hfs --size "$size" --name C-Desk-Vint "$flat"
 for f in "$work/items/"*.bin; do
     rb put-macbinary "$flat" "$f"
 done

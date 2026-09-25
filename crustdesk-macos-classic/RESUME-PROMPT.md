@@ -30,12 +30,14 @@ Priorities, in order:
    connection ended -- ask for it, read it before guessing. The About box
    (modal) was ruled out: sessions carry on under it.
 
-2. **The build pipeline's first run.** `.github/workflows/
-   macos-classic-agent-build.yaml` (RESUME.md 2f) is committed but has not
-   run on GitHub yet: it runs on the next push to vintage-agents touching
-   this tree (push only when asked). Then: is it green, and does the user
-   want the CDV_PRIVATE_STRINGS secret set (their key, which the public file
-   cannot name)? Releasing stays by hand, from an artifact tried on a Mac.
+2. **Publishing the CI build.** The pipeline (RESUME.md 2f) is green. Run
+   36088877830 (commit 4c7fc5780) was downloaded, its checksums and the
+   private-string check (with the key, locally) passed, and its own app ran
+   in QEMU on 7.5.5 and 9.2.2 (sessions, clipboard, screenshot, file round
+   trip). The user publishes it; ask before touching a release (public).
+   Their PowerBook drops: that build fixes a 42-byte line written into a
+   40-byte stack buffer at deferred-task time on an ID-server timeout --
+   maybe the cause, unproven; ask for the log if drops continue.
 
 3. **Speed on the 68040** (docs/BACKLOG.md): ~11 s per new TLS connection to
    the console, 2.1 s per keyframe. Measure under `ICOUNT=5` before and

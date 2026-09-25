@@ -23,6 +23,9 @@ port=${PORT:-31129}
 os9=${OS9_DISK:-$HOME/MacOS9-2-2 UTM.qcow2}
 app=$(realpath "${APP:-$here/build-m68k/C-Desk-Vint-fat.bin}")
 rb() { rb-cli --progress never -q "$@"; }
+# A blank HFS volume: rb-cli releases since mid-2026 spell it `new volume hfs`,
+# older ones `new --fs hfs`.
+new_hfs() { rb new volume hfs "$@" 2>/dev/null || rb new --fs hfs "$@"; }
 mon() { python3 "$here/scripts/qmon.py" "$env/mon9.sock" "$@"; }
 
 boot() {
@@ -41,7 +44,7 @@ start)
     cd "$env"
     rm -f os9-overlay.qcow2 cd.hfs
     qemu-img create -q -f qcow2 -b "$os9" -F qcow2 os9-overlay.qcow2
-    rb new volume hfs --size 4M --name C-Desk-Vint cd.hfs >/dev/null
+    new_hfs --size 4M --name C-Desk-Vint cd.hfs >/dev/null
     if [ -n "${ITEMS:-}" ]; then
         # A whole package (e.g. make-disk.sh's items): the installer and all.
         for f in $ITEMS; do rb put-macbinary cd.hfs "$f" >/dev/null; done
