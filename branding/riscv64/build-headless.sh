@@ -130,6 +130,18 @@ cargo_build() {
     # riscv64 libsodium for the target, while build scripts (built for the x86_64 host, and
     # rustdesk's pulls in hbb_common) find the host's. SODIUM_LIB_DIR cannot be scoped like that.
     export SODIUM_USE_PKG_CONFIG=1
+    # mozjpeg-sys 2.2.2 (camera support, via nokhwa-core) enables SIMD on any arch with a GNU
+    # assembler but has no riscv64 SIMD code, and then leaves out its jsimd_none.c fallback, so
+    # the jsimd_* hooks are undefined at the final link. Build the crate once so its generated
+    # headers exist, compile its own jsimd_none.c against them, and link that object in.
+    cargo build --locked --release --target "$T" -p mozjpeg-sys
+    local mzv mzsrc mzout
+    mzv=$(grep -A1 '^name = "mozjpeg-sys"$' Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p')
+    mzsrc=$(ls -d "${CARGO_HOME:-$HOME/.cargo}"/registry/src/*/mozjpeg-sys-"$mzv" | head -1)
+    mzout=$(ls -d target/"$T"/release/build/mozjpeg-sys-*/out | head -1)
+    $GNU-gcc -O2 -fPIC -c "$mzsrc/vendor/jsimd_none.c" -I"$mzout/include" -I"$mzsrc/vendor" \
+        -o target/jsimd_none-riscv64.o
+    export CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C link-arg=$repo/target/jsimd_none-riscv64.o"
     cargo build --locked --release --keep-going --target "$T" --bin rustdesk \
         --features drm,drm-wake,linux-pkg-config
     file "target/$T/release/rustdesk"
