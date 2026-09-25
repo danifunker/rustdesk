@@ -612,7 +612,7 @@ static void action_step(void)
         return;
     if (TickCount() - R.step_since > 15 * 60) {
         {
-            char line[40];
+            char line[64];
             put_num(put_str(line, "the ID server's request timed out at step "), R.step);
             engine_log(line);
         }
