@@ -56,7 +56,7 @@ EOF
         libayatana-appindicator3-dev:riscv64 libpam0g-dev:riscv64 libssl-dev:riscv64 \
         libvpx-dev:riscv64 libaom-dev:riscv64 libopus-dev:riscv64 libyuv-dev:riscv64 \
         libdrm-dev:riscv64 libegl-dev:riscv64 libgles-dev:riscv64 \
-        libseccomp-dev:riscv64 libcap-dev:riscv64
+        libseccomp-dev:riscv64 libcap-dev:riscv64 libsodium-dev:riscv64
     # Ubuntu's libyuv-dev ships no .pc, and scrap's linux-pkg-config path probes for one.
     sudo tee "$PCDIR/libyuv.pc" >/dev/null <<EOF
 prefix=/usr
@@ -125,6 +125,9 @@ cargo_build() {
     export PKG_CONFIG_ALLOW_CROSS=1
     export PKG_CONFIG_LIBDIR_riscv64gc_unknown_linux_gnu=$PCDIR:/usr/share/pkgconfig
     export BINDGEN_EXTRA_CLANG_ARGS_riscv64gc_unknown_linux_gnu="--target=$GNU -I/usr/include/$GNU"
+    # libsodium-sys would run libsodium's configure with --host=riscv64gc-unknown-linux-gnu, which
+    # autoconf does not know; link Ubuntu's riscv64 libsodium.a instead (static: no new Depends).
+    export SODIUM_LIB_DIR=/usr/lib/$GNU SODIUM_STATIC=yes
     cargo build --locked --release --target "$T" --bin rustdesk \
         --features drm,drm-wake,linux-pkg-config
     file "target/$T/release/rustdesk"
