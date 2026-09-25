@@ -6,13 +6,14 @@
 # x86_64 Ubuntu 24.04; this file only adds the runner, Rust and the artifact.
 #
 # ARTIFACTS ONLY. Nothing is published: the riscv64 deb is attached to a release by hand, after it
-# has run on real riscv64 hardware. (The unattended-wayland-ci workflow publishes on every push,
-# which is why this lives on its own branch with its own trigger.)
+# has run on real riscv64 hardware. It runs on every push to unattended-wayland-ci, so a sync from
+# upstream rebuilds it too; linux-unattended-wayland.yml ignores pushes that touch only these
+# riscv64 files, so a change here alone never rebuilds or republishes the other packages.
 name: Linux riscv64 R-DeskWay (headless)
 
 on:
   push:
-    branches: [r-deskway-riscv64]
+    branches: [unattended-wayland-ci]
   workflow_dispatch:
 
 permissions:
