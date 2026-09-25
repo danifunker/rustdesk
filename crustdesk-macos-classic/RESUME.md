@@ -265,4 +265,20 @@ bytes 5x and the time 25%.
 - QEMU 8.2 `qemu-system-m68k -M q800`; workspace `~/cdv-testenv` (TESTING.md).
 - MiniVNC source at `/tmp/mac-minivnc` (GPLv3; ChromiVNC's keyboard code in
   it is GPLv2+). The map for the Mac side; nothing is copied from it.
-- RustDesk 1.4.9 is installed on this machine; X11 at `:0`.
+- RustDesk 1.4.9 is installed on this machine; X11 at `:0`. Its session
+  windows stopped drawing (stuck on "Connecting..." while its log shows a
+  working session) partway through 2026-09-24; restarting it should clear
+  that. Until then, `cdvpoke` plays the client.
+- **Two builds.** The repo's `build-m68k`/`build-ppc` are generic: the public
+  ID server (rs-ny.rustdesk.com and its key), no console -- what may be
+  shared. The user's own are configured in a separate directory (the
+  session scratchpad's `dani/build-{m68k,ppc}`, or anywhere):
+  `cmake -DCDV_SERVER=rustdesk.home.dani.tech -DCDV_KEY=<key from
+  ~/.config/rustdesk/RustDesk2.toml> -DCDV_API=https://remote.home.dani.tech`.
+  Never serve or commit the latter as the generic one.
+- **Getting builds to the user's Macs**: they pull over HTTP from this
+  machine -- `python3 -m http.server 8000 --bind 192.168.99.153` in a serve
+  directory holding `C-Desk-Vint-generic.{hda,sit.hqx}` and the personal
+  `C-Desk-Vint.{hda,sit.hqx}`. The same server carries the DOOM port's
+  downloads as a `doom` symlink to ~/doom-mac-testenv/www (the user asked for
+  one server for both); keep it if the server is ever restarted.

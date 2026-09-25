@@ -1,41 +1,62 @@
 Continue the classic Mac OS RustDesk agent, C-Desk-Vint. Read
 `/home/dani/repos/rustdesk/crustdesk-macos-classic/RESUME.md` first -- it is
 the source of truth for what is built, what is measured, and the traps that
-cost time once. Do not re-derive anything it records.
+cost time once (sections 2a-2e cover the ID server, the console, the
+installer and menus, chat/screenshots, zstd, file transfer and the two
+session slots). Do not re-derive anything it records.
 
-**It works in the emulators, and the PowerPC half on a real G4.** One fat
-application: the 68k half on QEMU's Quadra 800 under System 7.5.5, the native
-PowerPC half on QEMU's mac99 under Mac OS 9.2.2 and on the user's PowerBook G4
-(Classic under Tiger). By ID through the user's ID server and relay,
-encrypted; listed in their console over https; installer, Settings dialog,
-Sharing menu, Control Strip module. The user has a Quadra 800 and a BlueSCSI;
-`scripts/make-disk.sh` makes the disk image, `-z` the .sit.hqx they pull from
-a LAN web server.
+**Where it stands.** One fat application, the 68k half for System 7.5.5+ and
+the native PowerPC half for Mac OS 8/9 (and Classic under Mac OS X). By ID
+through an ID server and relay, encrypted, or by IP; listed in a console over
+https (BearSSL); clipboard both ways (zstd), chat, screenshots, the wheel,
+the client's quality/FPS, restart; file transfer (MacBinary out, MacBinary
+and BinHex in) beside a desktop session; installer, Settings, Sharing menu,
+Control Strip module, a keep-awake option; quits at Shut Down; never blocks
+on a missing network.
+
+**Proven, and how.** In QEMU: the Quadra 800 (7.5.5, MacTCP) and mac99 (9.2.2,
+Open Transport), driven by `host/cdvpoke.py` (desktop and `--files` file
+manager) and, until this machine's client window stopped drawing, by RustDesk
+1.4.9 by ID through the user's server. On real hardware: the PowerPC half
+under Classic on the user's PowerBook G4, by IP and by ID; the user has
+reported sessions there as flaky, cause unknown. **Not yet proven**: file
+transfer from a real client's file manager (only cdvpoke has driven it), the
+local-address path (QEMU's NAT hides it), anything on the real Quadra.
 
 Priorities, in order:
 
-1. **Whatever the real machines say.** If the user reports back, that
-   outranks everything below. "C-Desk-Vint Log" in the Preferences folder has
-   the engine's story, keyframe and TLS timings included. The local-address
-   path (same LAN as the client) has never run: the emulators' NAT hides it.
+1. **What the user reports.** Their PowerBook sessions drop now and then;
+   the "C-Desk-Vint Log" file in the Preferences folder says why each
+   connection ended -- ask for it, read it before guessing. The About box
+   (modal) was ruled out: sessions carry on under it.
 
-2. **TLS and keyframe speed on the 68040** (docs/BACKLOG.md items 6 and 2):
-   ~11 s per new console connection, 2.1 s per keyframe. Measure under
-   `ICOUNT=5` before and after, and keep `make -C host test` passing: it is
-   the proof that the bitstream is still exactly what libvpx decodes.
+2. **A build pipeline**, if the user says go (they were asked: whether to
+   add it, and whether to release by hand): a workflow beside
+   `.github/workflows/irix-agent-build.yaml` and in its shape -- on pushes to
+   vintage-agents touching this tree, Retro68's container image, `make -C
+   host test`, both halves, `scripts/make-disk.sh -z`, SHA256SUMS, artifacts
+   only, and a step that fails if the user's hostnames or key appear in them.
 
-3. **A real hardware cursor** (G3/G4 with an ATI card): the separate-pointer
-   path has only run forced.
+3. **Speed on the 68040** (docs/BACKLOG.md): ~11 s per new TLS connection to
+   the console, 2.1 s per keyframe. Measure under `ICOUNT=5` before and
+   after; keep `make -C host test` passing.
 
-Boundaries: the user's toolchain and the DOOM port's emulator workspace are
-shared -- read them, do not change them. MPW's headers are reference only.
-Commit to `vintage-agents` with a `crustdesk-macos-classic:` subject, in the
-house voice; do not push unless asked.
+Boundaries: the user's toolchain, the DOOM port's workspace
+(~/doom-mac-testenv) and the OS 9 image are shared -- read them, never change
+them (the OS 9 image is only ever an overlay's backing file). MPW's headers
+are reference only. Commit to `vintage-agents` with a `crustdesk-macos-classic:`
+subject, in the house voice, with the Co-Authored-By line; never push unless
+asked. **Builds for sharing carry no personal details**: the repo's
+build-m68k/build-ppc are the generic ones (public ID server, no console);
+the user's own server, key and console go only into the separate personal
+build (RESUME.md section 5), and every served generic file is checked with
+`grep -c -a` for their hostnames and key.
 
-How to work: `make -C host test` after any core change. `scripts/q800.sh
-start`, then `host/cdvpoke.py 127.0.0.1:31119 classic ...` to drive it and
-`scripts/q800.sh shot NAME` to look; `scripts/mac99.sh` likewise for OS 9
-(`ITEMS=... start`, then `install`, to test the installer). The user's builds
-set `-DCDV_SERVER`, `-DCDV_KEY` (from ~/.config/rustdesk/RustDesk2.toml) and
-`-DCDV_API=https://remote.home.dani.tech` in a separate build directory. Say plainly what was measured in the
-emulator and what was not measured at all.
+How to work: `make -C host test` after any core change. `scripts/q800.sh start`
+(NET=restricted / NET=none to take the network away, QEMU_EXTRA for QEMU's
+exception log), then `host/cdvpoke.py 127.0.0.1:31119 classic ...` to drive it
+and `scripts/q800.sh shot NAME` to look; `scripts/mac99.sh` likewise for OS 9
+(`ITEMS=... start` then `install` for the installer; `resume` after a restart
+inside Mac OS 9). Packages: `scripts/make-disk.sh [-b BUILD-PARENT] -o X.hda -z
+X.sit.hqx`. Say plainly what was measured in the emulator, what on real
+hardware, and what not at all.
