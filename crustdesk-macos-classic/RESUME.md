@@ -149,7 +149,8 @@ shape: on a push to vintage-agents touching this tree (or by hand), the host
 tests on ubuntu-24.04, then `scripts/ci-build.sh compile` inside Retro68's
 container image (pinned by digest), `package` (make-disk.sh with rb-cli
 pinned to a rusty-backup release) and `check`; the artifact `c-desk-vint` is
-C-Desk-Vint.hda, .sit.hqx, BUILD-INFO.txt and SHA256SUMS. Artifacts only:
+C-Desk-Vint.hda, .sit.hqx, .mar (stored MAR, `make-disk.sh -m`), BUILD-INFO.txt
+and SHA256SUMS. Artifacts only:
 releasing is by hand. `scripts/ci-build.sh` runs the same locally (OUT,
 DIST, RETRO68; `docker run ... $IMAGE scripts/ci-build.sh compile` for the
 container's compiler).

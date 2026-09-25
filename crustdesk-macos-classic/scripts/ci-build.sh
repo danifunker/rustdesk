@@ -7,8 +7,8 @@
 #   compile   both halves, configured from nothing with no server, key or
 #             console (the public ID server), into $OUT/build-{m68k,ppc}
 #   package   scripts/make-disk.sh into $DIST: C-Desk-Vint.hda (for a
-#             BlueSCSI), C-Desk-Vint.sit.hqx (for a Mac on the network),
-#             BUILD-INFO.txt and SHA256SUMS
+#             BlueSCSI), C-Desk-Vint.sit.hqx and C-Desk-Vint.mar (for a Mac
+#             on the network), BUILD-INFO.txt and SHA256SUMS
 #   check     fails if anything personal is in the build: the configuration
 #             must name no server, key or console, and no built file may hold
 #             a forbidden string -- "dani.tech", and one per line of
@@ -50,7 +50,8 @@ compile() {
 package() {
     rm -rf "$dist"
     mkdir -p "$dist"
-    "$here/scripts/make-disk.sh" -b "$out" -o "$dist/C-Desk-Vint.hda" -z "$dist/C-Desk-Vint.sit.hqx"
+    "$here/scripts/make-disk.sh" -b "$out" -o "$dist/C-Desk-Vint.hda" -z "$dist/C-Desk-Vint.sit.hqx" \
+        -m "$dist/C-Desk-Vint.mar"
     {
         echo "C-Desk-Vint, generic build (public ID server rs-ny.rustdesk.com, no console)"
         echo "commit:   $(git -C "$here" rev-parse HEAD 2>/dev/null || echo unknown)"
@@ -58,7 +59,7 @@ package() {
         echo "rb-cli:   $(rb-cli --version 2>/dev/null | head -1)"
         echo "built:    $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     } > "$dist/BUILD-INFO.txt"
-    (cd "$dist" && sha256sum C-Desk-Vint.hda C-Desk-Vint.sit.hqx BUILD-INFO.txt > SHA256SUMS)
+    (cd "$dist" && sha256sum C-Desk-Vint.hda C-Desk-Vint.sit.hqx C-Desk-Vint.mar BUILD-INFO.txt > SHA256SUMS)
     cat "$dist/BUILD-INFO.txt" "$dist/SHA256SUMS"
 }
 
@@ -80,7 +81,7 @@ check() {
     [ ${#forbid[@]} -gt 2 ] || echo "note: CDV_PRIVATE_STRINGS is empty; checking the hostname only"
     local find=$here/tools/find-strings.py
     python3 "$find" --must rs-ny.rustdesk.com "${forbid[@]}" \
-        "$b68/C-Desk-Vint.bin" "$bppc/C-Desk-Vint.bin" "$dist/C-Desk-Vint.hda"
+        "$b68/C-Desk-Vint.bin" "$bppc/C-Desk-Vint.bin" "$dist/C-Desk-Vint.hda" "$dist/C-Desk-Vint.mar"
     python3 "$find" "${forbid[@]}" \
         "$b68/C-Desk-Vint-Installer.bin" "$b68/C-Desk-Vint-Strip.bin" \
         "$dist/BUILD-INFO.txt" "$dist/C-Desk-Vint.sit.hqx"

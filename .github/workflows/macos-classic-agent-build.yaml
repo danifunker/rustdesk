@@ -4,7 +4,7 @@
 #
 # A BUILD, NOT A RELEASE. Every such push runs the host tests, compiles both
 # halves in Retro68's container image, packages them -- C-Desk-Vint.hda for a
-# BlueSCSI, C-Desk-Vint.sit.hqx for a Mac on the network -- and leaves them as
+# BlueSCSI, C-Desk-Vint.sit.hqx and .mar for a Mac on the network -- and leaves them as
 # this run's artifact with BUILD-INFO.txt and SHA256SUMS. Nothing is
 # published: no GitHub release, no step that could create one.
 #

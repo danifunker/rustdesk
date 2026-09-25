@@ -116,4 +116,3 @@ Things to know
   connection is then kept, so it happens rarely.
 - The Mac has one mouse button: the other computer's right button gives a
   Control-click.
-- There is no scroll wheel on this system; use the scroll bars.
