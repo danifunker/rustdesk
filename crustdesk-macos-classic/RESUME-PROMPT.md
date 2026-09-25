@@ -30,9 +30,11 @@ Priorities, in order:
    connection ended -- ask for it, read it before guessing. The About box
    (modal) was ruled out: sessions carry on under it.
 
-2. **Released.** Build 20260925-4c7fc5780 (CI run 36088877830) rides in
-   the `r-deskway-1.5.0` release as `C-Desk-Vint-20260925-4c7fc5780.{hda,
-   sit.hqx,SHA256SUMS,MANIFEST.txt}`, with a section at the end of the notes
+2. **Released.** Build 20260925-6de1828f9 (CI run 36124295960; its app,
+   installer and module are byte-identical to 4c7fc5780's, which was tested
+   from its download) rides in the `r-deskway-1.5.0` release as
+   `C-Desk-Vint-20260925-6de1828f9.{hda,sit.hqx,mar,SHA256SUMS,MANIFEST.txt}`
+   (the 4c7fc5780 files were replaced), with a section at the end of the notes
    and a row in the R-DeskVint table (notes are CRLF; keep them so). The
    MANIFEST and the notes say what was verified: QEMU only for this build.
    Next time: release a CI artifact, test the artifact itself in QEMU, and
