@@ -18,6 +18,7 @@
 #include <X11/Xproto.h>
 #include <X11/Xutil.h>
 #include <X11/extensions/XShm.h>
+#include <X11/extensions/readdisplay.h>
 #include <X11/extensions/xtraplib.h>
 #include <X11/extensions/xtraplibp.h>
 
@@ -39,9 +40,30 @@ static Display *dpy;
 static Window root;
 static Visual *vis;
 static int W, H, MBW, MBH;
+static int FW;                 /* fb's row, in pixels: MBW * 16 */
 static XShmSegmentInfo shm;
 static int shm_ok;
-static uint8_t *fb;            /* the screen as last read, 8-bit indices */
+/* How the screen is read, chosen when the display opens (screen.h):
+ *   CAP_INDEX  an 8-bit PseudoColor root, through MIT-SHM: fb holds colormap
+ *              indices, converted through the colormap's tables.
+ *   CAP_TRUE   a 24-bit TrueColor root, through MIT-SHM: fb holds 32-bit pixels.
+ *   CAP_RD     SGI's ReadDisplay: the picture as the monitor shows it, windows
+ *              of every depth and the overlay planes composited, 32 bits a
+ *              pixel, over the socket. For screens where windows of another
+ *              depth than the root's show (a read of the root is undefined
+ *              there). */
+enum { CAP_INDEX, CAP_TRUE, CAP_RD };
+static int cap = CAP_INDEX;
+static int PB = 1;             /* bytes a pixel in fb */
+/* Where each channel's 8 bits are in a 32-bit pixel: of fb's (CAP_TRUE, CAP_RD),
+ * and of what ReadDisplay returns. */
+typedef struct {
+    int r, g, b;
+} chans;
+static chans fbch, rdch;
+static int has_rd;             /* the server has ReadDisplay */
+static int rd_known;           /* its pixel layout has been learnt */
+static uint8_t *fb;            /* the screen as last read: indices, or 32-bit pixels */
 static uint8_t *dmg;           /* MBW*MBH: something drew here */
 /* Motion since the last frame: hint_next fills from events; screen_collect
  * hands it to the frame (hint_frame) and starts afresh, so a scroll
@@ -141,6 +163,7 @@ typedef struct {
      * are not in what XShmGetImage reads from the root. Their own pixels are
      * read and laid over the screen when converting. */
     int known;            /* depth and colormap looked up */
+    int walk;             /* its windows are to be looked through (foreign ones) */
     int overlay, bw, ow, oh, odirty, depth;
     int dx0, dy0, dx1, dy1; /* what was drawn on it, in screen coordinates */
     Colormap ocmap;
@@ -271,6 +294,40 @@ static void ov_damage(int x, int y, int w, int h)
 /* These macroblocks must be converted and sent whatever the screen's pixels
  * say: an overlay came, went or changed over them. */
 static uint8_t *conv;
+/* ---- windows of another visual or colormap -------------------------------------- */
+
+/* An Entry board keeps up to 7 colormaps installed, and every window shows
+ * through its own: an IRIS GL RGB window (8-bit TrueColor -- clogin's icon
+ * pane is one), a program with a colormap of its own. Read from the root,
+ * their pixels are right, the same 8 bits, but mean other colours than the
+ * default colormap says. So a change there is found as anywhere (the root,
+ * through MIT-SHM), and the macroblocks that changed are then read again
+ * through ReadDisplay, which knows each window's colours -- about 15 times
+ * slower a pixel, so only there. On a 24-bit root, windows of 8 bits are
+ * found and read the same way. (capture=readdisplay reads everything so.) */
+#define MAXFOREIGN 64
+static struct {
+    Window top;
+    int x0, y0, x1, y1;   /* relative to the top-level's corner */
+} fwin[MAXFOREIGN];
+static int nfwin;
+static uint8_t *rdmap;    /* MBW*MBH: a foreign window shows in it */
+static uint8_t *rdold;    /* MBW*MBH: rdmap before it was rebuilt */
+static uint8_t *rdneed;   /* MBW*MBH: changed there: to be read through ReadDisplay */
+static uint8_t *rdvalid;  /* MBW*MBH: rdfb holds it (until then it is converted from fb) */
+static uint32_t *rdfb;    /* FW wide: what ReadDisplay gave, where rdmap */
+static int nrdmap, nrdneed, walk_due, rdmap_due, walk_budget;
+
+static int hybrid(void) { return has_rd && cap != CAP_RD; }
+
+static void rd_want(int i)
+{
+    if (nrdmap && rdmap[i] && !rdneed[i]) {
+        rdneed[i] = 1;
+        nrdneed++;
+    }
+}
+
 static void force(cdv_screen *s, int x, int y, int w, int h)
 {
     int x0 = x < 0 ? 0 : x, y0 = y < 0 ? 0 : y, x1 = x + w > W ? W : x + w,
@@ -280,6 +337,7 @@ static void force(cdv_screen *s, int x, int y, int w, int h)
     for (my = y0 >> 4; my <= (y1 - 1) >> 4; my++)
         for (mx = x0 >> 4; mx <= (x1 - 1) >> 4; mx++) {
             conv[my * MBW + mx] = 1;
+            rd_want(my * MBW + mx);
             if (!s->dirty[my * MBW + mx]) {
                 s->dirty[my * MBW + mx] = 1;
                 s->ndirty++;
@@ -361,6 +419,134 @@ static void ov_colors(toplevel *t)
     }
 }
 
+static void fw_drop(Window top)
+{
+    int i, j = 0;
+    for (i = 0; i < nfwin; i++)
+        if (fwin[i].top != top)
+            fwin[j++] = fwin[i];
+    if (j != nfwin)
+        rdmap_due = 1;
+    nfwin = j;
+}
+
+/* Look through a top-level's windows for foreign ones. (px, py): the
+ * parent's inside corner on the screen. A round trip or two a window, so
+ * it is done once a mapping, and when a window inside is mapped or unmapped. */
+static void fw_walk(toplevel *t, Window w, int px, int py, int depth)
+{
+    XWindowAttributes a;
+    Window r, p, *k = NULL;
+    unsigned int n, i;
+    int ix, iy;
+    if (--walk_budget < 0 || !XGetWindowAttributes(dpy, w, &a) || a.map_state != IsViewable)
+        return;
+    ix = px + a.x + a.border_width;
+    iy = py + a.y + a.border_width;
+    if (a.class == InputOutput && a.depth >= 8 &&
+        (a.visual != vis ||
+         (a.colormap != None && a.colormap != DefaultColormap(dpy, DefaultScreen(dpy))))) {
+        if (nfwin < MAXFOREIGN) {
+            fwin[nfwin].top = t->w;
+            fwin[nfwin].x0 = ix - t->x;
+            fwin[nfwin].y0 = iy - t->y;
+            fwin[nfwin].x1 = ix - t->x + a.width;
+            fwin[nfwin].y1 = iy - t->y + a.height;
+            nfwin++;
+            rdmap_due = 1;
+            cdv_debug("foreign window 0x%lx: %dx%d+%d+%d depth %d, colormap 0x%lx",
+                      (unsigned long)w, a.width, a.height, ix, iy, a.depth,
+                      (unsigned long)a.colormap);
+        }
+        return; /* ReadDisplay reads whatever is in it too */
+    }
+    if (depth >= 12 || !XQueryTree(dpy, w, &r, &p, &k, &n))
+        return;
+    for (i = 0; i < n; i++)
+        fw_walk(t, k[i], ix, iy, depth + 1);
+    if (k)
+        XFree(k);
+}
+
+/* Walk what is due, and rebuild rdmap: macroblocks that become foreign are
+ * read through ReadDisplay, ones that stop being so are converted again. */
+static void fw_update(cdv_screen *s)
+{
+    int i, mx, my, n = MBW * MBH;
+    if (!hybrid() || (!walk_due && !rdmap_due))
+        return;
+    if (walk_due) {
+        uint32_t t0 = now_ms();
+        int seen = 0;
+        walk_due = 0;
+        for (i = 0; i < ntops; i++) {
+            toplevel *t = &tops[i];
+            if (!t->walk)
+                continue;
+            t->walk = 0;
+            fw_drop(t->w);
+            if (t->mapped && !t->overlay) {
+                walk_budget = 400;
+                fw_walk(t, t->w, 0, 0, 0);
+                seen += 400 - (walk_budget < 0 ? 0 : walk_budget);
+            }
+        }
+        cdv_debug("looked through %d windows for foreign ones in %u ms; %d found", seen,
+                  (unsigned)(now_ms() - t0), nfwin);
+    }
+    if (!rdmap_due)
+        return;
+    rdmap_due = 0;
+    memcpy(rdold, rdmap, (size_t)n);
+    memset(rdmap, 0, (size_t)n);
+    nrdmap = 0;
+    for (i = 0; i < nfwin; i++) {
+        toplevel *t = top_find(fwin[i].top);
+        int x0, y0, x1, y1;
+        if (!t || !t->mapped)
+            continue;
+        x0 = t->x + fwin[i].x0;
+        y0 = t->y + fwin[i].y0;
+        x1 = t->x + fwin[i].x1;
+        y1 = t->y + fwin[i].y1;
+        if (x0 < 0) x0 = 0;
+        if (y0 < 0) y0 = 0;
+        if (x1 > W) x1 = W;
+        if (y1 > H) y1 = H;
+        for (my = y0 >> 4; y0 < y1 && my <= (y1 - 1) >> 4; my++)
+            for (mx = x0 >> 4; x0 < x1 && mx <= (x1 - 1) >> 4; mx++)
+                if (!rdmap[my * MBW + mx]) {
+                    rdmap[my * MBW + mx] = 1;
+                    nrdmap++;
+                }
+    }
+    if (nrdmap && !rdfb) {
+        rdfb = (uint32_t *)malloc((size_t)FW * MBH * 16 * 4);
+        if (!rdfb) {
+            cdv_log("no memory for ReadDisplay's copy; windows with colormaps of their own "
+                    "will show in the wrong colours");
+            has_rd = 0;
+            memset(rdmap, 0, (size_t)n);
+            nrdmap = 0;
+        }
+    }
+    for (i = 0; i < n; i++)
+        if (rdmap[i] != rdold[i]) {
+            conv[i] = 1;
+            if (!s->dirty[i]) {
+                s->dirty[i] = 1;
+                s->ndirty++;
+            }
+            if (rdneed[i] && !rdmap[i]) {
+                rdneed[i] = 0;
+                nrdneed--;
+            }
+            if (!rdmap[i])
+                rdvalid[i] = 0;
+            rd_want(i);
+        }
+}
+
 /* What kind of window is this top-level? One round trip, once per mapping. */
 static void top_learn(toplevel *t)
 {
@@ -368,10 +554,13 @@ static void top_learn(toplevel *t)
     if (!XGetWindowAttributes(dpy, t->w, &a))
         return;
     t->known = 1;
+    t->walk = 1;
+    walk_due = 1;
     t->bw = a.border_width;
     /* InputOnly windows (4Dwm has several) have no pixels; a menu is a
      * small InputOutput window of the popup planes' depth. */
-    t->overlay = a.class == InputOutput && a.depth > 0 &&
+    /* (ReadDisplay shows the overlay planes with the rest: no overlays then.) */
+    t->overlay = cap != CAP_RD && a.class == InputOutput && a.depth > 0 &&
                  a.depth < DefaultDepth(dpy, DefaultScreen(dpy)) && a.depth <= 4 &&
                  a.map_state == IsViewable && a.colormap != None && a.width <= W &&
                  a.height <= H;
@@ -433,6 +622,11 @@ static void mark_toplevels_at(int x, int y)
         top_mark(best);
     else
         mark(x - 32, y - 32, 96, 96);
+    /* a window inside it was mapped, moved or went: it may be a foreign one */
+    if (best && hybrid()) {
+        best->walk = 1;
+        walk_due = 1;
+    }
 }
 
 static void top_load(void)
@@ -830,10 +1024,16 @@ static void on_event(cdv_screen *s, XEvent *e)
                 add_motion(e->xconfigure.x, e->xconfigure.y, t->wd, t->ht,
                            e->xconfigure.x - t->x, e->xconfigure.y - t->y);
         }
+        if (t->wd != e->xconfigure.width + 2 * e->xconfigure.border_width ||
+            t->ht != e->xconfigure.height + 2 * e->xconfigure.border_width) {
+            t->walk = 1;
+            walk_due = 1;
+        }
         t->x = e->xconfigure.x;
         t->y = e->xconfigure.y;
         t->wd = e->xconfigure.width + 2 * e->xconfigure.border_width;
         t->ht = e->xconfigure.height + 2 * e->xconfigure.border_width;
+        rdmap_due = 1;
         top_mark(t);
         if (t->mapped && t->overlay) {
             top_learn(t);
@@ -862,6 +1062,7 @@ static void on_event(cdv_screen *s, XEvent *e)
         if (t) {
             top_mark(t);
             t->mapped = 0;
+            fw_drop(t->w);
             if (t->overlay) {
                 force(s, t->x, t->y, t->wd, t->ht);
                 top_forget_overlay(t);
@@ -878,6 +1079,7 @@ static void on_event(cdv_screen *s, XEvent *e)
             top_mark(t);
             if (was)
                 force(s, t->x, t->y, t->wd, t->ht);
+            fw_drop(e->xdestroywindow.window);
             top_del(e->xdestroywindow.window);
             if (was)
                 ov_rebuild_map();
@@ -933,6 +1135,35 @@ static void gamma_build(double gamma)
 }
 
 static uint8_t clamp8(int v) { return (uint8_t)(v < 0 ? 0 : v > 255 ? 255 : v); }
+
+/* For 32-bit pixels: each channel's share of Y, U and V, gamma included, so a
+ * pixel is nine lookups and three shifts. */
+static int16_t cyr[256], cyg[256], cyb[256], cur[256], cug[256], cub[256], cvr[256], cvg[256],
+    cvb[256];
+
+static void rgb_build(void)
+{
+    int i;
+    for (i = 0; i < 256; i++) {
+        int g = gtab[i];
+        cyr[i] = (int16_t)(66 * g);
+        cyg[i] = (int16_t)(129 * g);
+        cyb[i] = (int16_t)(25 * g);
+        cur[i] = (int16_t)(-38 * g);
+        cug[i] = (int16_t)(-74 * g);
+        cub[i] = (int16_t)(112 * g);
+        cvr[i] = (int16_t)(112 * g);
+        cvg[i] = (int16_t)(-94 * g);
+        cvb[i] = (int16_t)(-18 * g);
+    }
+}
+
+#define PR(p, c) ((p) >> (c).r & 255)
+#define PG(p, c) ((p) >> (c).g & 255)
+#define PBL(p, c) ((p) >> (c).b & 255)
+#define Y32(p, c) ((uint8_t)(((cyr[PR(p, c)] + cyg[PG(p, c)] + cyb[PBL(p, c)] + 128) >> 8) + 16))
+#define U32(p, c) ((uint8_t)(((cur[PR(p, c)] + cug[PG(p, c)] + cub[PBL(p, c)] + 128) >> 8) + 128))
+#define V32(p, c) ((uint8_t)(((cvr[PR(p, c)] + cvg[PG(p, c)] + cvb[PBL(p, c)] + 128) >> 8) + 128))
 
 /* Read the installed colormap. Returns how many entries changed, and marks
  * changed[i]. */
@@ -1008,10 +1239,18 @@ static void convert_mb_overlaid(cdv_screen *s, int mx, int my)
     }
     for (j = 0; j < 16; j++)
         for (i = 0; i < 16; i++) {
-            int x = x0 + i, y = y0 + j, p = fb[y * W + x], o = j * 16 + i;
-            Yb[o] = ty[p];
-            Ub[o] = tu[p];
-            Vb[o] = tv[p];
+            int x = x0 + i, y = y0 + j, o = j * 16 + i;
+            if (PB == 1) {
+                int p = fb[y * FW + x];
+                Yb[o] = ty[p];
+                Ub[o] = tu[p];
+                Vb[o] = tv[p];
+            } else {
+                uint32_t p = ((const uint32_t *)fb)[y * FW + x];
+                Yb[o] = Y32(p, fbch);
+                Ub[o] = U32(p, fbch);
+                Vb[o] = V32(p, fbch);
+            }
             for (k = 0; k < nov; k++) {
                 const toplevel *t = ov[k];
                 int ox = x - t->x - t->bw, oy = y - t->y - t->bw, v;
@@ -1037,30 +1276,77 @@ static void convert_mb_overlaid(cdv_screen *s, int mx, int my)
         }
 }
 
+/* 32-bit pixels (fb's, or ReadDisplay's in rdfb): one colour?, then Y per
+ * pixel and U, V per 2x2. */
+static void convert_mb32(cdv_screen *s, int mx, int my, const uint32_t *buf, chans c)
+{
+    const uint32_t *src = buf + (my * 16) * FW + mx * 16;
+    uint8_t *yp = s->y + (my * 16) * s->ystride + mx * 16;
+    uint8_t *up = s->u + (my * 8) * s->uvstride + mx * 8;
+    uint8_t *vp = s->v + (my * 8) * s->uvstride + mx * 8;
+    uint32_t first = src[0];
+    int j, i, flat = 1;
+    for (j = 0; j < 16 && flat; j++)
+        for (i = 0; i < 16; i++)
+            if (src[j * FW + i] != first) {
+                flat = 0;
+                break;
+            }
+    s->flat[my * MBW + mx] = (uint8_t)flat;
+    for (j = 0; j < 8; j++) {
+        const uint32_t *a = src + 2 * j * FW, *b = a + FW;
+        uint8_t *y0 = yp + 2 * j * s->ystride, *y1 = y0 + s->ystride;
+        uint8_t *uo = up + j * s->uvstride, *vo = vp + j * s->uvstride;
+        for (i = 0; i < 16; i += 2) {
+            uint32_t p = a[i], q = a[i + 1], r = b[i], t = b[i + 1];
+            y0[i] = Y32(p, c);
+            y0[i + 1] = Y32(q, c);
+            y1[i] = Y32(r, c);
+            y1[i + 1] = Y32(t, c);
+            if (p == q && p == r && p == t) {
+                uo[i >> 1] = U32(p, c);
+                vo[i >> 1] = V32(p, c);
+            } else {
+                uo[i >> 1] = (uint8_t)((U32(p, c) + U32(q, c) + U32(r, c) + U32(t, c) + 2) >> 2);
+                vo[i >> 1] = (uint8_t)((V32(p, c) + V32(q, c) + V32(r, c) + V32(t, c) + 2) >> 2);
+            }
+        }
+    }
+}
+
 static void convert_mb(cdv_screen *s, int mx, int my)
 {
+    if (nrdmap && rdmap[my * MBW + mx] && rdvalid[my * MBW + mx]) {
+        /* ReadDisplay's picture: overlays and all */
+        convert_mb32(s, mx, my, rdfb, rdch);
+        return;
+    }
     if (ovmap[my * MBW + mx]) {
         s->flat[my * MBW + mx] = 0;
         convert_mb_overlaid(s, mx, my);
         return;
     }
+    if (PB == 4) {
+        convert_mb32(s, mx, my, (const uint32_t *)fb, fbch);
+        return;
+    }
     {
         /* one colour? (words of four equal pixels, all the same word) */
-        const uint32_t *w = (const uint32_t *)(fb + (my * 16) * W + mx * 16);
+        const uint32_t *w = (const uint32_t *)(fb + (my * 16) * FW + mx * 16);
         uint32_t first = w[0];
         int j, flat = (first & 0xff) * 0x01010101u == first;
-        for (j = 0; j < 16 && flat; j++, w += W / 4)
+        for (j = 0; j < 16 && flat; j++, w += FW / 4)
             flat = w[0] == first && w[1] == first && w[2] == first && w[3] == first;
         s->flat[my * MBW + mx] = (uint8_t)flat;
     }
     {
-    const uint8_t *src = fb + (my * 16) * W + mx * 16;
+    const uint8_t *src = fb + (my * 16) * FW + mx * 16;
     uint8_t *yp = s->y + (my * 16) * s->ystride + mx * 16;
     uint8_t *up = s->u + (my * 8) * s->uvstride + mx * 8;
     uint8_t *vp = s->v + (my * 8) * s->uvstride + mx * 8;
     int j, i;
     for (j = 0; j < 8; j++) {
-        const uint8_t *a = src + 2 * j * W, *b = a + W;
+        const uint8_t *a = src + 2 * j * FW, *b = a + FW;
         uint8_t *y0 = yp + 2 * j * s->ystride, *y1 = y0 + s->ystride;
         uint8_t *uo = up + j * s->uvstride, *vo = vp + j * s->uvstride;
         for (i = 0; i < 16; i += 2) {
@@ -1083,49 +1369,204 @@ static void convert_mb(cdv_screen *s, int mx, int my)
 
 /* ---- readback ---------------------------------------------------------------- */
 
+/* A 32-bit image's layout: where each channel's 8 bits are, from its masks.
+ * An image in the other byte order (a little-endian server's, on a remote
+ * display) is read as words all the same; its channels then sit mirrored. */
+static int layout(const XImage *im, chans *c)
+{
+    unsigned long m[3];
+    int sh[3], k;
+    m[0] = im->red_mask;
+    m[1] = im->green_mask;
+    m[2] = im->blue_mask;
+    if (!m[0] || !m[1] || !m[2]) {
+        m[0] = 0xff0000;
+        m[1] = 0xff00;
+        m[2] = 0xff;
+    }
+    if (im->bits_per_pixel != 32)
+        return 0;
+    for (k = 0; k < 3; k++) {
+        for (sh[k] = 0; sh[k] < 32 && !(m[k] >> sh[k] & 1); sh[k]++)
+            ;
+        if (sh[k] > 24 || m[k] >> sh[k] != 255 || sh[k] % 8)
+            return 0; /* not 8 bits on a byte */
+        if (im->byte_order == LSBFirst)
+            sh[k] = 24 - sh[k];
+    }
+    c->r = sh[0];
+    c->g = sh[1];
+    c->b = sh[2];
+    return 1;
+}
+
+/* Read a rectangle of the screen (in pixels). Through MIT-SHM, or the socket
+ * (no SHM: a display on another machine), or ReadDisplay. */
+static XImage *grab(int x, int y, int w, int h)
+{
+    XImage *im;
+    if (cap == CAP_RD) {
+        unsigned long got = 0;
+        im = XReadDisplay(dpy, root, x, y, (unsigned)w, (unsigned)h, 0, &got);
+        if (im && !rd_known) {
+            cdv_log("ReadDisplay: %d bits a pixel, depth %d, %s first, masks %lx %lx %lx",
+                    im->bits_per_pixel, im->depth, im->byte_order == MSBFirst ? "MSB" : "LSB",
+                    im->red_mask, im->green_mask, im->blue_mask);
+            rd_known = 1;
+        }
+        return im;
+    }
+    if (!shm_ok)
+        return XGetImage(dpy, root, x, y, (unsigned)w, (unsigned)h, AllPlanes, ZPixmap);
+    im = XShmCreateImage(dpy, vis, (unsigned)DefaultDepth(dpy, DefaultScreen(dpy)), ZPixmap,
+                         (char *)shm.shmaddr, &shm, (unsigned)w, (unsigned)h);
+    if (im && !XShmGetImage(dpy, root, im, x, y, AllPlanes)) {
+        XFree(im);
+        im = NULL;
+    }
+    return im;
+}
+
+static void ungrab(XImage *im)
+{
+    if (cap != CAP_RD && shm_ok)
+        XFree(im); /* the pixels are the shared segment's */
+    else
+        XDestroyImage(im);
+}
+
 /* Read a macroblock-aligned rectangle (in macroblocks) and fold it into fb:
  * a macroblock that differs is copied and marked dirty. */
 static void read_rect(cdv_screen *s, int mx0, int my0, int mx1, int my1)
 {
     int x = mx0 * 16, y = my0 * 16, w = (mx1 - mx0) * 16, h = (my1 - my0) * 16;
-    int mx, my, j;
+    int mx, my, j, k, rb = 16 * PB, nw = 4 * PB, fbl = FW * PB;
     XImage *im;
     if (x + w > W)
         w = W - x;
     if (y + h > H)
         h = H - y;
-    im = XShmCreateImage(dpy, vis, 8, ZPixmap, (char *)shm.shmaddr, &shm, (unsigned)w,
-                         (unsigned)h);
+    im = grab(x, y, w, h);
     if (!im)
         return;
-    if (!XShmGetImage(dpy, root, im, x, y, AllPlanes)) {
-        XFree(im);
-        return;
-    }
     s->reads++;
     s->read_px += w * h;
     for (my = my0; my < my1; my++)
         for (mx = mx0; mx < mx1; mx++) {
             const uint8_t *src = (const uint8_t *)im->data + ((my - my0) * 16) * im->bytes_per_line +
-                                 (mx - mx0) * 16;
-            uint8_t *dst = fb + (my * 16) * W + mx * 16;
-            int diff = 0;
+                                 (mx - mx0) * rb;
+            uint8_t *dst = fb + (my * 16) * fbl + mx * rb;
+            uint32_t diff = 0;
+            int cw = W - mx * 16, ch = H - my * 16;
+            if (cw < 16 || ch < 16) {
+                /* the screen's edge cuts this one: only what is on it */
+                cw = (cw < 16 ? cw : 16) * PB;
+                ch = ch < 16 ? ch : 16;
+                for (j = 0; j < ch && !diff; j++)
+                    diff = memcmp(src + j * im->bytes_per_line, dst + j * fbl, (size_t)cw);
+                if (!diff)
+                    continue;
+                for (j = 0; j < ch; j++)
+                    memcpy(dst + j * fbl, src + j * im->bytes_per_line, (size_t)cw);
+                if (nrdmap && rdmap[my * MBW + mx]) {
+                    rd_want(my * MBW + mx);
+                    continue;
+                }
+                goto changed;
+            }
             for (j = 0; j < 16 && !diff; j++) {
                 const uint32_t *a = (const uint32_t *)(src + j * im->bytes_per_line);
-                const uint32_t *b = (const uint32_t *)(dst + j * W);
-                diff = (a[0] ^ b[0]) | (a[1] ^ b[1]) | (a[2] ^ b[2]) | (a[3] ^ b[3]);
+                const uint32_t *b = (const uint32_t *)(dst + j * fbl);
+                for (k = 0; k < nw; k += 4)
+                    diff |= (a[k] ^ b[k]) | (a[k + 1] ^ b[k + 1]) | (a[k + 2] ^ b[k + 2]) |
+                            (a[k + 3] ^ b[k + 3]);
             }
             if (!diff)
                 continue;
             for (j = 0; j < 16; j++)
-                memcpy(dst + j * W, src + j * im->bytes_per_line, 16);
+                memcpy(dst + j * fbl, src + j * im->bytes_per_line, (size_t)rb);
+            if (nrdmap && rdmap[my * MBW + mx]) {
+                /* in a foreign window: ReadDisplay says what it looks like */
+                rd_want(my * MBW + mx);
+                continue;
+            }
+        changed:
             conv[my * MBW + mx] = 1;
             if (!s->dirty[my * MBW + mx]) {
                 s->dirty[my * MBW + mx] = 1;
                 s->ndirty++;
             }
         }
-    XFree(im);
+    ungrab(im);
+}
+
+/* The foreign macroblocks that changed, through ReadDisplay, a row's run of
+ * them a request, into rdfb. */
+static void rd_span(cdv_screen *s, int mx0, int mx1, int my)
+{
+    int x = mx0 * 16, y = my * 16, w = (mx1 - mx0) * 16, h = 16, mx, j;
+    unsigned long got = 0;
+    XImage *im;
+    if (x + w > W)
+        w = W - x;
+    if (y + h > H)
+        h = H - y;
+    im = XReadDisplay(dpy, root, x, y, (unsigned)w, (unsigned)h, 0, &got);
+    if (!im)
+        return;
+    s->reads++;
+    s->read_px += w * h;
+    for (mx = mx0; mx < mx1; mx++) {
+        int cw = (W - mx * 16 < 16 ? W - mx * 16 : 16) * 4, diff = 0;
+        const uint8_t *src = (const uint8_t *)im->data + (mx - mx0) * 64;
+        uint32_t *dst = rdfb + y * FW + mx * 16;
+        for (j = 0; j < h && !diff; j++)
+            diff = memcmp(src + j * im->bytes_per_line, dst + j * FW, (size_t)cw);
+        if (!rdvalid[my * MBW + mx]) {
+            rdvalid[my * MBW + mx] = 1;
+            diff = 1; /* it was converted from fb until now */
+        }
+        if (!diff)
+            continue;
+        for (j = 0; j < h; j++)
+            memcpy(dst + j * FW, src + j * im->bytes_per_line, (size_t)cw);
+        conv[my * MBW + mx] = 1;
+        if (!s->dirty[my * MBW + mx]) {
+            s->dirty[my * MBW + mx] = 1;
+            s->ndirty++;
+        }
+    }
+    XDestroyImage(im);
+}
+
+/* At most RD_FRAME macroblocks a frame (~4 ms each on an Entry Indigo), on
+ * from the row where the last frame stopped: a whole GL window at once would
+ * hold everything up for seconds. */
+#define RD_FRAME 64
+static int rd_row;
+
+static void read_rd(cdv_screen *s)
+{
+    int k, my, mx, a, left = RD_FRAME;
+    for (k = 0; k < MBH && nrdneed && left > 0; k++) {
+        my = (rd_row + k) % MBH;
+        for (mx = 0; mx < MBW && left > 0;) {
+            if (!rdneed[my * MBW + mx]) {
+                mx++;
+                continue;
+            }
+            for (a = mx; mx < MBW && rdneed[my * MBW + mx] && left > 0; mx++, left--) {
+                rdneed[my * MBW + mx] = 0;
+                nrdneed--;
+            }
+            rd_span(s, a, mx, my);
+        }
+        if (left == 0 && mx < MBW) {
+            rd_row = my; /* the rest of this row next time */
+            break;
+        }
+        rd_row = my + 1;
+    }
 }
 
 /* The damaged macroblocks as few rectangles as is worth it: a request costs
@@ -1176,7 +1617,7 @@ static void read_damage(cdv_screen *s)
 
 static int open_shm(void)
 {
-    shm.shmid = shmget(IPC_PRIVATE, (size_t)W * H, IPC_CREAT | 0600);
+    shm.shmid = shmget(IPC_PRIVATE, (size_t)W * H * PB, IPC_CREAT | 0600);
     if (shm.shmid < 0)
         return 0;
     shm.shmaddr = (char *)shmat(shm.shmid, 0, 0);
@@ -1206,9 +1647,72 @@ static int log_errors(Display *d, XErrorEvent *e)
 
 /* Buffers sized to the screen, kept across a lost and reopened display. */
 static uint8_t *arena;
-static int arena_w, arena_h;
+static int arena_w, arena_h, arena_pb;
 
-int screen_open(cdv_screen *s, const char *display, double gamma)
+/* Is there a visual of 8 bits or more whose depth is not the root's? Then
+ * windows of another depth can show, and a read of the root is undefined
+ * where they do. (The 2- and 4-bit overlay planes are handled apart.) */
+static int other_depths(int scr)
+{
+    XVisualInfo t, *v;
+    int n = 0, i, other = 0;
+    t.screen = scr;
+    v = XGetVisualInfo(dpy, VisualScreenMask, &t, &n);
+    for (i = 0; v && i < n; i++)
+        if (v[i].depth >= 8 && v[i].depth != DefaultDepth(dpy, scr))
+            other = v[i].depth;
+    if (v)
+        XFree(v);
+    return other;
+}
+
+static const char *cap_name(void)
+{
+    if (cap == CAP_RD)
+        return "all through ReadDisplay";
+    if (has_rd)
+        return cap == CAP_INDEX ? "8-bit colormap, ReadDisplay for other colormaps"
+                                : "24-bit, ReadDisplay for other depths";
+    return cap == CAP_INDEX ? "8-bit colormap" : "24-bit";
+}
+
+/* How to read this screen: `want` is the capture= setting (auto, 8, 24,
+ * readdisplay). 0 if it cannot be read that way (logged). */
+static int choose_capture(int scr, const char *want)
+{
+    int depth = DefaultDepth(dpy, scr), cls = vis->class, a, b, other = other_depths(scr);
+    has_rd = XReadDisplayQueryExtension(dpy, &a, &b);
+    int indexed = depth == 8 && (cls == PseudoColor || cls == StaticColor || cls == GrayScale ||
+                                 cls == StaticGray);
+    int truecolor = depth >= 24 && (cls == TrueColor || cls == DirectColor);
+    if (!want || !*want)
+        want = "auto";
+    if (!strcmp(want, "8"))
+        cap = indexed ? CAP_INDEX : -1;
+    else if (!strcmp(want, "24"))
+        cap = truecolor ? CAP_TRUE : -1;
+    else if (!strcmp(want, "readdisplay"))
+        cap = has_rd ? CAP_RD : -1;
+    else
+        cap = indexed ? CAP_INDEX : truecolor ? CAP_TRUE : has_rd ? CAP_RD : -1;
+    if (cap < 0) {
+        static int told; /* the display is tried every 5 s */
+        if (!told++)
+            cdv_log("cannot read this screen with capture=%s: the root is %d bits deep "
+                    "(class %d)%s", want, depth, cls, has_rd ? "" : ", and there is no ReadDisplay");
+        cap = CAP_INDEX;
+        return 0;
+    }
+    if (other && !has_rd)
+        cdv_log("windows %d bits deep can show here, and without ReadDisplay they will be "
+                "read wrong", other);
+    if (!strcmp(want, "8") || !strcmp(want, "24"))
+        has_rd = 0; /* the root alone, as asked */
+    PB = cap == CAP_INDEX ? 1 : 4;
+    return 1;
+}
+
+int screen_open(cdv_screen *s, const char *display, double gamma, const char *capture)
 {
     int scr, a, b, maj;
     uint8_t changed[256];
@@ -1223,29 +1727,51 @@ int screen_open(cdv_screen *s, const char *display, double gamma)
     vis = DefaultVisual(dpy, scr);
     W = DisplayWidth(dpy, scr);
     H = DisplayHeight(dpy, scr);
-    if (DefaultDepth(dpy, scr) != 8) {
-        cdv_log("the root window is %d bits deep; only 8 is supported yet",
-                DefaultDepth(dpy, scr));
+    if (!choose_capture(scr, capture)) {
         XCloseDisplay(dpy);
         dpy = NULL;
         return 0;
     }
-    if (!XShmQueryExtension(dpy) || !(shm_ok = open_shm())) {
-        cdv_log("MIT-SHM is not usable; cannot read the screen");
-        XCloseDisplay(dpy);
-        dpy = NULL;
-        return 0;
+    if (!XShmQueryExtension(dpy) || !(shm_ok = open_shm()))
+        cdv_log("MIT-SHM is not usable; reading the screen through the connection (slow)");
+    if (cap != CAP_INDEX) {
+        /* the pixel layout, from a first read */
+        XImage *im;
+        rd_known = 0;
+        im = grab(0, 0, 16, 16);
+        if (!im || !layout(im, &fbch)) {
+            cdv_log("cannot read this screen's pixels (%d bits a pixel)",
+                    im ? im->bits_per_pixel : 0);
+            if (im)
+                ungrab(im);
+            screen_lost();
+            return 0;
+        }
+        ungrab(im);
+    }
+    if (cap == CAP_RD) {
+        rdch = fbch;
+    } else if (has_rd) {
+        unsigned long got = 0;
+        XImage *im = XReadDisplay(dpy, root, 0, 0, 16, 16, 0, &got);
+        if (!im || !layout(im, &rdch)) {
+            cdv_log("ReadDisplay gives pixels this agent cannot read; not using it");
+            has_rd = 0;
+        }
+        if (im)
+            XDestroyImage(im);
     }
     if (!XQueryExtension(dpy, "DEC-XTRAP", &a, &b, &maj))
         cdv_log("DEC-XTRAP is missing: changes will be found by scanning only (slow)");
     MBW = (W + 15) / 16;
     MBH = (H + 15) / 16;
-    if (!arena || arena_w != W || arena_h != H) {
+    FW = MBW * 16;
+    if (!arena || arena_w != W || arena_h != H || arena_pb != PB) {
         /* One arena, the buffers at different offsets modulo the R3000's
          * 32 KB direct-mapped data cache: the screen and the luma plane are
          * the same size, a multiple of 32 KB, and read in step, so placed
          * naively every access to one would evict the other. */
-        size_t fbsz = (size_t)MBW * 16 * MBH * 16, ysz = fbsz, uvsz = fbsz / 4;
+        size_t ysz = (size_t)MBW * 16 * MBH * 16, fbsz = ysz * PB, uvsz = ysz / 4;
         int n = MBW * MBH;
         free(arena);
         arena = (uint8_t *)malloc(fbsz + ysz + 2 * uvsz + 6 * 32768);
@@ -1267,19 +1793,30 @@ int screen_open(cdv_screen *s, const char *display, double gamma)
         s->dirty = (uint8_t *)calloc((size_t)n, 1);
         free(scanflag);
         scanflag = (uint8_t *)calloc((size_t)n, 1);
+        free(rdmap);
+        free(rdold);
+        free(rdneed);
+        free(rdvalid);
+        free(rdfb);
+        rdfb = NULL; /* when a foreign window first shows */
+        rdmap = (uint8_t *)calloc((size_t)n, 1);
+        rdold = (uint8_t *)calloc((size_t)n, 1);
+        rdneed = (uint8_t *)calloc((size_t)n, 1);
+        rdvalid = (uint8_t *)calloc((size_t)n, 1);
         if (!arena || !dmg || !conv || !ovmap || !hint_next || !hint_frame || !hint_tmp ||
-            !s->flat || !s->dirty || !scanflag) {
+            !s->flat || !s->dirty || !scanflag || !rdmap || !rdold || !rdneed || !rdvalid) {
             cdv_log("out of memory");
             exit(1);
         }
         arena_w = W;
         arena_h = H;
+        arena_pb = PB;
     }
     {
         /* ...and fb half a cache away from the shared-memory segment the
          * server writes into, which shmat put on a page boundary: read_rect
          * compares the two row by row. */
-        size_t fbsz = (size_t)MBW * 16 * MBH * 16, ysz = fbsz, uvsz = fbsz / 4;
+        size_t ysz = (size_t)MBW * 16 * MBH * 16, fbsz = ysz * PB, uvsz = ysz / 4;
         uint8_t *p = (uint8_t *)(((unsigned long)arena + 32767) & ~32767ul);
         p += (((unsigned long)shm.shmaddr & 32767) + 16384) & 32767;
         fb = p;
@@ -1295,6 +1832,10 @@ int screen_open(cdv_screen *s, const char *display, double gamma)
     s->uvstride = MBW * 8;
     s->hints = hint_frame;
     s->ndirty = 0;
+    memset(rdmap, 0, (size_t)(MBW * MBH));
+    memset(rdneed, 0, (size_t)(MBW * MBH));
+    memset(rdvalid, 0, (size_t)(MBW * MBH));
+    nrdmap = nrdneed = nfwin = walk_due = rdmap_due = 0;
     memset(s->dirty, 0, (size_t)(MBW * MBH));
     memset(dmg, 0, (size_t)(MBW * MBH));
     ndmg = 0;
@@ -1312,10 +1853,15 @@ int screen_open(cdv_screen *s, const char *display, double gamma)
         }
     }
     s->dirty = (uint8_t *)calloc((size_t)(MBW * MBH), 1);
-    memset(fb, 0, (size_t)W * H);
+    memset(fb, 0, (size_t)FW * MBH * 16 * PB);
     gamma_build(gamma);
+    rgb_build();
     cmap_load(changed);
-    cdv_log("screen %dx%d, 8-bit, colormap 0x%lx", W, H, (unsigned long)cmap_cur);
+    if (cap == CAP_INDEX)
+        cdv_log("screen %dx%d, %s 0x%lx", W, H, cap_name(), (unsigned long)cmap_cur);
+    else
+        cdv_log("screen %dx%d, %s (red, green, blue at bits %d, %d, %d)", W, H, cap_name(),
+                fbch.r, fbch.g, fbch.b);
     return 1;
 }
 
@@ -1342,6 +1888,7 @@ void screen_lost(void)
     ntops = 0;
     noverlays = 0;
     novwin = 0;
+    nfwin = nrdmap = nrdneed = walk_due = rdmap_due = 0;
     cmap_cur = 0;
     memset(ty, 0, sizeof ty);
     memset(tu, 0, sizeof tu);
@@ -1383,6 +1930,7 @@ void screen_start(cdv_screen *s)
 {
     uint8_t changed[256];
     int i;
+    uint32_t t0 = now_ms(), t1, t2, t3;
     cmap_load(changed);
     top_load();
     for (i = 0; i < ntops; i++)
@@ -1393,21 +1941,33 @@ void screen_start(cdv_screen *s)
     memset(dcache, 0, sizeof dcache);
     trap_on();
     XSync(dpy, False);
+    t1 = now_ms();
+    fw_update(s);
+    t2 = now_ms();
     /* Everything, once: read the whole screen and convert it all. */
     memset(dmg, 1, (size_t)(MBW * MBH));
     memset(s->dirty, 0, (size_t)(MBW * MBH));
     s->ndirty = 0;
-    memset(fb, 0, (size_t)W * H);
+    memset(fb, 0, (size_t)FW * MBH * 16 * PB);
     read_rect(s, 0, 0, MBW, MBH);
     read_overlays(s);
+    /* foreign windows paint in over the next frames */
+    for (i = 0; i < MBW * MBH; i++)
+        rd_want(i);
     memset(dmg, 0, (size_t)(MBW * MBH));
     ndmg = 0;
+    t3 = now_ms();
     {
+        /* (foreign macroblocks from the root's pixels until ReadDisplay's
+         * copy of them is read, over the next frames) */
         int mx, my;
         for (my = 0; my < MBH; my++)
             for (mx = 0; mx < MBW; mx++)
                 convert_mb(s, mx, my);
     }
+    cdv_debug("first look: windows %u ms, foreign %u ms, read %u ms, convert %u ms",
+              (unsigned)(t1 - t0), (unsigned)(t2 - t1), (unsigned)(t3 - t2),
+              (unsigned)(now_ms() - t3));
     memset(conv, 0, (size_t)(MBW * MBH));
     screen_mark_all(s);
     watching = 1;
@@ -1477,8 +2037,10 @@ static void read_overlays(cdv_screen *s)
         if (oy + y1 > H) y1 = H - oy;
         if (x0 >= x1 || y0 >= y1)
             continue;
-        im = XShmCreateImage(dpy, t->ovis, (unsigned)t->depth, ZPixmap, (char *)shm.shmaddr,
-                             &shm, (unsigned)(x1 - x0), (unsigned)(y1 - y0));
+        im = shm_ok ? XShmCreateImage(dpy, t->ovis, (unsigned)t->depth, ZPixmap,
+                                      (char *)shm.shmaddr, &shm, (unsigned)(x1 - x0),
+                                      (unsigned)(y1 - y0))
+                    : NULL;
         if (im && !XShmGetImage(dpy, t->w, im, x0, y0, AllPlanes)) {
             XFree(im);
             im = NULL;
@@ -1522,6 +2084,7 @@ void screen_collect(cdv_screen *s, int scan, uint32_t now)
     s->reads = s->read_px = 0;
     s->damaged = ndmg;
     s->scanned = 0;
+    fw_update(s);
     if (cmap_dirty) {
         uint8_t changed[256];
         int i;
@@ -1531,14 +2094,17 @@ void screen_collect(cdv_screen *s, int scan, uint32_t now)
                 ov_colors(&tops[i]);
                 force(s, tops[i].x, tops[i].y, tops[i].wd, tops[i].ht);
             }
-        if ((k = cmap_load(changed)) != 0) {
+        /* a colormap of a foreign window may have changed */
+        for (k = 0; k < MBW * MBH; k++)
+            rd_want(k);
+        if ((k = cmap_load(changed)) != 0 && cap == CAP_INDEX) {
             cdv_debug("colormap: %d entries changed", k);
             /* recolour every macroblock holding a changed index */
             for (my = 0; my < MBH; my++)
                 for (mx = 0; mx < MBW; mx++) {
                     int j, i, hit = 0;
                     for (j = 0; j < 16 && !hit; j++) {
-                        const uint8_t *p = fb + (my * 16 + j) * W + mx * 16;
+                        const uint8_t *p = fb + (my * 16 + j) * FW + mx * 16;
                         for (i = 0; i < 16; i++)
                             hit |= changed[p[i]];
                     }
@@ -1586,6 +2152,7 @@ void screen_collect(cdv_screen *s, int scan, uint32_t now)
         read_damage(s);
     if (noverlays)
         read_overlays(s);
+    read_rd(s);
     t1 = now_ms();
     s->read_ms = t1 - t0;
     for (my = 0; my < MBH; my++)
@@ -1621,8 +2188,32 @@ void screen_background(uint8_t *y, uint8_t *u, uint8_t *v)
 {
     static unsigned n[256];
     int i, best = 0;
+    if (PB == 4) {
+        /* the commonest of a sample, in a small table of the values seen */
+        static uint32_t val[64];
+        int k, used = 0;
+        uint32_t p;
+        memset(n, 0, sizeof n);
+        for (i = 0; i < FW * H; i += 61) {
+            p = ((const uint32_t *)fb)[i];
+            for (k = 0; k < used && val[k] != p; k++)
+                ;
+            if (k == used && used < 64)
+                val[used++] = p;
+            if (k < used)
+                n[k]++;
+        }
+        for (k = 1; k < used; k++)
+            if (n[k] > n[best])
+                best = k;
+        p = used ? val[best] : 0;
+        *y = Y32(p, fbch);
+        *u = U32(p, fbch);
+        *v = V32(p, fbch);
+        return;
+    }
     memset(n, 0, sizeof n);
-    for (i = 0; i < W * H; i += 61)
+    for (i = 0; i < FW * H; i += 61)
         n[fb[i]]++;
     for (i = 1; i < 256; i++)
         if (n[i] > n[best])

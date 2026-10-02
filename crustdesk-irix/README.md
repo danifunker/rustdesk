@@ -50,8 +50,12 @@ with `cc` -- and moves everything else over TCP with it.
 
 ## Known limits
 
-- **8-bit displays only, for now** (Entry/XL graphics): the agent refuses a
-  deeper root window. 24-bit is planned (RESUME.md section 7).
+- **24-bit displays are untested on a real SGI.** The agent chooses at run
+  time (`capture=` in prefs): an 8-bit or 24-bit root through MIT-SHM, and
+  windows of another visual or colormap -- IRIS GL RGB windows even on an
+  Entry Indigo -- through SGI's ReadDisplay. The 24-bit decoding was checked
+  against Xvfb (depth 24) over TCP; the 8-bit and ReadDisplay paths on the
+  Indigo.
 - **The pointer is a plain arrow on the client**, wherever IRIX's is; IRIX's
   own shapes (the text cursor, the watch, launch feedback) are not sent.
 - The Indigo this was built on has no route off its LAN: connect by IP there,

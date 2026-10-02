@@ -83,6 +83,7 @@ static struct {
     char name[64];
     char files[256];      /* what the file manager sees as "/"; "off" for none */
     char api[128];        /* a console's URL, for its device list; none by default */
+    char capture[16];     /* how to read the screen: auto, 8, 24, readdisplay */
 } prefs;
 static char prefs_path[256];
 
@@ -159,6 +160,8 @@ static void read_prefs(void)
             copy(prefs.files, eq, sizeof prefs.files);
         else if (!strcmp(line, "api"))
             copy(prefs.api, eq, sizeof prefs.api);
+        else if (!strcmp(line, "capture"))
+            copy(prefs.capture, eq, sizeof prefs.capture);
     }
     fclose(f);
 }
@@ -364,10 +367,6 @@ static char hostname[64];
 #define IN_CAP (192 * 1024)
 #define WORK_CAP (192 * 1024)
 #define NSLOTS 2
-/* The largest screen the buffers are made for: IRIX 5.3's Indigo and Indy
- * graphics top out at 1280x1024. A larger one is refused. */
-#define MAX_W 1280
-#define MAX_H 1024
 
 enum { K_NONE, K_DESKTOP, K_FILES };
 
@@ -399,7 +398,7 @@ static struct {
     uint32_t t_read, t_conv, t_enc;
 } S;
 
-static uint8_t *vidbuf, *encmem, *refmem;
+static uint8_t *vidbuf, *encmem, *encraw, *refmem;
 
 /* The X connection. The agent runs without one -- at boot before the X
  * server is up, and across the server resetting at a logout -- registering
@@ -425,6 +424,43 @@ static int cost_detail = 270;
 static uint8_t *enc_dirty;    /* the macroblocks of the frame being encoded */
 static uint8_t *dirty_age;    /* frames a macroblock has waited */
 static uint8_t *flat_y, *flat_u, *flat_v;
+static int enc_w, enc_h;      /* the screen size they were made for */
+
+/* The encoder's buffers, for a screen this size: made at the first desktop
+ * session, and again if a later screen is larger (the display can change at
+ * a logout). */
+static int enc_buffers(int w, int h)
+{
+    size_t px;
+    int n;
+    if (w <= enc_w && h <= enc_h)
+        return 1;
+    w = (w + 15) & ~15;
+    h = (h + 15) & ~15;
+    px = (size_t)w * h;
+    n = w / 16 * (h / 16);
+    free(encraw);
+    free(refmem);
+    free(enc_dirty);
+    free(dirty_age);
+    free(flat_y);
+    free(flat_u);
+    free(flat_v);
+    encraw = (uint8_t *)malloc(vp8e_mem_size(w, h) + 16);
+    refmem = (uint8_t *)malloc(vp8e_ref_size(w, h)); /* motion vectors */
+    enc_dirty = (uint8_t *)calloc((size_t)n, 1);
+    dirty_age = (uint8_t *)calloc((size_t)n, 1);
+    flat_y = (uint8_t *)malloc(px);
+    flat_u = (uint8_t *)malloc(px / 4);
+    flat_v = (uint8_t *)malloc(px / 4);
+    enc_w = enc_h = 0;
+    if (!encraw || !enc_dirty || !dirty_age || !flat_y || !flat_u || !flat_v)
+        return 0;
+    encmem = (uint8_t *)(((unsigned long)encraw + 15) & ~15ul);
+    enc_w = w;
+    enc_h = h;
+    return 1;
+}
 static int frame_ms = 66; /* at most ~15 a second; the Indigo will set the real pace */
 
 static void on_mouse(void *u, int mask, int x, int y)
@@ -529,8 +565,8 @@ static int on_login(void *u, int file_transfer)
         cdv_log("refusing a desktop session: no X display yet");
         return 0;
     }
-    if (scr.width > MAX_W || scr.height > MAX_H) {
-        cdv_log("refusing a desktop session: the screen is larger than %dx%d", MAX_W, MAX_H);
+    if (!enc_buffers(scr.width, scr.height)) {
+        cdv_log("refusing a desktop session: no memory for a %dx%d screen", scr.width, scr.height);
         return 0;
     }
     ident.width = scr.width;
@@ -1173,7 +1209,7 @@ static void x_try_open(void)
     if (x_ok || (int32_t)(now_ms() - x_retry) < 0)
         return;
     x_retry = now_ms() + 5000;
-    if (!screen_open(&scr, x_display, prefs.gamma))
+    if (!screen_open(&scr, x_display, prefs.gamma, prefs.capture))
         return;
     XSetIOErrorHandler(on_x_io);
     input_init(screen_display());
@@ -1310,7 +1346,6 @@ int main(int argc, char **argv)
         cdv_log("no X display yet; trying every 5 s");
 
     vidbuf = (uint8_t *)malloc(VID_CAP);
-    encmem = (uint8_t *)malloc(vp8e_mem_size(MAX_W, MAX_H) + 16);
     for (i = 0; i < NSLOTS; i++) {
         slots[i].fd = -1;
         slots[i].ctl = (uint8_t *)malloc(CTL_CAP);
@@ -1318,21 +1353,14 @@ int main(int argc, char **argv)
         slots[i].work = (uint8_t *)malloc(WORK_CAP);
         slots[i].files = (cdv_files *)malloc(cdv_files_size());
         if (!slots[i].ctl || !slots[i].in || !slots[i].work || !slots[i].files)
-            encmem = NULL;
+            vidbuf = NULL;
     }
-    if (!vidbuf || !encmem) {
+    if (!vidbuf) {
         cdv_log("out of memory");
         return 1;
     }
     if (strcmp(prefs.files, "off"))
         files_fs = fs_posix(strcmp(prefs.files, "/") ? prefs.files : "");
-    encmem = (uint8_t *)(((unsigned long)encmem + 15) & ~15ul);
-    refmem = (uint8_t *)malloc(vp8e_ref_size(MAX_W, MAX_H)); /* motion vectors */
-    enc_dirty = (uint8_t *)calloc((size_t)(MAX_W / 16 * MAX_H / 16), 1);
-    dirty_age = (uint8_t *)calloc((size_t)(MAX_W / 16 * MAX_H / 16), 1);
-    flat_y = (uint8_t *)malloc((size_t)MAX_W * MAX_H);
-    flat_u = (uint8_t *)malloc((size_t)MAX_W * MAX_H / 4);
-    flat_v = (uint8_t *)malloc((size_t)MAX_W * MAX_H / 4);
 
     ident.id = prefs.id;
     ident.sign_sk = sign_sk;

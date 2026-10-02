@@ -40,8 +40,15 @@ typedef struct {
 } cdv_screen;
 
 /* Open the display and set everything up; 0 on failure (message logged).
- * gamma: the IRIX display gamma to undo (1.7 is IRIX's default; 0 off). */
-int screen_open(cdv_screen *s, const char *display, double gamma);
+ * gamma: the IRIX display gamma to undo (1.7 is IRIX's default; 0 off).
+ * capture: how to read the screen --
+ *   "8"            an 8-bit colormapped root, through MIT-SHM (Entry, XL)
+ *   "24"           a 24-bit TrueColor root, through MIT-SHM
+ *   "readdisplay"  SGI's ReadDisplay: what the monitor shows, windows of
+ *                  every depth composited; slower (no shared memory)
+ *   "auto" or ""   ReadDisplay where windows of another depth than the root's
+ *                  can show, else the root's own depth */
+int screen_open(cdv_screen *s, const char *display, double gamma, const char *capture);
 Display *screen_display(void);
 /* The X connection died: forget it (screen_open again later). */
 void screen_lost(void);

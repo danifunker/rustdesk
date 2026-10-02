@@ -14,8 +14,10 @@ What it needs
 
 - IRIX 5.3 or later, logged in or at the login screen (the agent shows that
   too, and a remote user can log in through it).
-- An 8-bit display (Entry/XL graphics on Indigo, Indy, Indigo2). 24-bit
-  screens are not supported yet.
+- Any display IRIX drives: 8-bit (Entry, XL) or 24-bit, of any size. The
+  agent reads the root window through shared memory, and the windows that
+  show through colormaps or depths of their own (IRIS GL RGB windows, 24-bit
+  windows on an 8-bit root) through SGI's ReadDisplay. See capture= below.
 - The X server's MIT-SHM, XTEST and DEC-XTRAP extensions, which IRIX ships.
 
 
@@ -72,6 +74,12 @@ One setting a line. Restart the agent after a change:
     name=...        what peers see this machine called (default: its name)
     api=https://... a RustDesk console (Pro, CortenDesk) to appear in: the
                     agent reports in every 15 s over https. Empty: none.
+    capture=auto    how to read the screen: auto (the root by its depth, and
+                    windows with colormaps or depths of their own through
+                    ReadDisplay); 8 or 24 (the root alone: faster, wrong
+                    colours in such windows); readdisplay (everything
+                    through ReadDisplay: right everywhere, several times
+                    slower).
 
 id, uuid and seed are this machine's identity: keep them, or it becomes a
 new machine to every client. The seed is a private key: the file is
@@ -93,7 +101,8 @@ remote picture slows when they are busy.
 What it does not do (yet)
 -------------------------
 
-- 24-bit displays; audio; more than one screen.
+- Audio; more than one screen. 24-bit displays are supported but have only
+  been tried against a stand-in (see the release notes), not a 24-bit SGI.
 - The pointer is shown as a plain arrow on the client, not IRIX's own shapes.
 - A client cannot restart or shut down the SGI.
 - The console's https handshake takes the R3000 about 7 seconds (it runs in
