@@ -76,6 +76,20 @@ $(O)/LINK: Makefile | $(O)
 	echo "rm -f libbssl.a; ar crs libbssl.a bssl_*.o" > $@
 	echo "cc $(IRIX_LDFLAGS) -o C-Desk-Vint $(notdir $(OBJS)) libbssl.a -lXTrap -lXt -lXtst -lXext -lX11 -lm" >> $@
 
+# The settings panel (Motif), a program of its own: make gui, then
+#   scripts/indigo.py linkobj build/gui /usr/tmp/cdv-gui cdeskvint-panel
+G := build/gui
+gui: $(G)/panel.o $(G)/LINK
+
+$(G):
+	mkdir -p $(G)
+
+$(G)/panel.o: gui/panel.c | $(G)
+	$(CC) -O2 -Wall -Wno-unused-parameter -D_XmConst= -DCDV_BUILD='"$(BUILD_ID)"' -c $< -o $@
+
+$(G)/LINK: Makefile | $(G)
+	echo "cc -o cdeskvint-panel panel.o -lXm -lXt -lX11" > $@
+
 toolchain:
 	sh scripts/fetch-toolchain.sh $(TOOLCHAIN)
 
@@ -85,23 +99,23 @@ sysroot:
 clean:
 	rm -rf $(O)
 
-.PHONY: all toolchain sysroot clean
+.PHONY: all gui toolchain sysroot clean
 
 # The packages: the agent as linked on IRIX (scripts/indigo.py link fetches it
 # to build/C-Desk-Vint) with its installer, as a tar IRIX 5.3's tar reads; and
 # the same as an inst product (.tardist), made by gendist on the IRIX machine.
 DISTNAME := C-Desk-Vint-IRIX-5.3+-$(BUILD_ID)
-tar: build/C-Desk-Vint
+tar: build/C-Desk-Vint build/cdeskvint-panel
 	rm -rf build/dist
 	mkdir -p build/dist/C-Desk-Vint-IRIX
-	cp build/C-Desk-Vint pkg/install.sh pkg/uninstall.sh pkg/cdeskvint.init pkg/README.txt \
-	    build/dist/C-Desk-Vint-IRIX/
-	chmod 755 build/dist/C-Desk-Vint-IRIX/C-Desk-Vint build/dist/C-Desk-Vint-IRIX/*.sh \
-	    build/dist/C-Desk-Vint-IRIX/cdeskvint.init
+	cp build/C-Desk-Vint build/cdeskvint-panel pkg/install.sh pkg/uninstall.sh pkg/cdeskvint.init \
+	    pkg/cdv-helper.sh pkg/C-Desk-Vint.chest pkg/README.txt build/dist/C-Desk-Vint-IRIX/
+	chmod 755 build/dist/C-Desk-Vint-IRIX/C-Desk-Vint build/dist/C-Desk-Vint-IRIX/cdeskvint-panel \
+	    build/dist/C-Desk-Vint-IRIX/*.sh build/dist/C-Desk-Vint-IRIX/cdeskvint.init
 	cd build/dist && tar --format=v7 --owner=0 --group=0 -cf ../$(DISTNAME).tar C-Desk-Vint-IRIX
 	@ls -l build/$(DISTNAME).tar
 
-inst: build/C-Desk-Vint
+inst: build/C-Desk-Vint build/cdeskvint-panel
 	sh scripts/make-inst.sh $(BUILD_ID)
 
 dist: tar inst

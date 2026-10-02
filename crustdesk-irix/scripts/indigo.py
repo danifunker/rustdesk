@@ -15,6 +15,8 @@ back and reads -- and are checked with `sum` on arrival.
                                      what it says in its first SECS seconds
     indigo.py link [DIR]             upload build/obj (what changed), link there,
                                      and fetch the executable to build/C-Desk-Vint
+    indigo.py linkobj OBJDIR DIR [OUT]  the same for another set of objects with
+                                     a LINK file; fetch DIR/OUT to build/OUT
     indigo.py inst DIST 'cmd'...     run inst -f DIST and give it each command at
                                      a fresh Inst> prompt; fail unless a `go`
                                      reports success
@@ -261,7 +263,7 @@ def typed_get(t, remote, local):
     return data
 
 
-def link(t, remote_dir, objdir="build/obj"):
+def link(t, remote_dir, objdir="build/obj", out=None):
     """Upload the objects that changed since the last link, then link there."""
     state_path = os.path.join(objdir, ".indigo-sent.json")
     try:
@@ -285,6 +287,10 @@ def link(t, remote_dir, objdir="build/obj"):
     # canonical mode), so it travels as a script.
     put(t, os.path.join(objdir, "LINK"), "%s/LINK.sh" % remote_dir)
     rc = run(t, "cd %s && sh LINK.sh 2>&1 | grep -v 'compact relocation'" % remote_dir)
+    if out:
+        get(t, "%s/%s" % (remote_dir, out), os.path.join("build", out))
+        print("fetched build/%s" % out)
+        return
     if objdir != "build/obj":
         return
     rc, out = capture(t, "cd %s && ls -l C-Desk-Vint" % remote_dir)
@@ -358,8 +364,8 @@ def main():
         get(t, sys.argv[2], sys.argv[3])
     elif cmd == "inst":
         inst(t, sys.argv[2], sys.argv[3:])
-    elif cmd == "linkobj":   # linkobj OBJDIR REMOTEDIR: any object set with a LINK file
-        link(t, sys.argv[3], sys.argv[2])
+    elif cmd == "linkobj":   # linkobj OBJDIR REMOTEDIR [OUT]: any object set with a LINK file
+        link(t, sys.argv[3], sys.argv[2], sys.argv[4] if len(sys.argv) > 4 else None)
     elif cmd == "link":
         d = sys.argv[2] if len(sys.argv) > 2 else os.environ.get("INDIGO_DIR", "/usr/tmp/cdv-build")
         link(t, d)

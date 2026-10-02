@@ -57,10 +57,17 @@ Connecting
   IP address as the ID. This needs no server at all.
 
 
-Settings: /var/C-Desk-Vint/prefs
---------------------------------
+Settings
+--------
 
-One setting a line. Restart the agent after a change:
+As root, Toolchest > C-Desk-Vint opens the settings panel: the ID and
+password, the ID server, its key, the relay, a console, how the screen is
+read, starting at boot, and Start/Stop. (The Toolchest reads its menu when
+it starts: log out and in once after installing for the entry to appear,
+or run /usr/local/sbin/cdeskvint-panel.) A change restarts a running agent.
+
+Underneath it is /var/C-Desk-Vint/prefs, one setting a line, which can be
+edited by hand; restart the agent after a change:
 /etc/init.d/cdeskvint stop; /etc/init.d/cdeskvint start
 
     password=...    the password (made up on first run)

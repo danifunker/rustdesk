@@ -1,0 +1,15 @@
+################################################################################
+# C-Desk-Vint.chest -- the settings panel in the Toolchest. Installed by the
+# C-Desk-Vint package (cdeskvint.sw.base) and by install.sh.
+#
+# Pulled in by the "sinclude /usr/lib/X11/app-chests" at the end of
+# /usr/lib/X11/system.chestrc (IRIX 5.3 has it too). f.checkexec.sh shows the
+# entry only while the panel exists, so removing the software hides it.
+# The Toolchest reads this when it starts: log out and in to see it.
+################################################################################
+
+Menu ToolChest
+{
+     no-label			f.separator
+    "C-Desk-Vint"		f.checkexec.sh "/usr/local/sbin/cdeskvint-panel"
+}

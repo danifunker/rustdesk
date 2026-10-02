@@ -2,7 +2,10 @@ f 0644 root sys etc/config/cdeskvint pkg/cdeskvint.config cdeskvint.sw.base conf
 f 0755 root sys etc/init.d/cdeskvint pkg/cdeskvint.init cdeskvint.sw.base config(update) exitop('if test -z "$rbase" -o "$rbase" = /; then /etc/init.d/cdeskvint stop >/dev/null 2>&1; sleep 2; HOME=/var/C-Desk-Vint /usr/local/sbin/C-Desk-Vint -i -c /var/C-Desk-Vint/prefs; /etc/init.d/cdeskvint start; fi')
 l 0000 root sys etc/rc0.d/K01cdeskvint pkg cdeskvint.sw.base symval(../init.d/cdeskvint)
 l 0000 root sys etc/rc2.d/S99cdeskvint pkg cdeskvint.sw.base symval(../init.d/cdeskvint)
+f 0644 root sys usr/lib/X11/app-chests/C-Desk-Vint.chest pkg/C-Desk-Vint.chest cdeskvint.sw.base
 d 0755 root sys usr/local/lib/C-Desk-Vint pkg cdeskvint.sw.base
 f 0644 root sys usr/local/lib/C-Desk-Vint/README.txt pkg/README.txt cdeskvint.sw.base
+f 0755 root sys usr/local/lib/C-Desk-Vint/cdv-helper.sh pkg/cdv-helper.sh cdeskvint.sw.base
 f 0755 root sys usr/local/sbin/C-Desk-Vint bin/C-Desk-Vint cdeskvint.sw.base
+f 0755 root sys usr/local/sbin/cdeskvint-panel bin/cdeskvint-panel cdeskvint.sw.base
 d 0700 root sys var/C-Desk-Vint pkg cdeskvint.sw.base

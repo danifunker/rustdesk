@@ -19,7 +19,10 @@ set -e
 cd "$(dirname "$0")/.."
 BUILD_ID=${1:?usage: make-inst.sh BUILD_ID [BINARY]}
 BIN=${2:-build/C-Desk-Vint}
-[ -f "$BIN" ] || { echo "make-inst.sh: no $BIN (make; scripts/indigo.py link)" >&2; exit 1; }
+PANEL=build/cdeskvint-panel
+for f in "$BIN" $PANEL; do
+	[ -f "$f" ] || { echo "make-inst.sh: no $f (see the Makefile: dist)" >&2; exit 1; }
+done
 
 DATE=$(printf %s "$BUILD_ID" | cut -c1-8)
 REV=$(printf %s "$BUILD_ID" | cut -d- -f2)
@@ -35,19 +38,24 @@ ST=build/inst-stage
 rm -rf $ST
 mkdir -p $ST
 cp "$BIN" $ST/C-Desk-Vint
-cp pkg/cdeskvint.init pkg/cdeskvint.config pkg/README.txt inst/cdeskvint.idb $ST/
+cp $PANEL $ST/cdeskvint-panel
+cp pkg/cdeskvint.init pkg/cdeskvint.config pkg/README.txt pkg/cdv-helper.sh pkg/C-Desk-Vint.chest \
+    inst/cdeskvint.idb $ST/
 sed "s/@VERSION@/$VERSION/" inst/cdeskvint.spec > $ST/cdeskvint.spec
 
 R=/usr/tmp/cdv-inst
 I="python3 scripts/indigo.py"
 $I run "rm -rf $R; mkdir $R $R/bin $R/pkg $R/dist" > /dev/null
 $I put $ST/C-Desk-Vint $R/bin/C-Desk-Vint \
+    $ST/cdeskvint-panel $R/bin/cdeskvint-panel \
+    $ST/cdv-helper.sh $R/pkg/cdv-helper.sh \
+    $ST/C-Desk-Vint.chest $R/pkg/C-Desk-Vint.chest \
     $ST/cdeskvint.init $R/pkg/cdeskvint.init \
     $ST/cdeskvint.config $R/pkg/cdeskvint.config \
     $ST/README.txt $R/pkg/README.txt \
     $ST/cdeskvint.spec $R/cdeskvint.spec \
     $ST/cdeskvint.idb $R/cdeskvint.idb
-$I run "chmod 755 $R/bin/C-Desk-Vint $R/pkg/cdeskvint.init; chmod 644 $R/pkg/cdeskvint.config $R/pkg/README.txt" > /dev/null
+$I run "chmod 755 $R/bin/* $R/pkg/cdeskvint.init $R/pkg/cdv-helper.sh; chmod 644 $R/pkg/cdeskvint.config $R/pkg/README.txt $R/pkg/C-Desk-Vint.chest" > /dev/null
 $I run "cd $R && /usr/sbin/gendist -verbose -sbase $R -idb $R/cdeskvint.idb -spec $R/cdeskvint.spec -dist $R/dist -all 2>&1; ls -l $R/dist"
 for f in cdeskvint cdeskvint.idb cdeskvint.sw; do
 	$I get $R/dist/$f $ST/$f
