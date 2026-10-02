@@ -33,8 +33,8 @@ Boundaries: the Indigo is the user's. Its prefs file holds their own server,
 key and console -- personal settings that stay in that file only; shareable
 builds carry the public ID server and no console. Clean up what testing
 leaves in /usr/tmp (the development copy in `/usr/tmp/cdv-build` with its
-test prefs is kept on purpose); `/tmp/t.c`, `/tmp/t1`, `/tmp/t2` are the
-user's. SGI's headers stay in `build/`. Commit to `vintage-agents` with a
+test prefs is kept on purpose). **A reboot empties /tmp** (IRIX does it at
+boot): look and ask before rebooting. SGI's headers stay in `build/`. Commit to `vintage-agents` with a
 `crustdesk-irix:` subject in the house voice, with the Co-Authored-By line;
 never push unless asked; ask before uploading to a release (notes are CRLF).
 

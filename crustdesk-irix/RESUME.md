@@ -219,6 +219,15 @@ nothing leaks.
 - **cdvpoke's upload inherited a 2 s timeout** from its last receive; a 128
   KB block to this machine takes longer (fixed in cdvpoke).
 - `pkill -f` matching your own command line kills the Bash tool's shell.
+- **A boot empties /tmp**: `/etc/init.d/filesystems` moves it to `/.oldtmp`
+  and `rmtmpfiles` deletes that, unless `chkconfig nocleantmp` is on. The
+  user's `/tmp/t.c`, `/tmp/t1`, `/tmp/t2` were lost that way to the first
+  reboot of 2026-10-02. Before rebooting, look in /tmp and ask.
+- **Relinking a running agent kills it** (SIGBUS, an instruction fetch from
+  a page of the rewritten file): stop it first. The core lands in `/core`,
+  and inst moves it to `/usr/tmp/core.postinst_detected`. IRIX's `dbx` will
+  not start while the machine's own name does not resolve; the core's
+  header (`core.out.h`) gives the signal, EPC and BADVADDR.
 
 ## 6. Environment
 
@@ -248,8 +257,8 @@ nothing leaks.
   remote.home.dani.tech`) -- personal settings, in that file only. The
   development copy and test prefs (`/usr/tmp/cdv-build`, `cdv-prefs`, a
   second identity, ID 839891312) are kept for the next session; `inst_dev.sw`
-  (gendist) is installed from `/CDROM2/dist`. `/tmp/t.c`, `/tmp/t1`, `/tmp/t2`
-  are the user's.
+  (gendist) is installed from `/CDROM2/dist`. The user's `/tmp/t.c`,
+  `/tmp/t1`, `/tmp/t2` are gone (a boot empties /tmp: section 5).
 - **The Indigo's network**: default route 192.168.99.1, DNS 192.168.99.1;
   the clock was set right by the user (5.3 has no ntpdate).
 - **Driving it**: `scripts/indigo.py inst DIST 'cmd'...` drives inst (it
