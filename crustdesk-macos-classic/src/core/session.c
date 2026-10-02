@@ -670,7 +670,7 @@ static void login(cdv_session *s, const uint8_t *b, size_t n)
         }
     }
     if (s->hooks->login && !s->hooks->login(s->hooks->user, s->file_mode)) {
-        send_login_error(s, "Another remote desktop session is using this Mac's screen");
+        send_login_error(s, "Another remote desktop session is using this machine's screen");
         s->state = CDV_CLOSED;
         return;
     }
