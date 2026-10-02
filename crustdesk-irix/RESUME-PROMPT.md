@@ -8,7 +8,7 @@ records. The core is shared with the classic Mac agent
 ../crustdesk-macos-classic/host test` after touching it and keep the Retro68
 builds compiling.
 
-**Where it stands.** Released: build 20261002-d061a0d3a (tar, tardist,
+**Where it stands.** Released: build 20261002-7729fb115 (tar, tardist,
 SHA256SUMS, MANIFEST) in `r-deskway-1.5.0`, a copy in
 `~/vintage-state/crustdesk-irix/`. It is installed by `inst` on the user's
 R3000 IRIS Indigo (IRIX 5.3, LG1 8-bit, `192.168.99.38`, telnet root), starts
@@ -26,8 +26,11 @@ What is open, for the user to choose from (ask; none is decided):
    "not now" to O2 access on 2026-10-02; ask again before assuming.
 3. **Speed**: coded text is ~2.7 ms a macroblock on the R3000; a pass that
    sharpens what was sent coarsely.
-4. **The Mac**: "none" as its console user (for the file manager) and the
-   new Let's Encrypt anchors are committed but not in a Mac release.
+4. **A dropped session holds the screen** until TCP notices (two minutes
+   once), and the refusal's words fit only one of its causes (section 7, 9).
+5. **The Mac**: "none" as its console user (for the file manager) and the
+   new Let's Encrypt anchors, and "this machine's screen", are committed but
+   not in a Mac release.
 
 Boundaries: the Indigo is the user's. Its prefs file holds their own server,
 key and console -- personal settings that stay in that file only; shareable
