@@ -51,7 +51,7 @@ product, boot start, a settings panel in the Toolchest), on the network by
 name (the Indigo now has a route, DNS and a right clock), listed in the
 user's console over https, screens of any depth chosen at run time (the
 login pane's IRIS GL window was wrong until then), and released: build
-20261002-a0054ba77 in `r-deskway-1.5.0` (see section 7).
+20261002-d061a0d3a in `r-deskway-1.5.0` (see section 7).
 
 **Not proven**: any 24-bit SGI (only Xvfb at depth 24 as a stand-in);
 screens larger than 1024x768; any IRIX but 5.3.
@@ -251,7 +251,7 @@ nothing leaks.
   https://www.rfc-editor.org/rfc/rfc6386.txt. The released-quality package
   of build 20261002-f2609ae03 is kept in `~/vintage-state/crustdesk-irix/`.
 - **On the Indigo now**: the release build, installed by `inst` (product
-  `cdeskvint`, version 2026100255), started at boot, with the identity in
+  `cdeskvint`, version 2026100261), started at boot, with the identity in
   `/var/C-Desk-Vint/prefs` (ID 666775149) pointed at the user's own server
   (rustdesk.home.dani.tech, its key) and console (`api=https://
   remote.home.dani.tech`) -- personal settings, in that file only. The
@@ -315,8 +315,20 @@ Every item of the work list, in the order of the resume prompt:
    (`gui/panel.c`, from the 6.5 agent's Motif panel; `pkg/cdv-helper.sh`;
    `pkg/C-Desk-Vint.chest`), which found a real bug (a daemon kept the
    helper's pipe: `daemonize()` now closes inherited descriptors). Released
-   build **20261002-a0054ba77** (tar, tardist, SHA256SUMS, MANIFEST.txt) in
+   build **20261002-d061a0d3a** (tar, tardist, SHA256SUMS, MANIFEST.txt) in
    `r-deskway-1.5.0`, with a row in both tables and its own section.
+
+8. **The pointer, after the release** (the user, from RustDesk 1.4.9 on a
+   Mac: "the mouse is drawn so slowly that it's impossible to track"): the
+   agent sent the pointer's position whenever it changed, the client's own
+   moves included. The client (flutter/lib/models/model.dart,
+   updateCursorPosition; input_model.dart, _checkPeerControlProtected) takes
+   every CursorPosition as the remote side moving the pointer: it hides its
+   own, draws ours, and ignores its mouse for kMouseControlTimeoutMSec (1 s).
+   Now nothing is sent within 300 ms of the peer's input (RustDesk's own
+   server does that, input_service.rs run_pos) nor while the pointer is where
+   the peer put it. The user found it usable; build 20261002-d061a0d3a
+   replaced a0054ba77 in the release. Tell the client nothing it did itself.
 
 Still open: cursor shapes (above); a 24-bit SGI to test on; speed for coded
 text (~2.7 ms a macroblock on the R3000) and a pass that sharpens what was

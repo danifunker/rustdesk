@@ -8,7 +8,7 @@ records. The core is shared with the classic Mac agent
 ../crustdesk-macos-classic/host test` after touching it and keep the Retro68
 builds compiling.
 
-**Where it stands.** Released: build 20261002-a0054ba77 (tar, tardist,
+**Where it stands.** Released: build 20261002-d061a0d3a (tar, tardist,
 SHA256SUMS, MANIFEST) in `r-deskway-1.5.0`, a copy in
 `~/vintage-state/crustdesk-irix/`. It is installed by `inst` on the user's
 R3000 IRIS Indigo (IRIX 5.3, LG1 8-bit, `192.168.99.38`, telnet root), starts
