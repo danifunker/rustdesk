@@ -2012,6 +2012,9 @@ int main(void)
     ident.password = prefs.password;
     ident.salt = "cdeskvint";
     ident.hostname = hostname_utf8;
+    /* A Mac has no console user, but a client's file manager refuses a peer
+     * that names none; "none" says so and lets it in. */
+    ident.username = "none";
 
     slot_ctl[0] = (uint8_t *)big_alloc(SLOT_CTL);
     slot_ctl[1] = (uint8_t *)big_alloc(SLOT_CTL);
