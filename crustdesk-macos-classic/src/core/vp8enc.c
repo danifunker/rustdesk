@@ -1221,12 +1221,15 @@ static void put_header(vp8e *e, bw *b, int key, int p_skip, int p_intra)
     }
 }
 
-static void put_modes(vp8e *e, bw *b, int key, int p_skip, int p_intra)
+static void put_modes(vp8e *e, bw *bp, int key, int p_skip, int p_intra)
 {
-    int r, c;
+    /* The coder in a local, so its state stays in registers across the
+     * thousands of macroblocks (a store on an R3000 goes to memory). */
+    bw local = *bp, *b = &local;
+    int r, c, mbw = e->mbw;
     for (r = 0; r < e->mbh; r++)
-        for (c = 0; c < e->mbw; c++) {
-            const uint8_t *mi = e->mbinfo + r * e->mbw + c;
+        for (c = 0; c < mbw; c++) {
+            const uint8_t *mi = e->mbinfo + r * mbw + c;
             int info = *mi;
             bw_put(b, p_skip, (info & MB_SKIP) != 0);
             if (key) {
@@ -1235,7 +1238,19 @@ static void put_modes(vp8e *e, bw *b, int key, int p_skip, int p_intra)
                 continue;
             }
             bw_put(b, p_intra, info & MB_INTER);
-            if (info & MB_INTER) {
+            if ((info & MB_INTER) && !e->nmoved) {
+                /* No vector anywhere (most frames): ZEROMV against a census
+                 * that is just a weighted count of inter neighbours. */
+                int cnt = 0;
+                if (r > 0 && (mi[-mbw] & MB_INTER))
+                    cnt += 2;
+                if (c > 0 && (mi[-1] & MB_INTER))
+                    cnt += 2;
+                if (r > 0 && c > 0 && (mi[-mbw - 1] & MB_INTER))
+                    cnt += 1;
+                bw_put(b, 255, 0); /* mb_ref_frame_sel1 = LAST (prob_last) */
+                bw_put(b, vp8_mode_contexts[cnt][0], 0);
+            } else if (info & MB_INTER) {
                 /* Section 16.3: the mode is coded against the census of the
                  * neighbours' vectors. */
                 nearmv nm;
@@ -1263,6 +1278,7 @@ static void put_modes(vp8e *e, bw *b, int key, int p_skip, int p_intra)
                 bw_tree(b, uv_mode_tree, uv_mode_prob, MB_UVMODE(info));
             }
         }
+    *bp = local;
 }
 
 /* The intra cache key: source, availability, and every reconstructed pixel an
@@ -1369,7 +1385,7 @@ int vp8e_rows(vp8e *e, int nrows)
     int c;
 
     for (; nrows > 0 && e->f_row < e->mbh; nrows--, e->f_row++) {
-        int r = e->f_row;
+        int r = e->f_row, left_live = 0, nskip = 0;
         memset(left, 0, 9);
         for (c = 0; c < e->mbw; c++) {
             uint8_t *above = e->above_ctx + c * 9;
@@ -1379,16 +1395,30 @@ int vp8e_rows(vp8e *e, int nrows)
             int moved_only = 0, moved_exact = 0;
             PROF_START;
 
-            e->mvs[r * e->mbw + c] = 0;
             if (!key && e->f_dirty && !e->f_dirty[r * e->mbw + c]) {
-                /* Unchanged: copy from the last frame, nothing coded. */
+                /* Unchanged: copy from the last frame, nothing coded. Most
+                 * macroblocks of most frames come this way, so it writes
+                 * only what is not already so: the R3000's cache writes
+                 * every store through to memory. */
                 int z;
-                *info = MB_INTER | MB_SKIP;
-                for (z = 0; z < 9; z++)
-                    above[z] = left[z] = 0;
-                e->nskip++;
+                if (*info != (MB_INTER | MB_SKIP))
+                    *info = MB_INTER | MB_SKIP;
+                if (e->mvs[r * e->mbw + c])
+                    e->mvs[r * e->mbw + c] = 0;
+                if (left_live) {
+                    for (z = 0; z < 9; z++)
+                        left[z] = 0;
+                    left_live = 0;
+                }
+                if (above[0] | above[1] | above[2] | above[3] | above[4] | above[5] | above[6] |
+                    above[7] | above[8])
+                    for (z = 0; z < 9; z++)
+                        above[z] = 0;
+                nskip++;
                 continue;
             }
+            e->mvs[r * e->mbw + c] = 0;
+            left_live = 1;
 
             load_src(src->y, src->ystride, e->w, e->h, c * 16, r * 16, 16, sy);
             load_src(src->u, src->uvstride, cw, ch, c * 8, r * 8, 8, su);
@@ -1577,6 +1607,7 @@ int vp8e_rows(vp8e *e, int nrows)
                 e->nintra++;
             PROF(4);
         }
+        e->nskip += nskip;
     }
     return e->f_row >= e->mbh;
 }

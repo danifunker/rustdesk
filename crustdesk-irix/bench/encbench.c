@@ -78,6 +78,19 @@ int main(int argc, char **argv)
     len = vp8e_encode(e, &(vp8e_src){ Y, U, V, W, W / 2 }, NULL, 1, out, sizeof out);
     t1 = now();
     printf("keyframe q=%d: %.0f ms, %lu bytes\n", q, (t1 - t0) * 1000, (unsigned long)len);
+    if (getenv("TINY")) {
+        /* frames where one macroblock changed: what every frame pays */
+        memset(dirty, 0, sizeof dirty);
+        dirty[10 * 64 + 10] = 1;
+        t0 = now();
+        for (i = 0; i < n; i++) {
+            Y[160 * W + 160 + (i & 7)] ^= 0x40;
+            len = vp8e_encode(e, &(vp8e_src){ Y, U, V, W, W / 2 }, dirty, 0, out, sizeof out);
+        }
+        t1 = now();
+        printf("tiny: %.1f ms per frame, %lu bytes\n", (t1 - t0) * 1000 / n, (unsigned long)len);
+        return 0;
+    }
     for (my = y0 / 16; my < (y1 + 15) / 16; my++)
         for (mx = x0 / 16; mx < (x1 + 15) / 16; mx++) {
             dirty[my * 64 + mx] = 1;

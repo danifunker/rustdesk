@@ -30,8 +30,12 @@ by IP, every frame decoded by libvpx (`host/build/vp8dump`):
 | a remote logout (Toolchest > Desktop > Log Out), the X server reset, the agent reconnecting, and a remote login typed into clogin | works |
 | the package: IRIX tar unpacks it, its scripts pass IRIX `sh -n`, `-i` makes an identity | works |
 
-**Not proven**: a real RustDesk client (only cdvpoke has driven it -- the
-core was proven against RustDesk 1.4.9 on the Mac); the ID server, relay or
+**A real RustDesk client**: RustDesk 1.4.9 on this Linux machine
+(`rustdesk --connect 192.168.99.38 --password ...`, its window captured with
+`xwd -id`): the picture, a click, and typing a shell line in Map mode, shifted
+symbols included. It asks for 30 fps (`custom_fps`).
+
+**Not proven**: the ID server, relay or
 local-address path (the Indigo has **no default route and no DNS** -- it
 reaches 192.168.99.0/24 only, so neither the user's server nor the public one
 is reachable; changing that is the user's call); `install.sh` actually run
@@ -91,7 +95,9 @@ request costs ~2.1 ms on top (XGetImage over the socket: 1085 ms). So
 - **SubstructureNotify** on the root: top-levels mapping, moving, going --
   when the server paints without being asked.
 - A **rolling band** (3 macroblock rows every 150 ms) catches what X never
-  sees (IRIS GL, the server's own painting).
+  sees (IRIS GL, the server's own painting); it slows to one band a 1.2 s
+  after a pass that found nothing X had not reported, and speeds up again
+  as soon as one does.
 - **Colormap** requests are trapped: on an 8-bit screen a colormap change
   recolours pixels that never change value. The default colormap is preferred
   when it is installed (the installed list's order changes with focus).
@@ -147,7 +153,8 @@ reconnects. `authorize: off` in xdm-config: root opens `:0` without a cookie.
 | a menu opening (~136 macroblocks) | ~0.37 s |
 | an 80x30 xterm scrolling one line (encbench) | 0.66 s, 6 KB (was 2.2 s, 86 KB) |
 | a detailed (text) macroblock, coded | ~2.7 ms, nearly independent of q |
-| fixed cost of any frame (3072 macroblocks' modes) | ~40 ms |
+| fixed cost of any frame (3072 macroblocks' modes) | ~27 ms (was ~40: see "write-through" in section 5) |
+| background band scan, idle | ~0.3 s of reading a 10 s (adaptive; was 1.4 s) |
 | file transfer, download / upload | 584 KB/s / 730 KB/s |
 
 The Indigo's one CPU is shared with Xsgi and the programs: during a fast
@@ -179,6 +186,11 @@ The Indigo's one CPU is shared with Xsgi and the programs: during a fast
   must be given `:0`. A program started with `&` dies with the session
   (SIGHUP) unless it ignores it (the agent does); `nohup` made the helper's
   shell wait. `xterm` with stdin from /dev/null exits at once.
+- **The R3000's data cache is write-through**: every store goes to memory
+  through a four-entry write buffer, so a loop that stores a lot stalls
+  however little it computes. Skipping 3072 macroblocks cost ~23 ms until
+  the skip path stopped rewriting zeros; the bool coder in `put_modes` now
+  works on a local copy (registers) as `put_block` always did.
 - **`gettimeofday` is a real system call**: VP8E_PROFILE's per-macroblock
   clock reads cost more than what they measured. Use `prof`.
 - **Wrapping millisecond clock**: a deadline initialised to 0 compares as

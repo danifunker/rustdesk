@@ -56,7 +56,14 @@ static uint8_t gtab[256];
 static XETC *tc;
 static int watching;
 static int scan_row;
-static uint32_t scan_due, scan_every = 150;
+static uint32_t scan_due, scan_every = 150, scan_now = 150;
+/* The scan slows down while it finds nothing X did not report (most of the
+ * time: it is there for IRIS GL and the server's own painting), doubling
+ * after each quiet pass of the whole screen up to SCAN_SLOWEST, and goes back
+ * to scan_every as soon as it finds something. */
+#define SCAN_SLOWEST 1200
+static int scan_pass_found;
+static uint8_t *scanflag;
 
 static uint32_t now_ms(void)
 {
@@ -1260,8 +1267,10 @@ int screen_open(cdv_screen *s, const char *display, double gamma)
         hint_tmp = (vp8e_hint *)calloc((size_t)n, sizeof(vp8e_hint));
         s->flat = (uint8_t *)calloc((size_t)n, 1);
         s->dirty = (uint8_t *)calloc((size_t)n, 1);
+        free(scanflag);
+        scanflag = (uint8_t *)calloc((size_t)n, 1);
         if (!arena || !dmg || !conv || !ovmap || !hint_next || !hint_frame || !hint_tmp ||
-            !s->flat || !s->dirty) {
+            !s->flat || !s->dirty || !scanflag) {
             cdv_log("out of memory");
             exit(1);
         }
@@ -1545,17 +1554,35 @@ void screen_collect(cdv_screen *s, int scan, uint32_t now)
         }
     }
     if (scan && (int32_t)(now - scan_due) >= 0) {
+        int row0 = scan_row;
         for (k = 0; k < SCAN_ROWS && scan_row + k < MBH; k++)
             for (mx = 0; mx < MBW; mx++)
                 if (!dmg[(scan_row + k) * MBW + mx]) {
                     dmg[(scan_row + k) * MBW + mx] = 1;
+                    scanflag[(scan_row + k) * MBW + mx] = 1;
                     ndmg++;
                 }
         s->scanned = k;
-        scan_due = now + scan_every;
         scan_row += k;
-        if (scan_row >= MBH)
+        if (ndmg)
+            read_damage(s);
+        /* did the band find what nothing reported? */
+        for (my = row0; my < scan_row; my++)
+            for (mx = 0; mx < MBW; mx++) {
+                int i = my * MBW + mx;
+                if (scanflag[i] && conv[i])
+                    scan_pass_found = 1;
+                scanflag[i] = 0;
+            }
+        if (scan_pass_found)
+            scan_now = scan_every;
+        if (scan_row >= MBH) {
             scan_row = 0;
+            if (!scan_pass_found && scan_now < SCAN_SLOWEST)
+                scan_now = scan_now * 2 > SCAN_SLOWEST ? SCAN_SLOWEST : scan_now * 2;
+            scan_pass_found = 0;
+        }
+        scan_due = now + scan_now;
     }
     if (ndmg)
         read_damage(s);
@@ -1572,7 +1599,7 @@ void screen_collect(cdv_screen *s, int scan, uint32_t now)
     s->convert_ms = now_ms() - t1;
 }
 
-void screen_set_scan(uint32_t ms) { scan_every = ms; }
+void screen_set_scan(uint32_t ms) { scan_every = scan_now = ms; }
 
 /* The planes are kept current for every macroblock, so a keyframe needs no
  * reading or converting: only everything marked. */
