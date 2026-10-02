@@ -413,7 +413,7 @@ static const cdv_fs_ops *files_fs;  /* NULL: file transfer is off */
  * hundredths of a millisecond: one-colour macroblocks are cheap (prediction
  * gets them exactly), moved ones nearly so, anything else -- text, icons --
  * is learnt from the frames as they go (2.7 ms on a 33 MHz R3000 to start). */
-#define FRAME_BUDGET 30000
+#define FRAME_BUDGET 22000
 #define COST_FLAT 50
 #define COST_MOVED 60
 static int cost_detail = 270;

@@ -126,7 +126,7 @@ vp8enc.c`), grown for this port (see its header):
   had is sent as the vector alone. Bit-exact with libvpx
   (`host/test_mv.c`, odd and even shifts, both directions).
 - **A frame budget** (`src/main.c`, `select_mbs`): a frame codes what fits in
-  ~300 ms of this CPU -- flat blocks are cheap, moved ones nearly so, detail
+  ~220 ms of this CPU -- flat blocks are cheap, moved ones nearly so, detail
   is learnt from measured frames (~2.7 ms a macroblock) -- longest-waiting
   first, then rows nearest the pointer; the rest stays dirty for the next
   frame. The first picture (and a client's refresh) is a keyframe of the
@@ -166,6 +166,13 @@ reconnects. `authorize: off` in xdm-config: root opens `:0` without a cookie.
 
 The Indigo's one CPU is shared with Xsgi and the programs: during a fast
 `ls` frames take 1-2 s of wall time for 0.4-0.7 s of encoding.
+
+**The soak** (cdvpoke, ~4 minutes: typing `ls -l /usr/lib` into a winterm,
+opening and closing the Toolchest's menu, moving the pointer, 14 rounds):
+with the frame budget at 220 ms every 10-second window of the agent's log
+was at 2.1-3.5 fps (573 frames, 760 KB); at 300 ms it was 1.6-2.8. The
+agent's size after two soaks was the same (3934 pages, 1.8 K resident):
+nothing leaks.
 
 ## 5. Traps
 
