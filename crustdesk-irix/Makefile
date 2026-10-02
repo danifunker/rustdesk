@@ -5,6 +5,7 @@
 #   make                 objects into build/obj (needs the toolchain and sysroot)
 #   make toolchain       fetch Ubuntu's mips-linux-gnu GCC 13 into build/toolchain
 #   make sysroot         IRIX 5.3 headers from a disk image (IRIX53_IMAGE=...)
+#   make dist            the tar and the inst product (.tardist), once linked
 #
 # See BUILD.md.
 TOOLCHAIN ?= $(CURDIR)/build/toolchain
@@ -74,10 +75,11 @@ clean:
 
 .PHONY: all toolchain sysroot clean
 
-# The package: the agent as linked on IRIX (scripts/indigo.py link fetches it
-# to build/C-Desk-Vint) with its installer, as a tar IRIX 5.3's tar reads.
+# The packages: the agent as linked on IRIX (scripts/indigo.py link fetches it
+# to build/C-Desk-Vint) with its installer, as a tar IRIX 5.3's tar reads; and
+# the same as an inst product (.tardist), made by gendist on the IRIX machine.
 DISTNAME := C-Desk-Vint-IRIX-5.3+-$(BUILD_ID)
-dist: build/C-Desk-Vint
+tar: build/C-Desk-Vint
 	rm -rf build/dist
 	mkdir -p build/dist/C-Desk-Vint-IRIX
 	cp build/C-Desk-Vint pkg/install.sh pkg/uninstall.sh pkg/cdeskvint.init pkg/README.txt \
@@ -85,7 +87,13 @@ dist: build/C-Desk-Vint
 	chmod 755 build/dist/C-Desk-Vint-IRIX/C-Desk-Vint build/dist/C-Desk-Vint-IRIX/*.sh \
 	    build/dist/C-Desk-Vint-IRIX/cdeskvint.init
 	cd build/dist && tar --format=v7 --owner=0 --group=0 -cf ../$(DISTNAME).tar C-Desk-Vint-IRIX
-	cd build && sha256sum $(DISTNAME).tar > $(DISTNAME).SHA256SUMS
 	@ls -l build/$(DISTNAME).tar
 
-.PHONY: dist
+inst: build/C-Desk-Vint
+	sh scripts/make-inst.sh $(BUILD_ID)
+
+dist: tar inst
+	cd build && sha256sum $(DISTNAME).tar $(DISTNAME).tardist > $(DISTNAME).SHA256SUMS
+	@cat build/$(DISTNAME).SHA256SUMS
+
+.PHONY: tar inst dist

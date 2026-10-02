@@ -22,17 +22,24 @@ What it needs
 Install
 -------
 
-As root, in the unpacked directory:
+With IRIX's own installer (Software Manager, or as root in a shell):
+
+    mkdir /usr/tmp/cdv; cd /usr/tmp/cdv; tar xf C-Desk-Vint-IRIX-5.3+-*.tardist
+    inst -f /usr/tmp/cdv        (then: install cdeskvint, go, quit)
+
+or, from the .tar, as root in the unpacked directory:
 
     ./install.sh
 
-It copies the agent to /usr/local/sbin, starts it, starts it at every boot
-(chkconfig cdeskvint), and prints the machine's RustDesk ID and password.
-Print them again at any time with:
+Either copies the agent to /usr/local/sbin, starts it, starts it at every
+boot (chkconfig cdeskvint), and prints the machine's RustDesk ID and
+password. Print them again at any time with:
 
     /usr/local/sbin/C-Desk-Vint -i -c /var/C-Desk-Vint/prefs
 
-To remove it: ./uninstall.sh  (add -a to remove its settings too)
+To remove it: in inst, remove cdeskvint; or ./uninstall.sh (add -a to remove
+its settings too). Removing it through inst leaves the running agent to notice
+that its program is gone, which takes it up to 10 seconds.
 
 
 Connecting

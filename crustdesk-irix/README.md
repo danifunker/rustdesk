@@ -32,6 +32,18 @@ make                                            # objects into build/obj
 INDIGO=host scripts/indigo.py link              # link there, fetch build/C-Desk-Vint
 ```
 
+## The packages
+
+`make dist` makes both, from the linked agent, with one SHA256SUMS:
+
+- **`C-Desk-Vint-IRIX-5.3+-<build>.tardist`**, the inst product (`cdeskvint`,
+  subsystem `cdeskvint.sw.base`): what IRIX's `inst` and Software Manager
+  install, upgrade and remove. `scripts/make-inst.sh` sends `inst/` and the
+  files to the IRIX machine and runs its `gendist` there (`inst_dev.sw`, on
+  the IRIX 5.3 development CD); see `inst/README.md`.
+- **`C-Desk-Vint-IRIX-5.3+-<build>.tar`**, the agent with `pkg/install.sh`
+  and `uninstall.sh`, to install by hand.
+
 `scripts/indigo.py` drives the IRIX machine over telnet (5.3 has no ssh): it
 types one small file through the terminal -- `tools/irix/xfer.c`, built there
 with `cc` -- and moves everything else over TCP with it.

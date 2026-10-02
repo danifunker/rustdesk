@@ -36,6 +36,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/utsname.h>
@@ -1117,10 +1118,29 @@ static void on_term(int sig)
     quit = 1;
 }
 
+/* IRIX 5.3's inst has no removeop: removing the package takes the files away
+ * and cannot stop the running agent. So a daemon started by its full path
+ * watches that path, and stops once it is gone. (An upgrade replaces the file;
+ * if we stop in between, the package's exitop starts the new one.) */
+static const char *self_path;
+static uint32_t self_check;
+
+static void self_step(void)
+{
+    struct stat st;
+    if (!self_path || (int32_t)(now_ms() - self_check) < 0)
+        return;
+    self_check = now_ms() + 10000;
+    if (stat(self_path, &st) < 0 && errno == ENOENT) {
+        cdv_log("%s has been removed; stopping", self_path);
+        quit = 1;
+    }
+}
+
 static void usage(void)
 {
     fprintf(stderr, "usage: C-Desk-Vint [-c prefs] [-d display] [-l logfile] [-p port] [-v] [-D] [-i]\n"
-                    "  -D  detach and run as a daemon (log with -l)\n"
+                    "  -D  detach and run as a daemon (log with -l); stop if the program is removed\n"
                     "  -i  print this machine's ID and password, and exit\n");
     exit(2);
 }
@@ -1161,8 +1181,11 @@ int main(int argc, char **argv)
                prefs.password, prefs.server[0] ? prefs.server : "(none)", prefs.port);
         return 0;
     }
-    if (detach)
+    if (detach) {
         daemonize();
+        if (argv[0][0] == '/')
+            self_path = argv[0];
+    }
     cdv_log_open(logpath, verbose);
     cdv_log("%s starting", VERSION_STRING);
     load_prefs();
@@ -1178,7 +1201,7 @@ int main(int argc, char **argv)
         display = ":0";
     x_display = display;
     /* deadlines are compared as int32 differences of a wrapping clock */
-    x_retry = resolve_at = now_ms();
+    x_retry = resolve_at = self_check = now_ms();
     x_try_open();
     if (!x_ok)
         cdv_log("no X display yet; trying every 5 s");
@@ -1237,6 +1260,7 @@ int main(int argc, char **argv)
 
         rdv_step();
         x_try_open();
+        self_step();
         if (desk && desk->s.state == CDV_LIVE) {
             /* busy: something to read back or a frame being encoded */
             if (S.encoding || (desk->s.vstate == VID_FREE &&

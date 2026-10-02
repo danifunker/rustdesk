@@ -11,6 +11,7 @@
 set -eu
 DIR=${1:-$(cd "$(dirname "$0")/.." && pwd)/build/toolchain}
 mkdir -p "$DIR/debs"
+DIR=$(cd "$DIR" && pwd)
 cd "$DIR/debs"
 apt-get download gcc-13-mips-linux-gnu cpp-13-mips-linux-gnu binutils-mips-linux-gnu \
 	gcc-13-mips-linux-gnu-base libgcc-13-dev-mips-cross

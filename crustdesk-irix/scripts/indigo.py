@@ -15,6 +15,9 @@ back and reads -- and are checked with `sum` on arrival.
                                      what it says in its first SECS seconds
     indigo.py link [DIR]             upload build/obj (what changed), link there,
                                      and fetch the executable to build/C-Desk-Vint
+    indigo.py inst DIST 'cmd'...     run inst -f DIST and give it each command at
+                                     a fresh Inst> prompt; fail unless a `go`
+                                     reports success
 
 Environment: INDIGO (host, default 192.168.99.38), INDIGO_USER (root),
 INDIGO_PASS (empty), INDIGO_DIR (/usr/tmp/cdv-build).
@@ -290,6 +293,36 @@ def link(t, remote_dir, objdir="build/obj"):
         raise SystemExit("link failed")
 
 
+def inst(t, dist, cmds):
+    """Drive inst(1M). It reads its history for minutes on an R3000 and
+    discards what is typed meanwhile, so each command waits for the prompt.
+    The session is left at Inst> and dropped: once `go` has succeeded the
+    work is done, and quitting would only run its checks again."""
+    def step(cmd, prompt=rb"Inst> $"):
+        t.write(cmd.encode() + b"\n")
+        buf, end = b"", time.time() + 1800
+        while time.time() < end:
+            try:
+                c = t.read_very_eager()
+            except EOFError:
+                break
+            if c:
+                buf += c
+                if re.search(prompt, buf[-300:]):
+                    out = re.sub(rb" *\d+%", b"", buf).decode("latin-1").replace("\r", "")
+                    sys.stdout.write(out)
+                    sys.stdout.flush()
+                    return out
+            else:
+                time.sleep(0.5)
+        raise SystemExit("inst: no prompt after %r: %r" % (cmd, buf[-500:]))
+    step("TERM=vt100; export TERM; inst -f %s" % dist)
+    for c in cmds:
+        out = step(c)
+        if c == "go" and "were successful" not in out:
+            raise SystemExit("inst: go did not succeed")
+
+
 def main():
     if len(sys.argv) < 2:
         raise SystemExit(__doc__)
@@ -323,6 +356,8 @@ def main():
             print("put %s -> %s: %d bytes" % (a[i], a[i + 1], put(t, a[i], a[i + 1])))
     elif cmd == "get":
         get(t, sys.argv[2], sys.argv[3])
+    elif cmd == "inst":
+        inst(t, sys.argv[2], sys.argv[3:])
     elif cmd == "linkobj":   # linkobj OBJDIR REMOTEDIR: any object set with a LINK file
         link(t, sys.argv[3], sys.argv[2])
     elif cmd == "link":
