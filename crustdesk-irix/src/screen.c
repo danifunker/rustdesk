@@ -775,6 +775,68 @@ static void bb_mark(const bbox *b, int ox, int oy, int pad)
 
 static unsigned long n_trapped, n_ignored;
 
+/* CDV_TRACE_CURSOR=1 in the environment: log what programs do with the
+ * pointer's shape -- cursors made and freed, set on windows, grabs. A
+ * diagnostic (RESUME.md has what it showed): the agent sends no shapes. */
+static int trace_cursor;
+
+static void cursor_trace(const uint8_t *r, int have, int client)
+{
+    int op = r[0];
+    char rgb[40] = "";
+    if (op == X_ChangeWindowAttributes && have >= 12) {
+        unsigned long mask = u32(r + 8);
+        int k, idx = 0;
+        if (!(mask & CWCursor))
+            return;
+        for (k = 0; k < 14; k++)
+            idx += (int)(mask >> k & 1);
+        if (12 + 4 * idx + 4 <= have)
+            cdv_log("cursor: client %d sets window 0x%lx's cursor to 0x%lx", client,
+                    (unsigned long)u32(r + 4), (unsigned long)u32(r + 12 + 4 * idx));
+        else
+            cdv_log("cursor: client %d sets window 0x%lx's cursor (past what was trapped)",
+                    client, (unsigned long)u32(r + 4));
+        return;
+    }
+    if ((op == X_CreateGlyphCursor && have >= 32) || (op == X_CreateCursor && have >= 32))
+        snprintf(rgb, sizeof rgb, " fore %04x%04x%04x back %04x%04x%04x",
+                 u16(r + (op == X_CreateCursor ? 16 : 20)), u16(r + (op == X_CreateCursor ? 18 : 22)),
+                 u16(r + (op == X_CreateCursor ? 20 : 24)), u16(r + (op == X_CreateCursor ? 22 : 26)),
+                 u16(r + (op == X_CreateCursor ? 24 : 28)), u16(r + (op == X_CreateCursor ? 26 : 30)));
+    switch (op) {
+    case X_CreateGlyphCursor:
+        cdv_log("cursor: client %d makes 0x%lx from font 0x%lx glyph %d (mask font 0x%lx glyph %d)%s",
+                client, (unsigned long)u32(r + 4), (unsigned long)u32(r + 8), u16(r + 16),
+                (unsigned long)u32(r + 12), u16(r + 18), rgb);
+        break;
+    case X_CreateCursor:
+        cdv_log("cursor: client %d makes 0x%lx from pixmap 0x%lx (mask 0x%lx), hot spot %d,%d%s",
+                client, (unsigned long)u32(r + 4), (unsigned long)u32(r + 8),
+                (unsigned long)u32(r + 12), u16(r + 28), u16(r + 30), rgb);
+        break;
+    case X_FreeCursor:
+        cdv_log("cursor: client %d frees 0x%lx", client, (unsigned long)u32(r + 4));
+        break;
+    case X_RecolorCursor:
+        cdv_log("cursor: client %d recolours 0x%lx to %04x%04x%04x / %04x%04x%04x", client,
+                (unsigned long)u32(r + 4), u16(r + 8), u16(r + 10), u16(r + 12), u16(r + 14),
+                u16(r + 16), u16(r + 18));
+        break;
+    case X_GrabPointer:
+        cdv_log("cursor: client %d grabs the pointer on 0x%lx with cursor 0x%lx", client,
+                (unsigned long)u32(r + 4), (unsigned long)u32(r + 16));
+        break;
+    case X_UngrabPointer:
+        cdv_log("cursor: client %d lets the pointer go", client);
+        break;
+    case X_ChangeActivePointerGrab:
+        cdv_log("cursor: client %d changes its grab's cursor to 0x%lx", client,
+                (unsigned long)u32(r + 4));
+        break;
+    }
+}
+
 static void on_request2(XETC *t, XETrapDatum *d, BYTE *user);
 static void on_request(XETC *t, XETrapDatum *d, BYTE *user)
 {
@@ -799,6 +861,13 @@ static void on_request2(XETC *t, XETrapDatum *d, BYTE *user)
     complete = have >= reqlen;
     n_trapped++;
     memset(&b, 0, sizeof b);
+    if (trace_cursor) {
+        cursor_trace(r, have, (int)d->hdr.client);
+        if (op == X_ChangeWindowAttributes || op == X_GrabPointer || op == X_UngrabPointer ||
+            op == X_ChangeActivePointerGrab || op == X_CreateCursor || op == X_CreateGlyphCursor ||
+            op == X_FreeCursor || op == X_RecolorCursor)
+            return;
+    }
 
     switch (op) {
     case X_SetSelectionOwner:
@@ -1909,6 +1978,7 @@ static void trap_on(void)
     };
     ReqFlags req;
     int i;
+    trace_cursor = getenv("CDV_TRACE_CURSOR") != NULL;
     if (!tc) {
         tc = XECreateTC(dpy, 0L, NULL);
         if (!tc) {
@@ -1918,6 +1988,13 @@ static void trap_on(void)
         memset(req, 0, sizeof req);
         for (i = 0; ops[i]; i++)
             BitTrue(req, ops[i]);
+        if (trace_cursor) {
+            static const int cops[] = { X_ChangeWindowAttributes, X_GrabPointer, X_UngrabPointer,
+                                        X_ChangeActivePointerGrab, X_CreateCursor,
+                                        X_CreateGlyphCursor, X_FreeCursor, X_RecolorCursor, 0 };
+            for (i = 0; cops[i]; i++)
+                BitTrue(req, cops[i]);
+        }
         XETrapSetRequests(tc, True, req);
         XETrapSetMaxPacket(tc, True, TRAP_PACKET);
         XETrapSetWinXY(tc, True);
