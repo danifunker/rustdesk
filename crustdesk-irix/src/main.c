@@ -393,6 +393,9 @@ static struct {
     uint32_t f_start, f_enc;  /* this frame: when it began, encoder time so far */
     int f_mbs, f_detail, f_moved_hint, f_flat;
     int cx, cy;
+    /* where the peer last put the pointer, and when (cursor_step) */
+    int in_x, in_y, in_seen;
+    uint32_t in_at;
     /* for the log */
     unsigned frames, bytes, mbs;
     uint32_t t_read, t_conv, t_enc;
@@ -465,8 +468,15 @@ static int frame_ms = 66; /* at most ~15 a second; the Indigo will set the real 
 
 static void on_mouse(void *u, int mask, int x, int y)
 {
-    if ((slot *)u == desk)
-        input_mouse(mask, x, y);
+    if ((slot *)u != desk)
+        return;
+    input_mouse(mask, x, y);
+    if ((mask & 7) < 3) { /* a move, a press or a release: x, y is where */
+        S.in_x = x;
+        S.in_y = y;
+        S.in_seen = 1;
+        S.in_at = now_ms();
+    }
 }
 
 static void on_key(void *u, const cdv_key *k)
@@ -579,6 +589,7 @@ static int on_login(void *u, int file_transfer)
         vp8e_set_ref(S.enc, refmem);
     S.encoding = 0;
     S.last_frame = S.last_cursor = S.last_report = now_ms();
+    S.in_seen = 0;
     S.frames = S.bytes = S.mbs = 0;
     S.t_read = S.t_conv = S.t_enc = 0;
     S.cx = S.cy = -1;
@@ -921,11 +932,20 @@ static void cursor_step(void)
     if (!desk || desk->s.state != CDV_LIVE || now - S.last_cursor < 100)
         return;
     S.last_cursor = now;
-    if (screen_pointer(&x, &y) && (x != S.cx || y != S.cy)) {
-        S.cx = x;
-        S.cy = y;
-        cdv_send_cursor_pos(&desk->s, x, y);
-    }
+    if (!screen_pointer(&x, &y) || (x == S.cx && y == S.cy))
+        return;
+    S.cx = x;
+    S.cy = y;
+    /* Only a move the peer did not make. A client takes every position as
+     * the remote side moving the pointer: it hides its own pointer, draws
+     * ours where we say, and holds back its mouse for a moment. Echoing the
+     * peer's own moves did that all the time. RustDesk's server holds back
+     * for 300 ms after the peer's input; an R3000 can be longer than that
+     * between looks, so a pointer still where the peer put it is held back
+     * too. */
+    if (S.in_seen && ((int32_t)(now - S.in_at) < 300 || (x == S.in_x && y == S.in_y)))
+        return;
+    cdv_send_cursor_pos(&desk->s, x, y);
 }
 
 /* ---- the ID server ------------------------------------------------------- */
