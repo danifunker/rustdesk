@@ -230,14 +230,18 @@ nothing leaks.
 - `bench/encbench.c`: the encoder alone on the target (`grab` a screen,
   `run` it with a scroll, `NOHINTS=1` for no vectors); `make -C bench
   NOINLINE=1` keeps functions apart for `prof`.
-- The cross toolchain was unpacked in `/tmp/mipsgcc` this session and
-  `build/toolchain/usr` links to it; `scripts/fetch-toolchain.sh` makes a
-  fresh one. RFC 6386's text (for `gen_vp8_tables.py`) was fetched to
-  `/tmp/rfc6386.txt`.
-- Left on the Indigo by testing: an xterm and an xclock in the restored
-  session (`/etc/killall xclock xterm` if unwanted), `/usr/tmp/{cdv-build,
-  cdv-bench,cdv-xfer,pkgtest,moved.bin,cdvtest,xterm.scr,...}`, and probes in
-  `/tmp` and `/usr/tmp`.
+- **Nothing of the build is kept locally** (the disk is nearly full): set it
+  up again with `scripts/fetch-toolchain.sh` (into `build/toolchain`, ~1
+  minute) and `IRIX53_IMAGE=~/Indy-IRIX53_dev.chd scripts/make-sysroot.sh`
+  (~30 s); RFC 6386 for `gen_vp8_tables.py` is at
+  https://www.rfc-editor.org/rfc/rfc6386.txt. The released-quality package
+  of build 20261002-f2609ae03 is kept in `~/vintage-state/crustdesk-irix/`.
+- **On the Indigo now**: that build running from `/usr/tmp/cdv-build` with the
+  test prefs `/usr/tmp/cdv-prefs` (no ID server: direct IP on port 21118;
+  `C-Desk-Vint -i -c /usr/tmp/cdv-prefs` prints its ID and password), the log
+  in `/usr/tmp/cdv.log`, and `/usr/tmp/cdv-xfer`. It does not survive a
+  reboot: `install.sh` was not run. Everything else testing made was removed;
+  `/tmp/t.c`, `/tmp/t1`, `/tmp/t2` predate this work and are the user's.
 
 ## 7. Next
 
