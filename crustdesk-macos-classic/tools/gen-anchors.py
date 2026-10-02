@@ -7,6 +7,13 @@ An anchor is only a name and a key: BearSSL stops walking the server's chain
 at the first certificate issued by one, so an intermediate CA whose key is
 trusted (Let's Encrypt's Root YE, cross-signed by ISRG Root X2) saves the
 checks above it -- which on a 68040 are seconds each.
+
+Let's Encrypt's ECDSA issuing intermediates (E5-E9, YE1-YE3) are anchors for
+the same reason: then a certificate costs one P-384 check, not two. On a
+33 MHz R3000 one is ~4.5 s, and a server that gives a handshake 10 s (the
+nginx in front of the console this was tested with) closes the connection
+before a client checking two can answer.
+Each was checked against the system's roots when added (openssl verify).
 """
 import sys
 from cryptography import x509
