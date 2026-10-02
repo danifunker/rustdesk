@@ -327,7 +327,7 @@ Every item of the work list, in the order of the resume prompt:
    own, draws ours, and ignores its mouse for kMouseControlTimeoutMSec (1 s).
    Now nothing is sent within 300 ms of the peer's input (RustDesk's own
    server does that, input_service.rs run_pos) nor while the pointer is where
-   the peer put it. The user found it usable; build 20261002-7729fb115
+   the peer put it. The user found it usable; build 20261002-d061a0d3a
    replaced a0054ba77 in the release. Tell the client nothing it did itself.
 9. **"this machine's screen"**: the refusal of a second desktop session (in
    the shared core) said "this Mac's screen"; 20261002-7729fb115 replaced
