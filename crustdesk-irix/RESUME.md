@@ -35,10 +35,17 @@ by IP, every frame decoded by libvpx (`host/build/vp8dump`):
 `xwd -id`): the picture, a click, and typing a shell line in Map mode, shifted
 symbols included. It asks for 30 fps (`custom_fps`).
 
-**Not proven**: the ID server, relay or
-local-address path (the Indigo has **no default route and no DNS** -- it
-reaches 192.168.99.0/24 only, so neither the user's server nor the public one
-is reachable; changing that is the user's call); `install.sh` actually run
+**By ID through the user's own server**, with that real client: the
+agent registered with hbbs, and both the local-address path (hbbs chose it:
+the client is on the same LAN) and the relay (`rustdesk --connect ID/r`)
+gave encrypted sessions. The Indigo has **no default route and no DNS** -- it
+reaches 192.168.99.0/24 only -- so this went through a temporary forwarder on
+this Linux machine (a few lines of Python asyncio: LAN 192.168.99.153 UDP+TCP
+31116 -> hbbs 21116, TCP 31117 -> hbbr 21117, with `server=` and `relay=` in
+the test prefs pointing at it); it was stopped afterwards and the prefs put
+back. Giving the Indigo a route is the user's call.
+
+**Not proven**: `install.sh` actually run
 (boot start, chkconfig) -- it was not, because it changes the machine's rc
 configuration; 24-bit displays (unsupported: the code refuses a root window
 that is not 8 bits deep).
