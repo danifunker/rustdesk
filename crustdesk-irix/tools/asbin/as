@@ -1,0 +1,30 @@
+#!/bin/sh
+# GNU as, for objects IRIX 5.3's ld will take: GCC files PIC data with
+# relocations under .data.rel*, string constants under .rodata.str*, and so
+# on; IRIX's ld knows the names IDO uses and asserts on others. Rename them
+# in the assembly before assembling, so GNU as merges each into its plain
+# section. tools/irix-gcc puts this directory first with -B.
+REAL=${IRIX_AS:-mips-linux-gnu-as}
+in=""
+for a in "$@"; do
+	case "$a" in *.s) in=$a ;; esac
+done
+if [ -z "$in" ]; then
+	exec "$REAL" "$@"
+fi
+tmp=$(mktemp "${TMPDIR:-/tmp}/irixas.XXXXXX") || exit 1
+trap 'rm -f "$tmp" "$tmp.s"' EXIT
+sed -E \
+	-e 's/^[[:space:]]*\.section[[:space:]]+\.data\.rel[^,[:space:]]*.*$/	.data/' \
+	-e 's/^[[:space:]]*\.section[[:space:]]+\.rodata\.[^,[:space:]]*.*$/	.section	.rodata/' \
+	-e 's/^[[:space:]]*\.section[[:space:]]+\.text\.[^,[:space:]]*.*$/	.text/' \
+	-e 's/^[[:space:]]*\.section[[:space:]]+\.bss\.[^,[:space:]]*.*$/	.bss/' \
+	-e 's/^[[:space:]]*\.section[[:space:]]+\.sdata[^,[:space:]]*.*$/	.data/' \
+	"$in" > "$tmp.s"
+n=0
+for a in "$@"; do
+	n=$((n + 1))
+	if [ "$a" = "$in" ]; then set -- "$@" "$tmp.s"; else set -- "$@" "$a"; fi
+done
+shift $n
+"$REAL" "$@"

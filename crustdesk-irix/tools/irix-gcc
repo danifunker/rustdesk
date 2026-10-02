@@ -1,0 +1,35 @@
+#!/bin/sh
+# GCC for IRIX 5.3: MIPS I, o32, PIC (the SVR4 ABI IRIX 5 uses), against
+# SGI's own headers, then made acceptable to IRIX's ld by irixobj.py.
+#
+#   tools/irix-gcc [gcc flags] -c file.c -o file.o
+#
+# Environment:
+#   IRIX_GCC      the mips-linux-gnu gcc (default: mips-linux-gnu-gcc-13 on PATH)
+#   IRIX_SYSROOT  a tree holding usr/include from IRIX 5.3 (default build/irix53-sysroot)
+set -eu
+HERE=$(cd "$(dirname "$0")/.." && pwd)
+GCC=${IRIX_GCC:-mips-linux-gnu-gcc-13}
+SYSROOT=${IRIX_SYSROOT:-$HERE/build/irix53-sysroot}
+GCCINC=$("$GCC" -print-file-name=include)
+OUT=""
+prev=""
+for a in "$@"; do
+	[ "$prev" = "-o" ] && OUT=$a
+	prev=$a
+done
+"$GCC" -B"$HERE/tools/asbin/" -march=mips1 -mtune=r3000 -mabi=32 -mfp32 -mabicalls -fPIC -mno-relax-pic-calls -G0 \
+	-fno-stack-protector -fno-asynchronous-unwind-tables -fno-unwind-tables \
+	-fno-merge-constants -fno-reorder-functions -fno-ident -fno-common \
+	-Wa,-mdebug \
+	-nostdinc -isystem "$HERE/shim" -isystem "$GCCINC" -isystem "$SYSROOT/usr/include" \
+	-U__linux__ -U__linux -Ulinux -U__gnu_linux__ \
+	-U_MIPS_ISA -D_MIPS_FPSET=16 -D_MIPS_ISA=1 -D_ABIO32=1 -D_MIPS_SIM=_ABIO32 \
+	-D_MIPS_SZINT=32 -D_MIPS_SZLONG=32 -D_MIPS_SZPTR=32 -D__EXTENSIONS__ \
+	-DLANGUAGE_C -D_LANGUAGE_C -Dsgi -D__sgi -Dunix -Dmips -Dhost_mips -D__unix \
+	-D__host_mips -D_SVR4_SOURCE -D_MODERN_C -D_SGI_SOURCE -D_PIC -D__DSO__ \
+	-DSYSTYPE_SVR4 -D_SYSTYPE_SVR4 -D_LONGLONG -D_MIPSEB -DMIPSEB \
+	"$@"
+case "$OUT" in
+	*.o) python3 "$HERE/tools/irixobj.py" "$OUT" ;;
+esac
