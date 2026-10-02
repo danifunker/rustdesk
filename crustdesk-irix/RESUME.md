@@ -27,6 +27,7 @@ by IP, every frame decoded by libvpx (`host/build/vp8dump`):
 | scrolls and window moves as motion vectors | works |
 | clipboard both ways (CLIPBOARD and PRIMARY; zstd from the peer; Latin-1 here) | works |
 | file manager beside the desktop: list, get, put, mkdir, rename (byte-identical round trip) | works |
+| RustDesk 1.4.9's own file manager window: both panes listed (once PeerInfo carried a username) | works |
 | a remote logout (Toolchest > Desktop > Log Out), the X server reset, the agent reconnecting, and a remote login typed into clogin | works |
 | the package: IRIX tar unpacks it, its scripts pass IRIX `sh -n`, `-i` makes an identity | works |
 
@@ -171,7 +172,7 @@ The Indigo's one CPU is shared with Xsgi and the programs: during a fast
 opening and closing the Toolchest's menu, moving the pointer, 14 rounds):
 with the frame budget at 220 ms every 10-second window of the agent's log
 was at 2.1-3.5 fps (573 frames, 760 KB); at 300 ms it was 1.6-2.8. The
-agent's size after two soaks was the same (3934 pages, 1.8 K resident):
+agent's size after two soaks was the same (3934 pages, 1818 resident: 15 MB and 7 MB):
 nothing leaks.
 
 ## 5. Traps

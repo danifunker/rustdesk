@@ -82,3 +82,9 @@ shape, and reporting to a console (sysinfo, heartbeat) over https.
   stand in.
 - A Settings change that restarts sharing takes a few seconds before the
   console is told again (the resolver is asked afresh).
+- **A real client's file manager needs PeerInfo.username.** RustDesk's file
+  manager refuses a peer that sends none ("No active console user logged on,
+  please connect and logon first") and lists nothing. The core sends one
+  when `cdv_ident.username` is set (added for the IRIX port, 2026-10-02,
+  where it fixed exactly this); the Mac does not set it yet -- the Sharing
+  Setup owner name would do. cdvpoke never noticed: it ignores PeerInfo.

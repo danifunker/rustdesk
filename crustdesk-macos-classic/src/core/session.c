@@ -254,6 +254,8 @@ static void send_peer_info(cdv_session *s)
         return;
     pbw_begin(&w, M_LOGIN_RESPONSE);
     pbw_begin(&w, 2); /* peer_info */
+    if (id->username && id->username[0])
+        pbw_string(&w, 1, id->username);
     pbw_string(&w, 2, id->hostname);
     /* "Mac OS" is true on a Mac, and it is what makes a client in Map mode
      * send Mac virtual keycodes -- which are the ADB keycodes it uses. */

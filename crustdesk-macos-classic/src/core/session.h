@@ -109,6 +109,10 @@ typedef struct {
      * mode sends that platform's keycodes: Mac virtual keycodes for "Mac OS",
      * X11 keycodes for "Linux". */
     const char *platform;
+    /* PeerInfo.username: who is logged in at the console; NULL or "" for
+     * none sent. A client's file manager refuses a peer that sends none
+     * ("No active console user logged on"). */
+    const char *username;
 } cdv_ident;
 
 enum { CDV_WAIT_PK, CDV_WAIT_LOGIN, CDV_LIVE, CDV_CLOSED };

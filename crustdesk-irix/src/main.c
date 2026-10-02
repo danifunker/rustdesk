@@ -39,6 +39,7 @@
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/utsname.h>
+#include <utmp.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -479,6 +480,30 @@ static void on_option(void *u, int quality, int fps)
     }
 }
 
+/* Who is logged in at the display: the utmp entry for ":0" that xdm's
+ * session writes, else the console's; root if neither (the login screen). */
+static const char *console_user(void)
+{
+    static char name[sizeof(((struct utmp *)0)->ut_user) + 1];
+    struct utmp *u;
+    int best = 0;
+    strcpy(name, "root");
+    setutent();
+    while ((u = getutent()) != NULL) {
+        int rank;
+        if (u->ut_type != USER_PROCESS)
+            continue;
+        rank = !strncmp(u->ut_line, ":0", 2) ? 2 : !strncmp(u->ut_line, "console", 7) ? 1 : 0;
+        if (rank > best) {
+            best = rank;
+            memcpy(name, u->ut_user, sizeof u->ut_user);
+            name[sizeof u->ut_user] = 0;
+        }
+    }
+    endutent();
+    return name;
+}
+
 static int on_login(void *u, int file_transfer)
 {
     slot *sl = (slot *)u;
@@ -583,6 +608,7 @@ static void session_begin(int fd, int secure, const char *how)
     sl->hooks.login = on_login;
     sl->hooks.file = on_file;
     sl->hooks.user = sl;
+    ident.username = console_user();
     cdv_init2(&sl->s, sl->ctl, CTL_CAP, NULL, 0, sl->in, IN_CAP, &sl->hooks, &ident, now_ms());
     cdv_start(&sl->s, now_ms(), secure);
     cdv_log("%s connection; %s", how, secure ? "encrypted" : "direct");
@@ -1191,6 +1217,7 @@ int main(int argc, char **argv)
     ident.height = 768;
     ident.cursor_embedded = 0;
     ident.platform = "Linux";
+    ident.username = "root";
 
     tcp_direct = listen_on((uint16_t)prefs.port, 0);
     if (tcp_direct < 0)
