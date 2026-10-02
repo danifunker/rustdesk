@@ -105,6 +105,10 @@ typedef struct {
     const char *hostname;
     int width, height;
     int cursor_embedded;    /* the pointer is drawn into the captured picture */
+    /* What PeerInfo calls this machine; NULL for "Mac OS". A client in Map
+     * mode sends that platform's keycodes: Mac virtual keycodes for "Mac OS",
+     * X11 keycodes for "Linux". */
+    const char *platform;
 } cdv_ident;
 
 enum { CDV_WAIT_PK, CDV_WAIT_LOGIN, CDV_LIVE, CDV_CLOSED };

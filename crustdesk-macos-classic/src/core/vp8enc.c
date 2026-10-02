@@ -10,6 +10,26 @@
 
 enum { DC_PRED = 0, V_PRED = 1, H_PRED = 2, TM_PRED = 3, B_PRED = 4 };
 
+/* Copy n bytes (8 or 16) of a block row. libc's memcpy for 16 bytes is a
+ * call and an alignment dance; macroblock rows are word-aligned whenever
+ * the planes are, so copy words then. */
+static inline __attribute__((always_inline)) void copy_row(uint8_t *d, const uint8_t *s, int n)
+{
+    if (!(((unsigned long)d | (unsigned long)s) & 3)) {
+        uint32_t *dw = (uint32_t *)d;
+        const uint32_t *sw = (const uint32_t *)s;
+        dw[0] = sw[0];
+        dw[1] = sw[1];
+        if (n == 16) {
+            dw[2] = sw[2];
+            dw[3] = sw[3];
+        }
+    } else {
+        memcpy(d, s, (size_t)n);
+    }
+}
+
+
 /* Where the time goes, by phase, when built with VP8E_PROFILE and a platform
  * clock: 0 mode search, 1 transform and quantise, 2 reconstruct, 3 the
  * exactness check, 4 tokens. */
@@ -307,6 +327,20 @@ static uint8_t clamp255(int v)
     return (uint8_t)(v < 0 ? 0 : v > 255 ? 255 : v);
 }
 
+/* A block with only a DC coefficient: the full transform below adds
+ * (dc + 4) >> 3 to every pixel (libvpx's vp8_dc_only_idct_add). With none,
+ * the prediction stands. */
+static void idct_dc_add(int dc, const uint8_t *pred, int ps, uint8_t *dst, int ds)
+{
+    int i, j, a = (dc + 4) >> 3;
+    for (j = 0; j < 4; j++) {
+        for (i = 0; i < 4; i++)
+            dst[i] = a ? clamp255(pred[i] + a) : pred[i];
+        pred += ps;
+        dst += ds;
+    }
+}
+
 static void idct_add(const short *in, const uint8_t *pred, int ps, uint8_t *dst, int ds)
 {
     int i, a1, b1, c1, d1, t1, t2;
@@ -456,6 +490,9 @@ struct vp8e {
     uint8_t *ry, *ru, *rv;        /* reconstruction, macroblock aligned */
     int rys, ruvs;
     uint8_t *mbinfo;              /* mbw * mbh */
+    int32_t *mvs;                 /* mbw * mbh: each macroblock's vector (mv_pack), 0 if none */
+    uint8_t *refy, *refu, *refv;  /* the previous frame, where vectors read (vp8e_set_ref) */
+    const vp8e_hint *hints;       /* this frame's, or NULL */
     uint8_t *exact;               /* mbw * mbh: reconstruction == source */
     uint8_t *above_ctx;           /* mbw * 9: token contexts, section 13.3 */
     uint8_t *p1;                  /* first partition is assembled here */
@@ -473,12 +510,13 @@ struct vp8e {
     size_t f_cap, f_hdr;
     bw tb;
     uint8_t left[9];
-    int nskip, nintra, nchanged;
+    int nskip, nintra, nchanged, nmoved;
 
     /* Scratch for one macroblock. Here rather than on the stack, because on
      * the Mac the encoder runs at deferred-task time on whatever stack the
      * interrupted code had. */
     uint8_t sy[256], su[64], sv[64], py[256], pu[64], pv[64], cand[256], cu[64], cv[64];
+    uint8_t my[256], mu[64], mv[64];  /* motion-compensated prediction */
     mbcoef qc;
 
     icache_entry ic[IC_ENTRIES];
@@ -499,7 +537,7 @@ size_t vp8e_mem_size(int w, int h)
     size_t mbs = mbw * mbh;
     return align4(sizeof(struct vp8e)) + align4(mbw * 16 * mbh * 16) +
            2 * align4(mbw * 8 * mbh * 8) + 2 * align4(mbs) + align4(mbw * 9) +
-           align4(256 + mbs * 12);
+           align4(256 + mbs * 12) + 4 * mbs;
 }
 
 void vp8e_set_q(vp8e *e, int q)
@@ -561,6 +599,9 @@ vp8e *vp8e_init(void *mem, int w, int h, int q)
     p += align4((size_t)e->mbw * 9);
     e->p1 = p;
     e->p1cap = 256 + mbs * 12;
+    p += align4(e->p1cap);
+    e->mvs = (int32_t *)p;
+    memset(e->mvs, 0, 4 * mbs);
     vp8e_set_q(e, q);
     return e;
 }
@@ -591,6 +632,298 @@ void vp8e_recon(const vp8e *e, const uint8_t **y, const uint8_t **u,
 void vp8e_last_stats(const vp8e *e, vp8e_stats *s)
 {
     *s = e->stats;
+}
+
+size_t vp8e_ref_size(int w, int h)
+{
+    size_t mbw = (size_t)(w + 15) / 16, mbh = (size_t)(h + 15) / 16;
+    return mbw * 16 * mbh * 16 + 2 * mbw * 8 * mbh * 8;
+}
+
+void vp8e_set_ref(vp8e *e, void *mem)
+{
+    e->refy = (uint8_t *)mem;
+    e->refu = e->refy + (size_t)e->rys * e->mbh * 16;
+    e->refv = e->refu + (size_t)e->ruvs * e->mbh * 8;
+}
+
+void vp8e_set_hints(vp8e *e, const vp8e_hint *hints)
+{
+    e->hints = hints;
+}
+
+/* ---- motion vectors, sections 5, 16.3, 17 and 18 ---------------------------- *
+ *
+ * A vector is kept as libvpx and the RFC's decoder keep it: row and column in
+ * eighths of a pixel (the bitstream's quarter pixels, doubled), packed into one
+ * word so equality is one compare. */
+
+static int32_t mv_pack(int row, int col)
+{
+    return (int32_t)((uint32_t)(uint16_t)row << 16 | (uint16_t)col);
+}
+static int mv_row(int32_t m) { return (int16_t)((uint32_t)m >> 16); }
+static int mv_col(int32_t m) { return (int16_t)((uint32_t)m & 0xffff); }
+
+/* Clamp to one macroblock past the frame, as the decoder does to the three
+ * vectors find_near_mvs offers (RFC 6386, vp8_clamp_mv and dixie's bounds). */
+static int32_t mv_clamp(const vp8e *e, int r, int c, int32_t m)
+{
+    int row = mv_row(m), col = mv_col(m);
+    int to_left = -((c + 1) << 7), to_right = (e->mbw - c) << 7;
+    int to_top = -((r + 1) << 7), to_bottom = (e->mbh - r) << 7;
+    if (col < to_left)
+        col = to_left;
+    if (col > to_right)
+        col = to_right;
+    if (row < to_top)
+        row = to_top;
+    if (row > to_bottom)
+        row = to_bottom;
+    return mv_pack(row, col);
+}
+
+typedef struct {
+    int32_t best, nearest, near;
+    int cnt[4];
+} nearmv;
+
+/* vp8_find_near_mvs, for a stream with no SPLITMV and one reference frame
+ * (so no sign bias): the census of the above, left and above-left vectors.
+ * Off-frame neighbours count as intra, as the decoder's border does. */
+static void find_near(const vp8e *e, int r, int c, nearmv *n)
+{
+    const uint8_t *info = e->mbinfo;
+    int32_t near_mvs[4] = { 0, 0, 0, 0 };
+    int k = 0, mbw = e->mbw, *cnt = n->cnt;
+    cnt[0] = cnt[1] = cnt[2] = cnt[3] = 0;
+    if (!e->nmoved) {
+        /* No vector anywhere in this frame (most frames): the census is a
+         * weighted count of inter neighbours, and every vector is zero --
+         * zero needs no clamping. */
+        if (r > 0 && (info[(r - 1) * mbw + c] & MB_INTER))
+            cnt[0] += 2;
+        if (c > 0 && (info[r * mbw + c - 1] & MB_INTER))
+            cnt[0] += 2;
+        if (r > 0 && c > 0 && (info[(r - 1) * mbw + c - 1] & MB_INTER))
+            cnt[0] += 1;
+        n->best = n->nearest = n->near = 0;
+        return;
+    }
+    if (r > 0 && (info[(r - 1) * mbw + c] & MB_INTER)) {
+        int32_t m = e->mvs[(r - 1) * mbw + c];
+        if (m)
+            near_mvs[++k] = m;
+        cnt[k] += 2;
+    }
+    if (c > 0 && (info[r * mbw + c - 1] & MB_INTER)) {
+        int32_t m = e->mvs[r * mbw + c - 1];
+        if (m) {
+            if (m != near_mvs[k])
+                near_mvs[++k] = m;
+            cnt[k] += 2;
+        } else {
+            cnt[0] += 2;
+        }
+    }
+    if (r > 0 && c > 0 && (info[(r - 1) * mbw + c - 1] & MB_INTER)) {
+        int32_t m = e->mvs[(r - 1) * mbw + c - 1];
+        if (m) {
+            if (m != near_mvs[k])
+                near_mvs[++k] = m;
+            cnt[k] += 1;
+        } else {
+            cnt[0] += 1;
+        }
+    }
+    if (cnt[3] && near_mvs[k] == near_mvs[1]) /* three distinct: merge above-left */
+        cnt[1] += 1;
+    cnt[3] = 0; /* no neighbour is ever SPLITMV */
+    if (cnt[2] > cnt[1]) {
+        int t = cnt[1];
+        int32_t m = near_mvs[1];
+        cnt[1] = cnt[2];
+        cnt[2] = t;
+        near_mvs[1] = near_mvs[2];
+        near_mvs[2] = m;
+    }
+    if (cnt[1] >= cnt[0])
+        near_mvs[0] = near_mvs[1];
+    n->best = mv_clamp(e, r, c, near_mvs[0]);
+    n->nearest = mv_clamp(e, r, c, near_mvs[1]);
+    n->near = mv_clamp(e, r, c, near_mvs[2]);
+}
+
+enum { MV_ZERO, MV_NEAREST, MV_NEAR, MV_NEW };
+
+/* A moved block is sent as its vector alone when no pixel is further than
+ * this from the prediction, and the mean difference is at most MOVE_MEAN:
+ * the coding error the block carried already (a few levels; tens at a sharp
+ * edge), not new strokes (a hundred and more). */
+#define MOVE_TOLERANCE 48
+#define MOVE_MEAN 12
+
+/* How a vector would be sent here, or -1 if it cannot be (NEWMV codes the
+ * difference from best, in quarter pixels, up to 1023 a component). */
+static int mv_mode(const nearmv *n, int32_t m)
+{
+    int dr, dc;
+    if (!m)
+        return MV_ZERO;
+    if (m == n->nearest)
+        return MV_NEAREST;
+    if (m == n->near)
+        return MV_NEAR;
+    dr = (mv_row(m) - mv_row(n->best)) >> 1;
+    dc = (mv_col(m) - mv_col(n->best)) >> 1;
+    if (dr < -1023 || dr > 1023 || dc < -1023 || dc > 1023)
+        return -1;
+    return MV_NEW;
+}
+
+/* One component of a NEWMV, section 17 (the encoder's half of
+ * read_mvcomponent). */
+static void put_mv_component(bw *b, int v, const uint8_t *p)
+{
+    enum { IS_SHORT = 0, SIGN = 1, SHORT = 2, BITS = 9 };
+    static const signed char small_tree[14] = { 2, 8, 4, 6, -0, -1, -2, -3, 10, 12, -4, -5, -6, -7 };
+    int x = v < 0 ? -v : v, i;
+    if (x < 8) {
+        bw_put(b, p[IS_SHORT], 0);
+        bw_tree(b, small_tree, p + SHORT, x);
+        if (!x)
+            return;
+    } else {
+        bw_put(b, p[IS_SHORT], 1);
+        for (i = 0; i < 3; i++)
+            bw_put(b, p[BITS + i], (x >> i) & 1);
+        for (i = 9; i > 3; i--)
+            bw_put(b, p[BITS + i], (x >> i) & 1);
+        if (x & 0xfff0)
+            bw_put(b, p[BITS + 3], (x >> 3) & 1);
+    }
+    bw_put(b, p[SIGN], v < 0);
+}
+
+/* The six-tap predictor of section 18 for an 8x8 chroma block (libvpx's
+ * vp8_sixtap_predict8x8_c): horizontal then vertical, each pass rounded and
+ * clamped. xf, yf are eighths of a pixel. */
+/* One tap sum. The whole-pixel filter is (128 * p + 64) >> 7 = p, so a pass
+ * at offset 0 changes nothing and is skipped; the half-pixel one, the only
+ * other a whole-pixel luma vector gives chroma, is spelt out in constants,
+ * which a compiler turns into shifts and adds -- a multiply is 12 cycles on
+ * an R3000. */
+#define TAPS(a, b, c, d, e2, f, k)                                                             \
+    ((k) == 4 ? (3 * ((a) + (f)) - 16 * ((b) + (e2)) + 77 * ((c) + (d)) + 64) >> 7              \
+              : ((a) * fl[0] + (b) * fl[1] + (c) * fl[2] + (d) * fl[3] + (e2) * fl[4] +        \
+                 (f) * fl[5] + 64) >> 7)
+
+static uint8_t clamp_tap(int v) { return (uint8_t)(v < 0 ? 0 : v > 255 ? 255 : v); }
+
+static void sixtap8x8(const uint8_t *src, int stride, int xf, int yf, uint8_t *dst)
+{
+    int tmp[13 * 8], i, j;
+    if (!xf || !yf) {
+        /* One direction only: the other pass is the identity. */
+        const short *fl = vp8_sixtap_filters[xf | yf];
+        int k = xf | yf, step = xf ? 1 : stride;
+        for (j = 0; j < 8; j++, src += stride)
+            for (i = 0; i < 8; i++) {
+                const uint8_t *p = src + i;
+                dst[j * 8 + i] = clamp_tap(TAPS(p[-2 * step], p[-step], p[0], p[step],
+                                                p[2 * step], p[3 * step], k));
+            }
+        return;
+    }
+    const uint8_t *s = src - 2 * stride;
+    const short *fl = vp8_sixtap_filters[xf];
+    for (j = 0; j < 13; j++, s += stride)
+        for (i = 0; i < 8; i++)
+            tmp[j * 8 + i] = xf ? clamp_tap(TAPS(s[i - 2], s[i - 1], s[i], s[i + 1], s[i + 2],
+                                                 s[i + 3], xf))
+                                : s[i];
+    fl = vp8_sixtap_filters[yf];
+    for (j = 0; j < 8; j++)
+        for (i = 0; i < 8; i++) {
+            const int *t = tmp + (j + 2) * 8 + i;
+            dst[j * 8 + i] = yf ? clamp_tap(TAPS(t[-16], t[-8], t[0], t[8], t[16], t[24], yf))
+                                : (uint8_t)t[0];
+        }
+}
+
+/* The prediction a whole-macroblock vector gives at (r, c), from the
+ * previous frame, into e->my/mu/mv. 0 if it reads outside the frame (the
+ * decoder would extend the edges; this encoder does not offer such vectors). */
+static int motion_predict(vp8e *e, int r, int c, int32_t m)
+{
+    int row = mv_row(m), col = mv_col(m), j;
+    int x = c * 16 + (col >> 3), y = r * 16 + (row >> 3);
+    int urow = (row + 1 + (row >> 31) * 2) / 2, ucol = (col + 1 + (col >> 31) * 2) / 2;
+    int ux = c * 8 + (ucol >> 3), uy = r * 8 + (urow >> 3), uxf = ucol & 7, uyf = urow & 7;
+    int fw = e->mbw * 16, fh = e->mbh * 16;
+    if ((row | col) & 7)
+        return 0; /* whole pixels only */
+    if (x < 0 || y < 0 || x + 16 > fw || y + 16 > fh)
+        return 0;
+    if (ux - 2 < 0 || uy - 2 < 0 || ux + 8 + 3 > fw / 2 || uy + 8 + 3 > fh / 2)
+        return 0;
+    for (j = 0; j < 16; j++)
+        copy_row(e->my + j * 16, e->refy + (y + j) * e->rys + x, 16);
+    if (uxf | uyf) {
+        sixtap8x8(e->refu + uy * e->ruvs + ux, e->ruvs, uxf, uyf, e->mu);
+        sixtap8x8(e->refv + uy * e->ruvs + ux, e->ruvs, uxf, uyf, e->mv);
+    } else {
+        for (j = 0; j < 8; j++) {
+            copy_row(e->mu + j * 8, e->refu + (uy + j) * e->ruvs + ux, 8);
+            copy_row(e->mv + j * 8, e->refv + (uy + j) * e->ruvs + ux, 8);
+        }
+    }
+    return 1;
+}
+
+static int32_t hint_mv(const vp8e_hint *h)
+{
+    return mv_pack(-8 * h->dy, -8 * h->dx);
+}
+
+/* Copy, before the frame changes it, the part of the picture this frame's
+ * hints read from. */
+static void snapshot_ref(vp8e *e)
+{
+    int x0 = 1 << 30, y0 = 1 << 30, x1 = -1, y1 = -1, r, c, j;
+    if (!e->refy || !e->hints)
+        return;
+    for (r = 0; r < e->mbh; r++)
+        for (c = 0; c < e->mbw; c++) {
+            const vp8e_hint *h = &e->hints[r * e->mbw + c];
+            int x, y;
+            if (!h->dx && !h->dy)
+                continue;
+            if (e->f_dirty && !e->f_dirty[r * e->mbw + c])
+                continue;
+            x = c * 16 - h->dx;
+            y = r * 16 - h->dy;
+            if (x < x0) x0 = x;
+            if (y < y0) y0 = y;
+            if (x + 16 > x1) x1 = x + 16;
+            if (y + 16 > y1) y1 = y + 16;
+        }
+    if (x1 < 0)
+        return;
+    /* the chroma filter's reach, in luma pixels, and the frame */
+    x0 -= 6; y0 -= 6; x1 += 8; y1 += 8;
+    x0 = x0 < 0 ? 0 : x0 & ~1;
+    y0 = y0 < 0 ? 0 : y0 & ~1;
+    if (x1 > e->mbw * 16) x1 = e->mbw * 16;
+    if (y1 > e->mbh * 16) y1 = e->mbh * 16;
+    if (x0 >= x1 || y0 >= y1)
+        return;
+    for (j = y0; j < y1; j++)
+        memcpy(e->refy + j * e->rys + x0, e->ry + j * e->rys + x0, (size_t)(x1 - x0));
+    for (j = y0 / 2; j < (y1 + 1) / 2; j++) {
+        memcpy(e->refu + j * e->ruvs + x0 / 2, e->ru + j * e->ruvs + x0 / 2, (size_t)(x1 - x0) / 2);
+        memcpy(e->refv + j * e->ruvs + x0 / 2, e->rv + j * e->ruvs + x0 / 2, (size_t)(x1 - x0) / 2);
+    }
 }
 
 /* ---- prediction ----------------------------------------------------------- */
@@ -636,13 +969,38 @@ static void intra_pred(const uint8_t *rec, int stride, int x, int y, int n, int 
     }
 }
 
-static int sad(const uint8_t *a, const uint8_t *b, int n)
+/* Sum of absolute differences, giving up (with some sum >= limit) once it
+ * cannot beat `limit`: the caller only keeps a candidate that is strictly
+ * better, so the decision is the same as with the whole sum. Checked every
+ * 16 pixels -- one row of a macroblock. */
+/* The largest single difference, and the sum, of two blocks. */
+static int maxdiff(const uint8_t *a, const uint8_t *b, int n, int *sum)
 {
-    int s = 0, i;
+    int m = 0, s = 0, i;
     for (i = 0; i < n; i++) {
         int d = a[i] - b[i];
-        s += d < 0 ? -d : d;
+        d = d < 0 ? -d : d;
+        s += d;
+        if (d > m)
+            m = d;
     }
+    *sum = s;
+    return m;
+}
+
+static int sad(const uint8_t *a, const uint8_t *b, int n, int limit)
+{
+    int s = 0;
+    const uint8_t *end = a + n;
+#define SAD1(k) do { int d = a[k] - b[k]; s += d < 0 ? -d : d; } while (0)
+    while (a < end) {
+        SAD1(0); SAD1(1); SAD1(2); SAD1(3); SAD1(4); SAD1(5); SAD1(6); SAD1(7);
+        a += 8;
+        b += 8;
+        if (s >= limit)
+            break;
+    }
+#undef SAD1
     return s;
 }
 
@@ -656,7 +1014,7 @@ static void load_src(const uint8_t *plane, int stride, int pw, int ph, int x, in
         int sy = y + j < ph ? y + j : ph - 1;
         const uint8_t *row = plane + sy * stride;
         if (x + n <= pw) {
-            memcpy(dst + j * n, row + x, (size_t)n);
+            copy_row(dst + j * n, row + x, n);
         } else {
             for (i = 0; i < n; i++)
                 dst[j * n + i] = row[x + i < pw ? x + i : pw - 1];
@@ -668,7 +1026,7 @@ static void load_rec(const uint8_t *rec, int stride, int x, int y, int n, uint8_
 {
     int j;
     for (j = 0; j < n; j++)
-        memcpy(dst + j * n, rec + (y + j) * stride + x, (size_t)n);
+        copy_row(dst + j * n, rec + (y + j) * stride + x, n);
 }
 
 /* ---- one macroblock ------------------------------------------------------- */
@@ -677,14 +1035,19 @@ static void load_rec(const uint8_t *rec, int stride, int x, int y, int n, uint8_
 
 
 /* Residual of one 4x4 block at (bx, by) inside an n-wide block. */
-static void residual4(const uint8_t *src, const uint8_t *pred, int n, int bx, int by, short *d)
+/* Returns nonzero if any of it is. A block the prediction got exactly --
+ * most of a screen's, flat background around a few strokes -- needs no
+ * transform: its coefficients are all zero. */
+static int residual4(const uint8_t *src, const uint8_t *pred, int n, int bx, int by, short *d)
 {
-    int i, j;
+    int i, j, any = 0;
     for (j = 0; j < 4; j++)
         for (i = 0; i < 4; i++) {
             int o = (by + j) * n + bx + i;
             d[j * 4 + i] = (short)(src[o] - pred[o]);
+            any |= d[j * 4 + i];
         }
+    return any;
 }
 
 /* Transform and quantise a macroblock; `qc` is filled in zigzag order.
@@ -695,7 +1058,11 @@ static int quantise_mb(const vp8e *e, const uint8_t *sy, const uint8_t *py, cons
     short d[16], c[16], dcs[16], w[16];
     int b, k, any = 0;
     for (b = 0; b < 16; b++) {
-        residual4(sy, py, 16, (b & 3) * 4, (b >> 2) * 4, d);
+        if (!residual4(sy, py, 16, (b & 3) * 4, (b >> 2) * 4, d)) {
+            dcs[b] = 0;
+            memset(qc->y[b], 0, sizeof qc->y[b]);
+            continue;
+        }
         fdct4x4(d, c);
         dcs[b] = c[0];
         qc->y[b][0] = 0;
@@ -712,7 +1079,10 @@ static int quantise_mb(const vp8e *e, const uint8_t *sy, const uint8_t *py, cons
     for (b = 0; b < 8; b++) {
         const uint8_t *s = b < 4 ? su : sv;
         const uint8_t *p = b < 4 ? pu : pv;
-        residual4(s, p, 8, (b & 1) * 4, ((b & 3) >> 1) * 4, d);
+        if (!residual4(s, p, 8, (b & 1) * 4, ((b & 3) >> 1) * 4, d)) {
+            memset(qc->uv[b], 0, sizeof qc->uv[b]);
+            continue;
+        }
         fdct4x4(d, c);
         for (k = 0; k < 16; k++) {
             qc->uv[b][k] = quant(c[zigzag[k]], &e->qs_uv[k ? 1 : 0]);
@@ -734,10 +1104,10 @@ static void reconstruct_mb(vp8e *e, int mx, int my, const uint8_t *py, const uin
     int b, k, j;
     if (!coded) {
         for (j = 0; j < 16; j++)
-            memcpy(ry + j * e->rys, py + j * 16, 16);
+            copy_row(ry + j * e->rys, py + j * 16, 16);
         for (j = 0; j < 8; j++) {
-            memcpy(ru + j * e->ruvs, pu + j * 8, 8);
-            memcpy(rv + j * e->ruvs, pv + j * 8, 8);
+            copy_row(ru + j * e->ruvs, pu + j * 8, 8);
+            copy_row(rv + j * e->ruvs, pv + j * 8, 8);
         }
         return;
     }
@@ -746,7 +1116,13 @@ static void reconstruct_mb(vp8e *e, int mx, int my, const uint8_t *py, const uin
         y2[zigzag[k]] = (short)(qc->y2[k] * e->dq_y2[k ? 1 : 0]);
     iwalsh(y2, dcs);
     for (b = 0; b < 16; b++) {
-        int bx = (b & 3) * 4, by = (b >> 2) * 4;
+        int bx = (b & 3) * 4, by = (b >> 2) * 4, ac = 0;
+        for (k = 1; k < 16; k++)
+            ac |= qc->y[b][k];
+        if (!ac) {
+            idct_dc_add(dcs[b], py + by * 16 + bx, 16, ry + by * e->rys + bx, e->rys);
+            continue;
+        }
         memset(c, 0, sizeof c);
         c[0] = dcs[b];
         for (k = 1; k < 16; k++)
@@ -756,7 +1132,14 @@ static void reconstruct_mb(vp8e *e, int mx, int my, const uint8_t *py, const uin
     for (b = 0; b < 8; b++) {
         const uint8_t *p = b < 4 ? pu : pv;
         uint8_t *r = b < 4 ? ru : rv;
-        int bx = (b & 1) * 4, by = ((b & 3) >> 1) * 4;
+        int bx = (b & 1) * 4, by = ((b & 3) >> 1) * 4, ac = 0;
+        for (k = 1; k < 16; k++)
+            ac |= qc->uv[b][k];
+        if (!ac) {
+            idct_dc_add((short)(qc->uv[b][0] * e->dq_uv[0]), p + by * 8 + bx, 8, r + by * e->ruvs + bx,
+                        e->ruvs);
+            continue;
+        }
         memset(c, 0, sizeof c);
         for (k = 0; k < 16; k++)
             c[zigzag[k]] = (short)(qc->uv[b][k] * e->dq_uv[k ? 1 : 0]);
@@ -853,18 +1236,28 @@ static void put_modes(vp8e *e, bw *b, int key, int p_skip, int p_intra)
             }
             bw_put(b, p_intra, info & MB_INTER);
             if (info & MB_INTER) {
-                /* Section 16.3: every neighbour's vector is zero, so the census
-                 * is just a weighted count of inter neighbours. Off-frame
-                 * neighbours count as intra. */
-                int cnt = 0;
-                if (r > 0 && (mi[-e->mbw] & MB_INTER))
-                    cnt += 2;
-                if (c > 0 && (mi[-1] & MB_INTER))
-                    cnt += 2;
-                if (r > 0 && c > 0 && (mi[-e->mbw - 1] & MB_INTER))
-                    cnt += 1;
+                /* Section 16.3: the mode is coded against the census of the
+                 * neighbours' vectors. */
+                nearmv nm;
+                int32_t m = e->mvs[r * e->mbw + c];
+                int mode;
+                find_near(e, r, c, &nm);
+                mode = mv_mode(&nm, m);
                 bw_put(b, 255, 0); /* mb_ref_frame_sel1 = LAST (prob_last) */
-                bw_put(b, vp8_mode_contexts[cnt][0], 0); /* ZEROMV */
+                bw_put(b, vp8_mode_contexts[nm.cnt[0]][0], mode != MV_ZERO);
+                if (mode != MV_ZERO) {
+                    bw_put(b, vp8_mode_contexts[nm.cnt[1]][1], mode != MV_NEAREST);
+                    if (mode != MV_NEAREST) {
+                        bw_put(b, vp8_mode_contexts[nm.cnt[2]][2], mode != MV_NEAR);
+                        if (mode == MV_NEW) {
+                            bw_put(b, vp8_mode_contexts[nm.cnt[3]][3], 0); /* not split */
+                            put_mv_component(b, (mv_row(m) - mv_row(nm.best)) >> 1,
+                                             vp8_default_mv_context[0]);
+                            put_mv_component(b, (mv_col(m) - mv_col(nm.best)) >> 1,
+                                             vp8_default_mv_context[1]);
+                        }
+                    }
+                }
             } else {
                 bw_tree(b, ymode_tree, ymode_prob, MB_YMODE(info));
                 bw_tree(b, uv_mode_tree, uv_mode_prob, MB_UVMODE(info));
@@ -951,7 +1344,10 @@ int vp8e_begin(vp8e *e, const vp8e_src *src, const uint8_t *dirty, int key, uint
     e->f_out = out;
     e->f_cap = cap;
     e->f_row = 0;
-    e->nskip = e->nintra = e->nchanged = 0;
+    e->nskip = e->nintra = e->nchanged = e->nmoved = 0;
+    if (key)
+        e->hints = NULL;
+    snapshot_ref(e);
     {
         int i;
         for (i = 0; i < IC_ENTRIES; i++)
@@ -979,13 +1375,17 @@ int vp8e_rows(vp8e *e, int nrows)
             uint8_t *above = e->above_ctx + c * 9;
             uint8_t *info = e->mbinfo + r * e->mbw + c;
             int best, bestuv, bestmode, inter = 0, m, coded, uvmode = DC_PRED;
+            int32_t moved;
+            int moved_only = 0, moved_exact = 0;
             PROF_START;
 
+            e->mvs[r * e->mbw + c] = 0;
             if (!key && e->f_dirty && !e->f_dirty[r * e->mbw + c]) {
                 /* Unchanged: copy from the last frame, nothing coded. */
+                int z;
                 *info = MB_INTER | MB_SKIP;
-                memset(above, 0, 9);
-                memset(left, 0, 9);
+                for (z = 0; z < 9; z++)
+                    above[z] = left[z] = 0;
                 e->nskip++;
                 continue;
             }
@@ -1026,32 +1426,78 @@ int vp8e_rows(vp8e *e, int nrows)
              * edges exist. Ties go to the last frame, which is cheaper. */
             best = 0x7fffffff;
             bestmode = DC_PRED;
+            moved = 0;
             if (!key) {
-                load_rec(e->ry, e->rys, c * 16, r * 16, 16, py);
-                best = sad(sy, py, 256);
+                int s2 = 0x7fffffff, md = 256, mdu = 256, mdv = 256;
                 inter = 1;
+                /* Where the platform says these contents came from, first:
+                 * moved and otherwise the same, give or take the coding
+                 * error the block already carried, it is sent as the vector
+                 * alone -- no residual, no other candidate looked at. The
+                 * peer sees what it saw before, moved; the exactness map
+                 * says so, for a later refresh. New content differs by far
+                 * more than coding error does. */
+                if (e->hints && e->refy) {
+                    const vp8e_hint *h = &e->hints[r * e->mbw + c];
+                    int32_t m;
+                    nearmv nm;
+                    if ((h->dx || h->dy) && motion_predict(e, r, c, m = hint_mv(h))) {
+                        find_near(e, r, c, &nm);
+                        if (mv_mode(&nm, m) >= 0) {
+                            int su2, sv2;
+                            md = maxdiff(sy, e->my, 256, &s2);
+                            moved = m;
+                            if (md <= MOVE_TOLERANCE && s2 <= 256 * MOVE_MEAN &&
+                                (mdu = maxdiff(su, e->mu, 64, &su2)) <= MOVE_TOLERANCE &&
+                                (mdv = maxdiff(sv, e->mv, 64, &sv2)) <= MOVE_TOLERANCE)
+                                moved_only = 1;
+                        }
+                    }
+                }
+                if (moved_only) {
+                    best = s2;
+                    memcpy(py, e->my, 256);
+                    moved_exact = !md && !mdu && !mdv;
+                } else {
+                    load_rec(e->ry, e->rys, c * 16, r * 16, 16, py);
+                    best = sad(sy, py, 256, 0x7fffffff);
+                    if (moved && s2 < best) {
+                        best = s2;
+                        memcpy(py, e->my, 256);
+                    } else {
+                        moved = 0;
+                    }
+                }
             }
-            for (m = 0; m < 4 && best; m++) {
+            for (m = 0; m < 4 && best && !moved_only; m++) {
                 int mode = ymodes[m], s;
                 if ((mode == V_PRED && r == 0) || (mode == H_PRED && c == 0) ||
                     (mode == TM_PRED && (r == 0 || c == 0)))
                     continue;
                 intra_pred(e->ry, e->rys, c * 16, r * 16, 16, mode, cand);
-                s = sad(sy, cand, 256);
+                s = sad(sy, cand, 256, best);
                 if (s < best) {
                     best = s;
                     bestmode = mode;
                     inter = 0;
+                    moved = 0;
                     memcpy(py, cand, 256);
                 }
             }
 
             bestuv = 0x7fffffff;
-            if (inter) {
+            if (inter && moved) {
+                memcpy(pu, e->mu, 64);
+                memcpy(pv, e->mv, 64);
+                if (moved_only)
+                    best = bestuv = 0; /* nothing to code */
+                else if (!best)
+                    bestuv = sad(su, pu, 64, 0x7fffffff) + sad(sv, pv, 64, 0x7fffffff);
+            } else if (inter) {
                 load_rec(e->ru, e->ruvs, c * 8, r * 8, 8, pu);
                 load_rec(e->rv, e->ruvs, c * 8, r * 8, 8, pv);
                 if (!best)
-                    bestuv = sad(su, pu, 64) + sad(sv, pv, 64);
+                    bestuv = sad(su, pu, 64, 0x7fffffff) + sad(sv, pv, 64, 0x7fffffff);
             } else {
                 for (m = 0; m < 4; m++) {
                     int mode = ymodes[m], s;
@@ -1060,7 +1506,9 @@ int vp8e_rows(vp8e *e, int nrows)
                         continue;
                     intra_pred(e->ru, e->ruvs, c * 8, r * 8, 8, mode, e->cu);
                     intra_pred(e->rv, e->ruvs, c * 8, r * 8, 8, mode, e->cv);
-                    s = sad(su, e->cu, 64) + sad(sv, e->cv, 64);
+                    s = sad(su, e->cu, 64, bestuv);
+                    if (s < bestuv)
+                        s += sad(sv, e->cv, 64, bestuv - s);
                     if (s < bestuv) {
                         bestuv = s;
                         uvmode = mode;
@@ -1083,6 +1531,10 @@ int vp8e_rows(vp8e *e, int nrows)
                  * refresh just keeps visiting them.) */
                 uint8_t *ex = e->exact + r * e->mbw + c;
                 int j, same = 1;
+                if (moved_only) {
+                    *ex = (uint8_t)moved_exact;
+                    goto exact_done;
+                }
                 load_rec(e->ry, e->rys, c * 16, r * 16, 16, e->cand);
                 same = !memcmp(e->cand, sy, 256);
                 for (j = 0; j < 8 && same; j++)
@@ -1090,6 +1542,7 @@ int vp8e_rows(vp8e *e, int nrows)
                            !memcmp(e->rv + (r * 8 + j) * e->ruvs + c * 8, sv + j * 8, 8);
                 *ex = (uint8_t)same;
             }
+        exact_done:
             PROF(3);
             if (key) {
                 icache_entry *slot = &e->ic[e->ic_next];
@@ -1106,9 +1559,12 @@ int vp8e_rows(vp8e *e, int nrows)
             }
             *info = (uint8_t)((inter ? MB_INTER : 0) | (coded ? 0 : MB_SKIP) |
                               (bestmode << 1) | (uvmode << 4));
-            /* Only an inter macroblock with nothing coded is a straight copy
-             * of what the peer already has. */
-            if (coded || !inter)
+            e->mvs[r * e->mbw + c] = inter ? moved : 0;
+            if (moved && inter)
+                e->nmoved++;
+            /* Only an inter macroblock with nothing coded and no vector is
+             * a straight copy of what the peer already has. */
+            if (coded || !inter || moved)
                 e->nchanged++;
             if (coded) {
                 put_mb_tokens(&e->tb, qc, above, left);
@@ -1171,6 +1627,8 @@ size_t vp8e_end(vp8e *e)
     e->stats.inter = total - e->nintra;
     e->stats.key = key;
     e->stats.changed = key ? total : e->nchanged;
+    e->stats.moved = e->nmoved;
+    e->hints = NULL; /* hints are for one frame */
     return hdr + p1len + p2len;
 }
 

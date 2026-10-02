@@ -73,6 +73,31 @@ void vp8e_recon(const vp8e *e, const uint8_t **y, const uint8_t **u,
  * source as last encoded. A periodic refresh need only revisit the rest. */
 const uint8_t *vp8e_exact_map(const vp8e *e);
 
+/* Motion. A platform that knows where content moved -- a window scrolled, a
+ * window dragged -- can say so, and a macroblock is then predicted from where
+ * its contents were in the last frame (a motion vector) instead of being coded
+ * afresh: a scrolled terminal costs a few bytes a macroblock instead of all of
+ * its text again.
+ *
+ * A hint says the macroblock's contents moved by (dx, dy) whole pixels:
+ * new(x, y) = old(x - dx, y - dy). It is a suggestion, used only where it
+ * predicts better than not moving and than intra prediction, and only for
+ * dirty macroblocks. dx = dy = 0 is no hint.
+ *
+ * Motion needs a copy of the previous frame, since the encoder rebuilds the
+ * picture in place: vp8e_ref_size bytes, handed over once with vp8e_set_ref.
+ * Without one, hints are ignored (and nothing changes for callers that never
+ * give any). */
+typedef struct {
+    short dx, dy;
+} vp8e_hint;
+
+size_t vp8e_ref_size(int w, int h);
+void vp8e_set_ref(vp8e *e, void *mem);
+/* For the next frame only: one hint per macroblock, row-major; NULL for none.
+ * The array must stay valid until the frame is ended. */
+void vp8e_set_hints(vp8e *e, const vp8e_hint *hints);
+
 /* With VP8E_PROFILE: time spent per phase since the last call (mode search,
  * transform+quantise, reconstruct, exactness, tokens), in vp8e_clock units. */
 void vp8e_profile(vp8e *e, uint32_t out[5]);
@@ -80,6 +105,7 @@ void vp8e_profile(vp8e *e, uint32_t out[5]);
 /* Counters from the last vp8e_encode, for logs and tuning. */
 typedef struct {
     int mbs, skipped, inter, intra;
+    int moved;   /* macroblocks predicted through a motion vector */
     int key;   /* the frame was a keyframe, asked for or not */
     int changed; /* macroblocks whose reconstruction changed; 0 means the
                   * frame would show the peer nothing new */

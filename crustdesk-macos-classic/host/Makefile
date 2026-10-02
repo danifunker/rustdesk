@@ -18,7 +18,7 @@ BSSL    := ../third_party/bearssl
 BSSLSRC := $(shell find $(BSSL)/src -name '*.c')
 BSSLOBJ := $(patsubst $(BSSL)/src/%.c,$(B)/bearssl/%.o,$(BSSLSRC))
 
-all: $(B)/test_vp8 $(B)/hostagent $(B)/test_core $(B)/vp8dump $(B)/test_crypto $(B)/consoleprobe \
+all: $(B)/test_vp8 $(B)/test_mv $(B)/hostagent $(B)/test_core $(B)/vp8dump $(B)/test_crypto $(B)/consoleprobe \
      $(B)/test_macbin
 
 $(B):
@@ -26,6 +26,9 @@ $(B):
 
 $(B)/test_vp8: test_vp8.c $(CORESRC) | $(B)
 	$(CC) $(CFLAGS) -I$(VPXINC) -o $@ test_vp8.c $(CORE)/vp8enc.c $(LIBVPX) -lm
+
+$(B)/test_mv: test_mv.c $(CORE)/vp8enc.c $(CORE)/yuv.c | $(B)
+	$(CC) $(CFLAGS) -I$(VPXINC) -o $@ test_mv.c $(CORE)/vp8enc.c $(CORE)/yuv.c $(LIBVPX) -lm
 
 # The zstd decoder, with the Mac build's options.
 $(B)/zstddeclib.o: ../third_party/zstd-decoder/zstddeclib.c | $(B)
@@ -68,6 +71,8 @@ test: all
 	$(B)/test_vp8 16 | tail -1
 	$(B)/test_vp8 0 | tail -1
 	SLICE=3 $(B)/test_vp8 16 | tail -1
+	$(B)/test_mv 24 | tail -1
+	$(B)/test_mv 4 | tail -1
 
 clean:
 	rm -rf $(B)

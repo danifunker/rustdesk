@@ -255,9 +255,9 @@ static void send_peer_info(cdv_session *s)
     pbw_begin(&w, M_LOGIN_RESPONSE);
     pbw_begin(&w, 2); /* peer_info */
     pbw_string(&w, 2, id->hostname);
-    /* "Mac OS" is true, and it is what makes a client in Map mode send Mac
-     * virtual keycodes -- which are the ADB keycodes this machine uses. */
-    pbw_string(&w, 3, "Mac OS");
+    /* "Mac OS" is true on a Mac, and it is what makes a client in Map mode
+     * send Mac virtual keycodes -- which are the ADB keycodes it uses. */
+    pbw_string(&w, 3, id->platform ? id->platform : "Mac OS");
     if (!s->file_mode) { /* a file manager has no display */
         pbw_begin(&w, 4); /* displays */
         pbw_varint(&w, 3, (uint32_t)id->width);
