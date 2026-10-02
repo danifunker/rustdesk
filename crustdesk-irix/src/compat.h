@@ -11,4 +11,8 @@ int cdv_vsnprintf(char *buf, size_t n, const char *fmt, va_list ap);
 #define snprintf cdv_snprintf
 #define vsnprintf cdv_vsnprintf
 
+/* In IRIX 5.3's libc, not in its headers. */
+struct timeval;
+int utimes(const char *path, const struct timeval *times);
+
 #endif

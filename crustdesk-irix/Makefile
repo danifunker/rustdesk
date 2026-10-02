@@ -21,16 +21,17 @@ CORE  := ../crustdesk-macos-classic/src/core
 TP    := ../crustdesk-macos-classic/third_party
 NACL  := $(TP)/libsodium-min
 O     := build/obj
-INC   := -Isrc -I$(CORE) -I$(NACL)/include -I$(NACL)/include/sodium -I$(TP)/zstd-decoder \
+INC   := -Isrc -I$(CORE) -I../crustdesk-macos-classic/host -I$(NACL)/include -I$(NACL)/include/sodium -I$(TP)/zstd-decoder \
          -I$(SYSROOT)/usr/include/X11
 CFLAGS := -std=gnu99 -O2 -Wall -Wno-unused-parameter -Wno-unused-function \
           -include src/compat.h $(INC) -DCONFIGURED=1 $(EXTRA_CFLAGS)
 
-IRIX_SRC := main screen input log compat
-CORE_SRC := vp8enc pb sha256 session rng rdv unzstd
+IRIX_SRC := main screen input clip log compat
+CORE_SRC := vp8enc pb sha256 session rng rdv unzstd files macbin
+HOST     := ../crustdesk-macos-classic/host
 NACL_SRC := $(shell find $(NACL) -name '*.c')
 
-OBJS := $(IRIX_SRC:%=$(O)/%.o) $(CORE_SRC:%=$(O)/core_%.o) \
+OBJS := $(IRIX_SRC:%=$(O)/%.o) $(CORE_SRC:%=$(O)/core_%.o) $(O)/fs_posix.o \
         $(patsubst %.c,$(O)/nacl_%.o,$(notdir $(NACL_SRC))) $(O)/zstddeclib.o
 
 all: $(OBJS) $(O)/LINK
@@ -45,6 +46,9 @@ $(O)/%.o: src/%.c src/*.h | $(O)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(O)/core_%.o: $(CORE)/%.c $(CORE)/*.h | $(O)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(O)/fs_posix.o: $(HOST)/fs_posix.c $(HOST)/fs_posix.h | $(O)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 vpath %.c $(sort $(dir $(NACL_SRC)))
@@ -69,3 +73,19 @@ clean:
 	rm -rf $(O)
 
 .PHONY: all toolchain sysroot clean
+
+# The package: the agent as linked on IRIX (scripts/indigo.py link fetches it
+# to build/C-Desk-Vint) with its installer, as a tar IRIX 5.3's tar reads.
+DISTNAME := C-Desk-Vint-IRIX-5.3+-$(BUILD_ID)
+dist: build/C-Desk-Vint
+	rm -rf build/dist
+	mkdir -p build/dist/C-Desk-Vint-IRIX
+	cp build/C-Desk-Vint pkg/install.sh pkg/uninstall.sh pkg/cdeskvint.init pkg/README.txt \
+	    build/dist/C-Desk-Vint-IRIX/
+	chmod 755 build/dist/C-Desk-Vint-IRIX/C-Desk-Vint build/dist/C-Desk-Vint-IRIX/*.sh \
+	    build/dist/C-Desk-Vint-IRIX/cdeskvint.init
+	cd build/dist && tar --format=v7 --owner=0 --group=0 -cf ../$(DISTNAME).tar C-Desk-Vint-IRIX
+	cd build && sha256sum $(DISTNAME).tar > $(DISTNAME).SHA256SUMS
+	@ls -l build/$(DISTNAME).tar
+
+.PHONY: dist

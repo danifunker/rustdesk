@@ -345,6 +345,9 @@ class Peer:
         if k != 9:
             return
         print('  confirmed: %r' % {kk: v[0] for kk, v in m.items()})
+        # A 128 KB block to a slow agent (a 33 MHz SGI takes over a second)
+        # must not inherit recv's short timeout.
+        self.s.settimeout(120)
         t0 = time.time()
         off = 0
         while True:

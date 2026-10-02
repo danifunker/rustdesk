@@ -3,6 +3,7 @@
 #define NEED_EVENTS
 #define NEED_REPLIES
 #include "screen.h"
+#include "clip.h"
 #include "log.h"
 
 #include <math.h>
@@ -11,6 +12,7 @@
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #include <sys/time.h>
+#include <unistd.h>
 
 #include <X11/Xlib.h>
 #include <X11/Xproto.h>
@@ -600,6 +602,9 @@ static void on_request2(XETC *t, XETrapDatum *d, BYTE *user)
     memset(&b, 0, sizeof b);
 
     switch (op) {
+    case X_SetSelectionOwner:
+        clip_owner_changed((Atom)u32(r + 8), (Window)id);
+        return;
     case X_CreatePixmap:
         dc_set(u32(r + 4), D_PIXMAP, 0, 0);
         return;
@@ -1194,14 +1199,17 @@ static int log_errors(Display *d, XErrorEvent *e)
     return 0;
 }
 
+/* Buffers sized to the screen, kept across a lost and reopened display. */
+static uint8_t *arena;
+static int arena_w, arena_h;
+
 int screen_open(cdv_screen *s, const char *display, double gamma)
 {
-    int scr, a, b, maj, min;
+    int scr, a, b, maj;
     uint8_t changed[256];
-    memset(s, 0, sizeof *s);
     dpy = XOpenDisplay(display);
     if (!dpy) {
-        cdv_log("cannot open display %s", display ? display : "(DISPLAY)");
+        cdv_debug("cannot open display %s", display ? display : "(DISPLAY)");
         return 0;
     }
     XSetErrorHandler(log_errors);
@@ -1213,53 +1221,76 @@ int screen_open(cdv_screen *s, const char *display, double gamma)
     if (DefaultDepth(dpy, scr) != 8) {
         cdv_log("the root window is %d bits deep; only 8 is supported yet",
                 DefaultDepth(dpy, scr));
+        XCloseDisplay(dpy);
+        dpy = NULL;
         return 0;
     }
     if (!XShmQueryExtension(dpy) || !(shm_ok = open_shm())) {
         cdv_log("MIT-SHM is not usable; cannot read the screen");
+        XCloseDisplay(dpy);
+        dpy = NULL;
         return 0;
     }
     if (!XQueryExtension(dpy, "DEC-XTRAP", &a, &b, &maj))
         cdv_log("DEC-XTRAP is missing: changes will be found by scanning only (slow)");
-    (void)min;
     MBW = (W + 15) / 16;
     MBH = (H + 15) / 16;
-    s->width = W;
-    s->height = H;
-    s->mbw = MBW;
-    s->mbh = MBH;
-    s->ystride = MBW * 16;
-    s->uvstride = MBW * 8;
-    {
+    if (!arena || arena_w != W || arena_h != H) {
         /* One arena, the buffers at different offsets modulo the R3000's
          * 32 KB direct-mapped data cache: the screen and the luma plane are
          * the same size, a multiple of 32 KB, and read in step, so placed
          * naively every access to one would evict the other. */
         size_t fbsz = (size_t)MBW * 16 * MBH * 16, ysz = fbsz, uvsz = fbsz / 4;
-        uint8_t *arena = (uint8_t *)malloc(fbsz + ysz + 2 * uvsz + 6 * 32768);
-        uint8_t *p;
-        if (!arena) {
+        int n = MBW * MBH;
+        free(arena);
+        arena = (uint8_t *)malloc(fbsz + ysz + 2 * uvsz + 6 * 32768);
+        free(dmg);
+        free(conv);
+        free(ovmap);
+        free(hint_next);
+        free(hint_frame);
+        free(hint_tmp);
+        free(s->flat);
+        free(s->dirty);
+        dmg = (uint8_t *)calloc((size_t)n, 1);
+        conv = (uint8_t *)calloc((size_t)n, 1);
+        ovmap = (uint8_t *)calloc((size_t)n, 1);
+        hint_next = (vp8e_hint *)calloc((size_t)n, sizeof(vp8e_hint));
+        hint_frame = (vp8e_hint *)calloc((size_t)n, sizeof(vp8e_hint));
+        hint_tmp = (vp8e_hint *)calloc((size_t)n, sizeof(vp8e_hint));
+        s->flat = (uint8_t *)calloc((size_t)n, 1);
+        s->dirty = (uint8_t *)calloc((size_t)n, 1);
+        if (!arena || !dmg || !conv || !ovmap || !hint_next || !hint_frame || !hint_tmp ||
+            !s->flat || !s->dirty) {
             cdv_log("out of memory");
-            return 0;
+            exit(1);
         }
+        arena_w = W;
+        arena_h = H;
+    }
+    {
         /* ...and fb half a cache away from the shared-memory segment the
          * server writes into, which shmat put on a page boundary: read_rect
          * compares the two row by row. */
-        p = (uint8_t *)(((unsigned long)arena + 32767) & ~32767ul);
+        size_t fbsz = (size_t)MBW * 16 * MBH * 16, ysz = fbsz, uvsz = fbsz / 4;
+        uint8_t *p = (uint8_t *)(((unsigned long)arena + 32767) & ~32767ul);
         p += (((unsigned long)shm.shmaddr & 32767) + 16384) & 32767;
         fb = p;
         s->y = fb + fbsz + 8192;
         s->u = s->y + ysz + 8192 + 4096;
         s->v = s->u + uvsz + 4096;
     }
-    dmg = (uint8_t *)calloc((size_t)(MBW * MBH), 1);
-    conv = (uint8_t *)calloc((size_t)(MBW * MBH), 1);
-    ovmap = (uint8_t *)calloc((size_t)(MBW * MBH), 1);
-    hint_next = (vp8e_hint *)calloc((size_t)(MBW * MBH), sizeof(vp8e_hint));
-    hint_frame = (vp8e_hint *)calloc((size_t)(MBW * MBH), sizeof(vp8e_hint));
-    hint_tmp = (vp8e_hint *)calloc((size_t)(MBW * MBH), sizeof(vp8e_hint));
-    s->flat = (uint8_t *)calloc((size_t)(MBW * MBH), 1);
+    s->width = W;
+    s->height = H;
+    s->mbw = MBW;
+    s->mbh = MBH;
+    s->ystride = MBW * 16;
+    s->uvstride = MBW * 8;
     s->hints = hint_frame;
+    s->ndirty = 0;
+    memset(s->dirty, 0, (size_t)(MBW * MBH));
+    memset(dmg, 0, (size_t)(MBW * MBH));
+    ndmg = 0;
     {
         /* SERVER_OVERLAY_VISUALS: (visual, transparent type, value, layer) */
         Atom a = XInternAtom(dpy, "SERVER_OVERLAY_VISUALS", True), type;
@@ -1282,12 +1313,39 @@ int screen_open(cdv_screen *s, const char *display, double gamma)
 }
 
 Display *screen_display(void) { return dpy; }
+
+/* The connection died (the server reset at a logout, or went away): give up
+ * on it without touching Xlib -- after an I/O error the Display is beyond use,
+ * and XCloseDisplay on it has been seen (on IRIX 6.5) to poison the next
+ * connection. The socket is closed; the struct is left. */
+void screen_lost(void)
+{
+    int i;
+    if (dpy)
+        close(ConnectionNumber(dpy));
+    dpy = NULL;
+    tc = NULL;
+    watching = 0;
+    if (shm_ok) {
+        shmdt(shm.shmaddr);
+        shm_ok = 0;
+    }
+    for (i = 0; i < ntops; i++)
+        free(tops[i].opix);
+    ntops = 0;
+    noverlays = 0;
+    novwin = 0;
+    cmap_cur = 0;
+    memset(ty, 0, sizeof ty);
+    memset(tu, 0, sizeof tu);
+    memset(tv, 0, sizeof tv);
+}
 int screen_fd(void) { return dpy ? ConnectionNumber(dpy) : -1; }
 
 static void trap_on(void)
 {
     static const int ops[] = {
-        X_CreatePixmap, X_FreePixmap, X_StoreColors, X_StoreNamedColor, X_InstallColormap,
+        X_SetSelectionOwner, X_CreatePixmap, X_FreePixmap, X_StoreColors, X_StoreNamedColor, X_InstallColormap,
         X_UninstallColormap, X_AllocColor, X_AllocNamedColor, X_ConfigureWindow,
         X_ReparentWindow, X_CirculateWindow, X_MapWindow, X_UnmapWindow, X_DestroyWindow,
         X_MapSubwindows, X_UnmapSubwindows, X_DestroySubwindows, X_CopyArea, X_CopyPlane,
@@ -1372,6 +1430,8 @@ void screen_events(cdv_screen *s)
             XETrapDispatchXLib((XETrapDataEvent *)&e, tc);
             continue;
         }
+        if (clip_event(&e))
+            continue;
         if (watching)
             on_event(s, &e);
     }

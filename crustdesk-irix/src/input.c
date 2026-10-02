@@ -35,6 +35,10 @@ void input_init(Display *d)
 {
     int ev, er, maj, min;
     dpy = d;
+    if (!d) { /* the display went away */
+        have_xtest = 0;
+        return;
+    }
     have_xtest = XTestQueryExtension(dpy, &ev, &er, &maj, &min);
     if (!have_xtest)
         cdv_log("XTEST is missing: the peer cannot type or click");

@@ -43,6 +43,8 @@ typedef struct {
  * gamma: the IRIX display gamma to undo (1.7 is IRIX's default; 0 off). */
 int screen_open(cdv_screen *s, const char *display, double gamma);
 Display *screen_display(void);
+/* The X connection died: forget it (screen_open again later). */
+void screen_lost(void);
 int screen_fd(void);
 
 /* Start and stop watching (a session started or ended). Starting reads the

@@ -1,0 +1,39 @@
+#! /sbin/sh
+#Tag 0x00000f00
+#
+# Start and stop C-Desk-Vint, the RustDesk agent.
+#
+# install.sh puts this in /etc/init.d with links S99cdeskvint in rc2.d (after
+# xdm at S98) and K01cdeskvint in rc0.d, and turns the chkconfig flag on.
+# Turn it off with:  chkconfig cdeskvint off
+#
+# It does not wait for X: the agent starts without a display, registers with
+# the ID server and listens, and opens the display when it can -- at boot, and
+# again each time a logout resets the X server.
+
+IS_ON=/sbin/chkconfig
+AGENT=/usr/local/sbin/C-Desk-Vint
+DIR=/var/C-Desk-Vint
+
+case "$1" in
+'start')
+	$IS_ON cdeskvint || exit 0
+	[ -x $AGENT ] || exit 0
+	[ -d $DIR ] || mkdir $DIR
+	chmod 700 $DIR
+	if $IS_ON verbose; then
+		echo "Starting C-Desk-Vint (RustDesk agent)."
+	fi
+	HOME=$DIR DISPLAY=:0 $AGENT -D -c $DIR/prefs -l $DIR/log
+	;;
+
+'stop')
+	/sbin/killall -TERM C-Desk-Vint
+	;;
+
+*)
+	echo "usage: /etc/init.d/cdeskvint {start|stop}"
+	exit 1
+	;;
+esac
+exit 0

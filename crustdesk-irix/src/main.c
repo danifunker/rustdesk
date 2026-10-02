@@ -11,9 +11,14 @@
  *
  *   C-Desk-Vint [-c prefs] [-d display] [-l logfile] [-v] [-p port]
  */
+#include "clip.h"
 #include "input.h"
 #include "log.h"
 #include "screen.h"
+#include "unzstd.h"
+
+#include "files.h"
+#include "fs_posix.h"
 
 #include "rdv.h"
 #include "rng.h"
@@ -24,6 +29,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <setjmp.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdio.h>
@@ -71,6 +77,7 @@ static struct {
     char key[64];
     char relay[64];
     char name[64];
+    char files[256];      /* what the file manager sees as "/"; "off" for none */
 } prefs;
 static char prefs_path[256];
 
@@ -145,6 +152,8 @@ static void read_prefs(void)
             copy(prefs.relay, eq, sizeof prefs.relay);
         else if (!strcmp(line, "name"))
             copy(prefs.name, eq, sizeof prefs.name);
+        else if (!strcmp(line, "files"))
+            copy(prefs.files, eq, sizeof prefs.files);
     }
     fclose(f);
 }
@@ -159,10 +168,12 @@ static void write_prefs(void)
         return;
     }
     fprintf(f, "# C-Desk-Vint preferences. The seed is this machine's private key.\n");
-    fprintf(f, "id=%s\npassword=%s\nport=%d\nquality=%d\ngamma=%g\nscan=%d\n", prefs.id,
-            prefs.password, prefs.port, prefs.q, prefs.gamma, prefs.scan_ms);
-    fprintf(f, "server=%s\nkey=%s\nrelay=%s\nname=%s\n", prefs.server, prefs.key, prefs.relay,
-            prefs.name);
+    fprintf(f, "id=%s\npassword=%s\nport=%d\nquality=%d\nscan=%d\n", prefs.id,
+            prefs.password, prefs.port, prefs.q, prefs.scan_ms);
+    if (prefs.gamma >= 0)
+        fprintf(f, "gamma=%g\n", prefs.gamma);
+    fprintf(f, "server=%s\nkey=%s\nrelay=%s\nname=%s\nfiles=%s\n", prefs.server, prefs.key,
+            prefs.relay, prefs.name, prefs.files);
     fprintf(f, "uuid=%s\nseed=%s\n", hex(prefs.uuid, 16, u), hex(prefs.seed, 32, k));
     fclose(f);
 }
@@ -194,8 +205,9 @@ static void load_prefs(void)
 {
     prefs.port = DEFAULT_PORT;
     prefs.q = DEFAULT_Q;
-    prefs.gamma = 1.7;
+    prefs.gamma = -1; /* the system's: /etc/config/system.glGammaVal */
     prefs.scan_ms = 150;
+    copy(prefs.files, "/", sizeof prefs.files);
     copy(prefs.server, DEFAULT_SERVER, sizeof prefs.server);
     copy(prefs.key, DEFAULT_KEY, sizeof prefs.key);
     read_prefs();
@@ -224,6 +236,17 @@ static void load_prefs(void)
             prefs.have_seed = 1;
         }
         write_prefs();
+    }
+    if (prefs.gamma < 0) {
+        /* What `gamma` set; IRIX's default is 1.7. */
+        FILE *g = fopen("/etc/config/system.glGammaVal", "r");
+        prefs.gamma = 1.7;
+        if (g) {
+            double v;
+            if (fscanf(g, "%lf", &v) == 1 && v > 0.5 && v < 4)
+                prefs.gamma = v;
+            fclose(g);
+        }
     }
     if (prefs.q < 0 || prefs.q > 127)
         prefs.q = DEFAULT_Q;
@@ -320,7 +343,11 @@ static int send_all(int fd, const uint8_t *b, size_t n)
     return 0;
 }
 
-/* ---- the session ------------------------------------------------------------ */
+/* ---- the sessions ------------------------------------------------------------- *
+ *
+ * Two slots. A connection takes a free one; at login it becomes the desktop
+ * (one at a time: it owns the screen, the encoder and the video buffer) or a
+ * file manager (a client opens one beside its desktop window). */
 
 static cdv_screen scr;
 static cdv_ident ident;
@@ -330,13 +357,35 @@ static char hostname[64];
 #define CTL_CAP (64 * 1024)
 #define VID_CAP (1024 * 1024)
 #define IN_CAP (192 * 1024)
+#define WORK_CAP (192 * 1024)
+#define NSLOTS 2
+/* The largest screen the buffers are made for: IRIX 5.3's Indigo and Indy
+ * graphics top out at 1280x1024. A larger one is refused. */
+#define MAX_W 1280
+#define MAX_H 1024
 
-static struct {
-    int fd;               /* -1: no session */
+enum { K_NONE, K_DESKTOP, K_FILES };
+
+typedef struct {
+    int fd;               /* -1: free */
     cdv_session s;
+    cdv_hooks hooks;      /* .user is the slot */
+    uint8_t *ctl, *in;
+    int kind;
+    cdv_files *files;
+    uint8_t *work;
+    int files_started;
+    uint32_t started;
+    char how[16];
+} slot;
+static slot slots[NSLOTS];
+static slot *desk;        /* the slot showing the desktop, or NULL */
+
+/* The desktop's own state, whichever slot it is in. */
+static struct {
     vp8e *enc;
     int encoding, key;
-    uint32_t started, last_frame, last_cursor, last_report;
+    uint32_t last_frame, last_cursor, last_report;
     uint32_t f_start, f_enc;  /* this frame: when it began, encoder time so far */
     int f_mbs, f_detail, f_moved_hint, f_flat;
     int cx, cy;
@@ -345,7 +394,17 @@ static struct {
     uint32_t t_read, t_conv, t_enc;
 } S;
 
-static uint8_t *ctlbuf, *vidbuf, *inbuf, *encmem, *refmem;
+static uint8_t *vidbuf, *encmem, *refmem;
+
+/* The X connection. The agent runs without one -- at boot before the X
+ * server is up, and across the server resetting at a logout -- registering
+ * and listening all the same, and opens it again every few seconds. */
+static int x_ok;
+static uint32_t x_retry;
+static const char *x_display;
+static jmp_buf x_jmp;
+static int x_jmp_set;
+static const cdv_fs_ops *files_fs;  /* NULL: file transfer is off */
 
 /* The frame budget. A frame codes what fits in about FRAME_BUDGET ms of
  * this CPU; whatever is left stays dirty for the next. So a big change (a
@@ -365,14 +424,39 @@ static int frame_ms = 66; /* at most ~15 a second; the Indigo will set the real 
 
 static void on_mouse(void *u, int mask, int x, int y)
 {
-    (void)u;
-    input_mouse(mask, x, y);
+    if ((slot *)u == desk)
+        input_mouse(mask, x, y);
 }
 
 static void on_key(void *u, const cdv_key *k)
 {
-    (void)u;
-    input_key(k);
+    if ((slot *)u == desk)
+        input_key(k);
+}
+
+/* The peer's clipboard: compressed whenever that was smaller. */
+static void on_clipboard(void *u, const char *utf8, size_t n, int compressed)
+{
+    if ((slot *)u != desk)
+        return;
+    if (compressed) {
+        static char text[256 * 1024];
+        long len = cdv_unzstd(text, sizeof text, utf8, n);
+        if (len < 0) {
+            cdv_log("clipboard: could not decompress the peer's text");
+            return;
+        }
+        clip_from_peer(text, (size_t)len);
+    } else {
+        clip_from_peer(utf8, n);
+    }
+}
+
+/* Text copied here, for the peer. */
+static void clipboard_to_peer(const char *utf8, size_t n)
+{
+    if (desk && desk->s.state == CDV_LIVE)
+        cdv_send_clipboard(&desk->s, utf8, n);
 }
 
 static void on_log(void *u, const char *m)
@@ -383,7 +467,8 @@ static void on_log(void *u, const char *m)
 
 static void on_option(void *u, int quality, int fps)
 {
-    (void)u;
+    if ((slot *)u != desk)
+        return;
     if (quality >= 0 && S.enc) {
         vp8e_set_q(S.enc, quality);
         cdv_log("peer set quality q=%d", quality);
@@ -396,20 +481,55 @@ static void on_option(void *u, int quality, int fps)
 
 static int on_login(void *u, int file_transfer)
 {
-    (void)u;
+    slot *sl = (slot *)u;
     if (file_transfer) {
-        cdv_log("refusing a file-transfer session (not supported yet)");
+        if (!files_fs) {
+            cdv_log("refusing a file-transfer session (files=off)");
+            return 0;
+        }
+        sl->kind = K_FILES;
+        sl->files_started = 0;
+        cdv_files_init(sl->files, &sl->s, files_fs, sl->work, WORK_CAP);
+        return 1;
+    }
+    if (desk && desk != sl) {
+        cdv_log("refusing a second desktop session");
         return 0;
     }
+    if (!x_ok) {
+        cdv_log("refusing a desktop session: no X display yet");
+        return 0;
+    }
+    if (scr.width > MAX_W || scr.height > MAX_H) {
+        cdv_log("refusing a desktop session: the screen is larger than %dx%d", MAX_W, MAX_H);
+        return 0;
+    }
+    ident.width = scr.width;
+    ident.height = scr.height;
+    sl->kind = K_DESKTOP;
+    desk = sl;
+    cdv_set_video(&sl->s, vidbuf, VID_CAP);
+    S.enc = vp8e_init(encmem, scr.width, scr.height, prefs.q);
+    if (refmem)
+        vp8e_set_ref(S.enc, refmem);
+    S.encoding = 0;
+    S.last_frame = S.last_cursor = S.last_report = now_ms();
+    S.frames = S.bytes = S.mbs = 0;
+    S.t_read = S.t_conv = S.t_enc = 0;
+    S.cx = S.cy = -1;
     return 1;
 }
 
-static const cdv_hooks hooks = { on_mouse, on_key, NULL, on_log, NULL, NULL,
-                                 on_option, NULL, on_login, NULL, NULL };
+static void on_file(void *u, int field, const uint8_t *d, size_t n)
+{
+    slot *sl = (slot *)u;
+    if (sl->kind == K_FILES)
+        cdv_files_message(sl->files, field, d, n);
+}
 
 /* An arrow for the peer to draw where our pointer is: X's left_ptr in black
  * with a white edge. */
-static void send_arrow(void)
+static void send_arrow(cdv_session *s)
 {
     static const char *shape[] = {
         "X           ", "XX          ", "X.X         ", "X..X        ", "X...X       ",
@@ -426,104 +546,131 @@ static void send_arrow(void)
             p[0] = p[1] = p[2] = c == '.' ? 0 : 255;
             p[3] = c == ' ' ? 0 : 255;
         }
-    cdv_send_cursor(&S.s, 1, 0, 0, 12, 17, rgba);
+    cdv_send_cursor(s, 1, 0, 0, 12, 17, rgba);
+}
+
+static int slots_free(void)
+{
+    int i, n = 0;
+    for (i = 0; i < NSLOTS; i++)
+        n += slots[i].fd < 0;
+    return n;
 }
 
 static void session_begin(int fd, int secure, const char *how)
 {
-    int one = 1;
-    if (S.fd >= 0) {
-        cdv_log("%s connection refused: a session is already running", how);
+    int one = 1, i;
+    slot *sl = NULL;
+    for (i = 0; i < NSLOTS && !sl; i++)
+        if (slots[i].fd < 0)
+            sl = &slots[i];
+    if (!sl) {
+        cdv_log("%s connection refused: both sessions are in use", how);
         close(fd);
         return;
     }
     setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (char *)&one, sizeof one);
     nonblock(fd);
-    S.fd = fd;
-    S.encoding = 0;
-    S.started = S.last_frame = S.last_cursor = S.last_report = now_ms();
-    S.frames = S.bytes = S.mbs = 0;
-    S.t_read = S.t_conv = S.t_enc = 0;
-    S.cx = S.cy = -1;
-    S.enc = vp8e_init(encmem, scr.width, scr.height, prefs.q);
-    if (refmem)
-        vp8e_set_ref(S.enc, refmem);
-    cdv_init2(&S.s, ctlbuf, CTL_CAP, vidbuf, VID_CAP, inbuf, IN_CAP, &hooks, &ident, now_ms());
-    cdv_start(&S.s, now_ms(), secure);
+    sl->fd = fd;
+    sl->kind = K_NONE;
+    sl->started = now_ms();
+    copy(sl->how, how, sizeof sl->how);
+    sl->hooks.mouse = on_mouse;
+    sl->hooks.key = on_key;
+    sl->hooks.clipboard = on_clipboard;
+    sl->hooks.log = on_log;
+    sl->hooks.option = on_option;
+    sl->hooks.login = on_login;
+    sl->hooks.file = on_file;
+    sl->hooks.user = sl;
+    cdv_init2(&sl->s, sl->ctl, CTL_CAP, NULL, 0, sl->in, IN_CAP, &sl->hooks, &ident, now_ms());
+    cdv_start(&sl->s, now_ms(), secure);
     cdv_log("%s connection; %s", how, secure ? "encrypted" : "direct");
 }
 
-static void session_end(const char *why)
+static void session_end(slot *sl, const char *why)
 {
-    if (S.fd < 0)
+    if (sl->fd < 0)
         return;
-    if (S.encoding)
-        vp8e_abandon(S.enc);
-    close(S.fd);
-    S.fd = -1;
-    S.encoding = 0;
-    screen_stop();
-    input_release_all();
-    cdv_log("session over: %s", why);
+    close(sl->fd);
+    sl->fd = -1;
+    if (sl == desk) {
+        if (S.encoding)
+            vp8e_abandon(S.enc);
+        S.encoding = 0;
+        screen_stop();
+        input_release_all();
+        desk = NULL;
+    }
+    if (sl->kind == K_FILES)
+        cdv_files_close(sl->files);
+    cdv_log("%s session over: %s", sl->kind == K_FILES ? "file" : "desktop", why);
+    sl->kind = K_NONE;
 }
 
 /* Bytes in and out; 0 when the session has ended. */
-static int session_io(int readable)
+static int session_io(slot *sl, int readable)
 {
     size_t n;
     const uint8_t *o;
     if (readable) {
         static uint8_t buf[16384];
-        int r = recv(S.fd, (char *)buf, sizeof buf, 0);
+        int r = recv(sl->fd, (char *)buf, sizeof buf, 0);
         if (r == 0 || (r < 0 && errno != EWOULDBLOCK && errno != EAGAIN)) {
-            session_end("the peer closed the connection");
+            cdv_debug("recv: %d, errno %d", r, r < 0 ? errno : 0);
+            session_end(sl, r == 0 ? "the peer closed the connection" : strerror(errno));
             return 0;
         }
         if (r > 0) {
-            int was_live = S.s.state == CDV_LIVE;
+            int was_live = sl->s.state == CDV_LIVE;
             rng_add(buf, r < 32 ? (size_t)r : 32);
-            if (cdv_feed(&S.s, buf, (size_t)r) < 0 && !cdv_out_peek(&S.s, &n)) {
-                session_end("protocol error");
+            if (cdv_feed(&sl->s, buf, (size_t)r) < 0 && !cdv_out_peek(&sl->s, &n)) {
+                session_end(sl, "protocol error");
                 return 0;
             }
-            if (!was_live && S.s.state == CDV_LIVE) {
-                cdv_log("logged in: %s (%s %s)", S.s.peer_name, S.s.peer_platform,
-                        S.s.peer_version);
-                input_release_all();
-                screen_set_scan((uint32_t)prefs.scan_ms);
-                {
+            if (!was_live && sl->s.state == CDV_LIVE) {
+                cdv_log("logged in: %s (%s %s), %s", sl->s.peer_name, sl->s.peer_platform,
+                        sl->s.peer_version, sl->kind == K_FILES ? "file manager" : "desktop");
+                if (sl == desk) {
                     uint32_t t0 = now_ms();
+                    input_release_all();
+                    screen_set_scan((uint32_t)prefs.scan_ms);
                     screen_start(&scr);
                     cdv_log("first look at the screen: %u ms", (unsigned)(now_ms() - t0));
+                    S.key = 1;
+                    send_arrow(&sl->s);
+                } else if (sl->kind == K_FILES && !sl->files_started) {
+                    cdv_files_start(sl->files);
+                    sl->files_started = 1;
                 }
-                S.key = 1;
-                send_arrow();
             }
         }
     }
+    if (sl->kind == K_FILES && sl->s.state == CDV_LIVE)
+        cdv_files_pump(sl->files);
     for (;;) {
         int w;
-        o = cdv_out_peek(&S.s, &n);
+        o = cdv_out_peek(&sl->s, &n);
         if (!n)
             break;
-        w = send(S.fd, (const char *)o, (int)n, 0);
+        w = send(sl->fd, (const char *)o, (int)n, 0);
         if (w < 0) {
             if (errno == EWOULDBLOCK || errno == EAGAIN)
                 break;
-            session_end("send failed");
+            session_end(sl, "send failed");
             return 0;
         }
-        cdv_out_consume(&S.s, (size_t)w);
+        cdv_out_consume(&sl->s, (size_t)w);
         if ((size_t)w < n)
             break;
     }
-    cdv_tick(&S.s, now_ms());
-    if (S.s.state == CDV_CLOSED && !cdv_out_peek(&S.s, &n)) {
-        session_end("closed");
+    cdv_tick(&sl->s, now_ms());
+    if (sl->s.state == CDV_CLOSED && !cdv_out_peek(&sl->s, &n)) {
+        session_end(sl, "closed");
         return 0;
     }
-    if (S.s.state != CDV_LIVE && now_ms() - S.started > 15000) {
-        session_end("no login within 15 s");
+    if (sl->s.state != CDV_LIVE && now_ms() - sl->started > 15000) {
+        session_end(sl, "no login within 15 s");
         return 0;
     }
     return 1;
@@ -576,16 +723,16 @@ static void select_mbs(void)
 static void frame_step(void)
 {
     uint32_t t;
-    if (S.s.state != CDV_LIVE)
+    if (!desk || desk->s.state != CDV_LIVE)
         return;
     if (!S.encoding) {
         size_t cap;
         uint8_t *dst;
         vp8e_src src;
         uint32_t now = now_ms();
-        if (S.s.vstate != VID_FREE || now - S.last_frame < (uint32_t)frame_ms)
+        if (desk->s.vstate != VID_FREE || now - S.last_frame < (uint32_t)frame_ms)
             return;
-        if (cdv_take_refresh(&S.s))
+        if (cdv_take_refresh(&desk->s))
             S.key = 1;
         if (!S.key && !scr.ndirty && !screen_pending(&scr, now))
             return;
@@ -617,14 +764,14 @@ static void frame_step(void)
             src.u = scr.u;
             src.v = scr.v;
         }
-        dst = cdv_video_begin(&S.s, &cap);
+        dst = cdv_video_begin(&desk->s, &cap);
         if (!dst)
             return;
         src.ystride = scr.ystride;
         src.uvstride = scr.uvstride;
         vp8e_set_hints(S.enc, S.key || !scr.nhints ? NULL : scr.hints);
         if (!vp8e_begin(S.enc, &src, S.key ? NULL : enc_dirty, S.key, dst, cap)) {
-            cdv_video_abort(&S.s);
+            cdv_video_abort(&desk->s);
             return;
         }
         S.encoding = 1;
@@ -646,13 +793,13 @@ static void frame_step(void)
         S.t_enc += now_ms() - t;
         S.f_enc += now_ms() - t;
         if (!len) {
-            cdv_video_abort(&S.s);
+            cdv_video_abort(&desk->s);
             S.key = 1;
             cdv_log("frame did not fit; a keyframe next");
             return;
         }
         vp8e_last_stats(S.enc, &st);
-        cdv_video_commit(&S.s, len, st.key);
+        cdv_video_commit(&desk->s, len, st.key);
         if (!st.key) {
             int i, n = scr.mbw * scr.mbh;
             screen_sent_some(&scr, enc_dirty);
@@ -687,7 +834,7 @@ static void session_report(void)
 {
     uint32_t now = now_ms(), span = now - S.last_report;
     unsigned long trapped, ignored;
-    if (span < 10000 || S.s.state != CDV_LIVE)
+    if (!desk || span < 10000 || desk->s.state != CDV_LIVE)
         return;
     screen_stats(&trapped, &ignored);
     cdv_log("%u frames in %u.%u s (%u.%u fps), %u KB, %u macroblocks; ms read %u convert %u "
@@ -705,13 +852,13 @@ static void cursor_step(void)
 {
     int x, y;
     uint32_t now = now_ms();
-    if (S.s.state != CDV_LIVE || now - S.last_cursor < 100)
+    if (!desk || desk->s.state != CDV_LIVE || now - S.last_cursor < 100)
         return;
     S.last_cursor = now;
     if (screen_pointer(&x, &y) && (x != S.cx || y != S.cy)) {
         S.cx = x;
         S.cy = y;
-        cdv_send_cursor_pos(&S.s, x, y);
+        cdv_send_cursor_pos(&desk->s, x, y);
     }
 }
 
@@ -776,8 +923,8 @@ static void rdv_relay(rdv_action *act)
     cdv_log("relay request (%s) from %u.%u.%u.%u via %s", act->initiate ? "punch hole" : "relay",
             act->peer_ip >> 24, act->peer_ip >> 16 & 255, act->peer_ip >> 8 & 255,
             act->peer_ip & 255, act->relay);
-    if (S.fd >= 0) {
-        cdv_log("a session is running; ignoring it");
+    if (!slots_free()) {
+        cdv_log("both sessions are in use; ignoring it");
         return;
     }
     t = tcp_connect(hbbs_ip, hbbs_port, 5000);
@@ -812,7 +959,7 @@ static void rdv_local(rdv_action *act)
     uint8_t buf[512];
     size_t n;
     struct pollfd p;
-    if (S.fd >= 0)
+    if (!slots_free())
         return;
     l = listen_on(0, 0);
     if (l < 0)
@@ -882,6 +1029,61 @@ static void lan_step(void)
 
 /* ---- main ------------------------------------------------------------------ */
 
+static int on_x_io(Display *d)
+{
+    (void)d;
+    if (x_jmp_set)
+        longjmp(x_jmp, 1);
+    cdv_log("X I/O error outside the main loop");
+    exit(1);
+}
+
+static void x_try_open(void)
+{
+    if (x_ok || (int32_t)(now_ms() - x_retry) < 0)
+        return;
+    x_retry = now_ms() + 5000;
+    if (!screen_open(&scr, x_display, prefs.gamma))
+        return;
+    XSetIOErrorHandler(on_x_io);
+    input_init(screen_display());
+    clip_init(screen_display(), clipboard_to_peer);
+    x_ok = 1;
+    cdv_log("display open: %dx%d", scr.width, scr.height);
+}
+
+static void x_lost(void)
+{
+    cdv_log("the X display went away (a logout resets the server); reconnecting");
+    /* Forget the connection first: ending the session would otherwise make
+     * X calls on it, and fail back here. */
+    x_ok = 0;
+    screen_lost();
+    input_init(NULL);
+    if (desk)
+        session_end(desk, "the X display went away");
+    x_retry = now_ms() + 3000;
+}
+
+static void daemonize(void)
+{
+    int fd;
+    if (fork() > 0)
+        exit(0);
+    setsid();
+    if (fork() > 0)
+        exit(0);
+    chdir("/");
+    fd = open("/dev/null", O_RDWR);
+    if (fd >= 0) {
+        dup2(fd, 0);
+        dup2(fd, 1);
+        dup2(fd, 2);
+        if (fd > 2)
+            close(fd);
+    }
+}
+
 static volatile int quit;
 static void on_term(int sig)
 {
@@ -891,14 +1093,16 @@ static void on_term(int sig)
 
 static void usage(void)
 {
-    fprintf(stderr, "usage: C-Desk-Vint [-c prefs] [-d display] [-l logfile] [-p port] [-v]\n");
+    fprintf(stderr, "usage: C-Desk-Vint [-c prefs] [-d display] [-l logfile] [-p port] [-v] [-D] [-i]\n"
+                    "  -D  detach and run as a daemon (log with -l)\n"
+                    "  -i  print this machine's ID and password, and exit\n");
     exit(2);
 }
 
 int main(int argc, char **argv)
 {
     const char *display = NULL, *logpath = NULL;
-    int verbose = 0, i, port = 0;
+    int verbose = 0, i, port = 0, detach = 0, info = 0;
     const char *home = getenv("HOME");
 
     signal(SIGPIPE, SIG_IGN);
@@ -917,9 +1121,22 @@ int main(int argc, char **argv)
             port = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-v"))
             verbose = 1;
+        else if (!strcmp(argv[i], "-D"))
+            detach = 1;
+        else if (!strcmp(argv[i], "-i"))
+            info = 1;
         else
             usage();
     }
+    if (info) {
+        /* Who this machine is to RustDesk (made on first use), then out. */
+        load_prefs();
+        printf("ID: %s\nPassword: %s\nID server: %s\nDirect access: port %d\n", prefs.id,
+               prefs.password, prefs.server[0] ? prefs.server : "(none)", prefs.port);
+        return 0;
+    }
+    if (detach)
+        daemonize();
     cdv_log_open(logpath, verbose);
     cdv_log("%s starting", VERSION_STRING);
     load_prefs();
@@ -933,37 +1150,48 @@ int main(int argc, char **argv)
 
     if (!display && !getenv("DISPLAY"))
         display = ":0";
-    if (!screen_open(&scr, display, prefs.gamma))
-        return 1;
-    input_init(screen_display());
+    x_display = display;
+    /* deadlines are compared as int32 differences of a wrapping clock */
+    x_retry = resolve_at = now_ms();
+    x_try_open();
+    if (!x_ok)
+        cdv_log("no X display yet; trying every 5 s");
 
-    ctlbuf = (uint8_t *)malloc(CTL_CAP);
     vidbuf = (uint8_t *)malloc(VID_CAP);
-    inbuf = (uint8_t *)malloc(IN_CAP);
-    encmem = (uint8_t *)malloc(vp8e_mem_size(scr.width, scr.height) + 16);
-    if (!ctlbuf || !vidbuf || !inbuf || !encmem) {
+    encmem = (uint8_t *)malloc(vp8e_mem_size(MAX_W, MAX_H) + 16);
+    for (i = 0; i < NSLOTS; i++) {
+        slots[i].fd = -1;
+        slots[i].ctl = (uint8_t *)malloc(CTL_CAP);
+        slots[i].in = (uint8_t *)malloc(IN_CAP);
+        slots[i].work = (uint8_t *)malloc(WORK_CAP);
+        slots[i].files = (cdv_files *)malloc(cdv_files_size());
+        if (!slots[i].ctl || !slots[i].in || !slots[i].work || !slots[i].files)
+            encmem = NULL;
+    }
+    if (!vidbuf || !encmem) {
         cdv_log("out of memory");
         return 1;
     }
+    if (strcmp(prefs.files, "off"))
+        files_fs = fs_posix(strcmp(prefs.files, "/") ? prefs.files : "");
     encmem = (uint8_t *)(((unsigned long)encmem + 15) & ~15ul);
-    refmem = (uint8_t *)malloc(vp8e_ref_size(scr.width, scr.height)); /* motion vectors */
-    enc_dirty = (uint8_t *)calloc((size_t)(scr.mbw * scr.mbh), 1);
-    dirty_age = (uint8_t *)calloc((size_t)(scr.mbw * scr.mbh), 1);
-    flat_y = (uint8_t *)malloc((size_t)scr.ystride * scr.mbh * 16);
-    flat_u = (uint8_t *)malloc((size_t)scr.uvstride * scr.mbh * 8);
-    flat_v = (uint8_t *)malloc((size_t)scr.uvstride * scr.mbh * 8);
+    refmem = (uint8_t *)malloc(vp8e_ref_size(MAX_W, MAX_H)); /* motion vectors */
+    enc_dirty = (uint8_t *)calloc((size_t)(MAX_W / 16 * MAX_H / 16), 1);
+    dirty_age = (uint8_t *)calloc((size_t)(MAX_W / 16 * MAX_H / 16), 1);
+    flat_y = (uint8_t *)malloc((size_t)MAX_W * MAX_H);
+    flat_u = (uint8_t *)malloc((size_t)MAX_W * MAX_H / 4);
+    flat_v = (uint8_t *)malloc((size_t)MAX_W * MAX_H / 4);
 
     ident.id = prefs.id;
     ident.sign_sk = sign_sk;
     ident.password = prefs.password;
     ident.salt = "cdeskvint";
     ident.hostname = hostname;
-    ident.width = scr.width;
-    ident.height = scr.height;
+    ident.width = 1024; /* set from the screen at each desktop login */
+    ident.height = 768;
     ident.cursor_embedded = 0;
     ident.platform = "Linux";
 
-    S.fd = -1;
     tcp_direct = listen_on((uint16_t)prefs.port, 0);
     if (tcp_direct < 0)
         cdv_log("cannot listen on port %d; direct IP access is off", prefs.port);
@@ -972,22 +1200,29 @@ int main(int argc, char **argv)
     cdv_log("ID %s, password %s; direct access on port %d; ID server %s", prefs.id,
             prefs.password, prefs.port, prefs.server[0] ? prefs.server : "(none)");
 
+    if (setjmp(x_jmp))
+        x_lost();
+    x_jmp_set = 1;
     while (!quit) {
-        struct pollfd p[5];
-        int np = 0, ix = -1, id = -1, ir = -1, il = -1, is = -1, timeout = 200;
+        struct pollfd p[4 + NSLOTS];
+        int np = 0, ix = -1, id = -1, ir = -1, il = -1, is[NSLOTS], timeout = 200, k;
         size_t n;
 
         rdv_step();
-        if (S.fd >= 0 && S.s.state == CDV_LIVE) {
+        x_try_open();
+        if (desk && desk->s.state == CDV_LIVE) {
             /* busy: something to read back or a frame being encoded */
-            if (S.encoding || (S.s.vstate == VID_FREE && (S.key || scr.ndirty || screen_pending(&scr, now_ms()))))
+            if (S.encoding || (desk->s.vstate == VID_FREE &&
+                               (S.key || scr.ndirty || screen_pending(&scr, now_ms()))))
                 timeout = S.encoding ? 0 : 10;
             else
                 timeout = 30;
         }
-        ix = np;
-        p[np].fd = screen_fd();
-        p[np++].events = POLLIN;
+        if (x_ok) {
+            ix = np;
+            p[np].fd = screen_fd();
+            p[np++].events = POLLIN;
+        }
         if (tcp_direct >= 0) {
             id = np;
             p[np].fd = tcp_direct;
@@ -1003,12 +1238,18 @@ int main(int argc, char **argv)
             p[np].fd = udp_lan;
             p[np++].events = POLLIN;
         }
-        if (S.fd >= 0) {
-            is = np;
-            p[np].fd = S.fd;
+        for (k = 0; k < NSLOTS; k++) {
+            is[k] = -1;
+            if (slots[k].fd < 0)
+                continue;
+            is[k] = np;
+            p[np].fd = slots[k].fd;
             p[np].events = POLLIN;
-            if (cdv_out_peek(&S.s, &n), n)
+            if (cdv_out_peek(&slots[k].s, &n), n)
                 p[np].events |= POLLOUT;
+            /* a download keeps the file manager busy */
+            if (slots[k].kind == K_FILES && timeout > 10)
+                timeout = 10;
             np++;
         }
         for (i = 0; i < np; i++)
@@ -1018,7 +1259,7 @@ int main(int argc, char **argv)
             sleep(1);
             continue;
         }
-        if (p[ix].revents & POLLIN)
+        if (ix >= 0 && (p[ix].revents & POLLIN))
             screen_events(&scr);
         if (id >= 0 && (p[id].revents & POLLIN)) {
             int fd = accept(tcp_direct, NULL, NULL);
@@ -1029,18 +1270,27 @@ int main(int argc, char **argv)
             rdv_input_step();
         if (il >= 0 && (p[il].revents & POLLIN))
             lan_step();
-        if (S.fd >= 0) {
-            int rd = is >= 0 && (p[is].revents & (POLLIN | POLLHUP | POLLERR));
-            if (session_io(rd)) {
+        for (k = 0; k < NSLOTS; k++) {
+            slot *sl = &slots[k];
+            int rd;
+            if (sl->fd < 0 || is[k] < 0)
+                continue;
+            rd = (p[is[k]].revents & (POLLIN | POLLHUP | POLLERR)) != 0;
+            if (!session_io(sl, rd))
+                continue;
+            if (sl == desk) {
                 screen_events(&scr);
+                clip_tick();
                 frame_step();
                 cursor_step();
                 session_report();
-                session_io(0);
             }
+            if (sl->fd >= 0)
+                session_io(sl, 0);
         }
     }
-    session_end("the agent is stopping");
+    for (i = 0; i < NSLOTS; i++)
+        session_end(&slots[i], "the agent is stopping");
     cdv_log("stopped");
     return 0;
 }
