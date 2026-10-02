@@ -1240,6 +1240,11 @@ static void daemonize(void)
     if (fork() > 0)
         exit(0);
     chdir("/");
+    /* Nothing inherited: a pipe left open here keeps whoever started us
+     * waiting for its end (the settings panel reading its helper, which IRIX
+     * 5.3's sh hands down on a high descriptor). */
+    for (fd = 3; fd < 256; fd++)
+        close(fd);
     fd = open("/dev/null", O_RDWR);
     if (fd >= 0) {
         dup2(fd, 0);
