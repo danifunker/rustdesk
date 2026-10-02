@@ -35,3 +35,12 @@ INDIGO=host scripts/indigo.py link              # link there, fetch build/C-Desk
 `scripts/indigo.py` drives the IRIX machine over telnet (5.3 has no ssh): it
 types one small file through the terminal -- `tools/irix/xfer.c`, built there
 with `cc` -- and moves everything else over TCP with it.
+
+## Known limits
+
+- **8-bit displays only, for now** (Entry/XL graphics): the agent refuses a
+  deeper root window. 24-bit is planned (RESUME.md section 7).
+- **The pointer is a plain arrow on the client**, wherever IRIX's is; IRIX's
+  own shapes (the text cursor, the watch, launch feedback) are not sent.
+- The Indigo this was built on has no route off its LAN: connect by IP there,
+  or give the machine a gateway and DNS to use an ID server.

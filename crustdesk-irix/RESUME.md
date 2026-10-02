@@ -243,15 +243,88 @@ nothing leaks.
   reboot: `install.sh` was not run. Everything else testing made was removed;
   `/tmp/t.c`, `/tmp/t1`, `/tmp/t2` predate this work and are the user's.
 
-## 7. Next
+## 7. Next: the user's decisions of 2026-10-02
 
-- A real RustDesk client against it (by IP on the LAN today).
-- The ID server, once the Indigo has a route out (or a LAN-side hbbs).
-- Speed: the ~40 ms a frame for 3072 skipped macroblocks' modes; coded text
-  at ~2.7 ms a macroblock (tokens ~20%, the rest spread over prediction,
-  transforms and reconstruction); a refresh pass that sharpens what was sent
-  coarsely.
-- 24-bit displays (Indy XL24, Indigo2): `yuv.c` already converts 32-bit; the
-  readback and comparison are 8-bit only.
-- IRIX's own pointer shapes (no XFixes: perhaps from XTrap's DefineCursor
-  requests).
+The user's answers to the first round (the order is RESUME-PROMPT.md's):
+
+1. **Higher-powered SGIs (24-bit) must be supported, adjustable at run time.**
+   Today the 8-bit limit is code, not a setting: `screen_open` refuses a root
+   that is not 8 bits deep (`src/screen.c`, "only 8 is supported yet"), every
+   readback, compare and copy is one byte a pixel, conversion goes through the
+   colormap tables, and `MAX_W`/`MAX_H` (1280x1024, `src/main.c`) size the
+   buffers at compile time. What it takes:
+   - Detect the depth and pixel layout (the visual's masks -- SGI's 24-bit
+     TrueColor is not necessarily xRGB; `yuv.c`'s 32-bit path assumes xRGB
+     big-endian), read 4 bytes a pixel, compare and convert from that; a prefs
+     setting (say `capture=auto|8|24|readdisplay`) to override.
+   - **Mixed depths**: on Indigo2/Indy 24-bit boards the root is often an
+     8-bit PseudoColor with 24-bit TrueColor windows over it; a read of the
+     root is undefined where a window of another depth shows. SGI's
+     **ReadDisplay** extension returns the composited picture -- probed on the
+     Indigo 2026-10-01: `XReadDisplay(dpy, root, x, y, w, h, 0, &ret)` gave
+     32 bpp RGB (0xd9d9d9 for a grey menu) and raised an X error 129 that did
+     no harm. It goes over the socket (no SHM), so it is slower a pixel.
+   - Allocate from the real screen size at login, not MAX_W/MAX_H.
+   - The binary (MIPS I, o32) runs on IRIX 6.5 too, so the user's O2 (24-bit,
+     6.5) could test it -- ask for access; nothing here has run on 24 bits.
+2. **The pointer** stays a plain arrow, but the documents must say so (done:
+   `README.md`, `pkg/README.txt`). Open question from the user: **what does
+   the client see while IRIX launches a program and the pointer flashes?**
+   Nothing: the client draws the arrow we sent once, at the position we send
+   every 100 ms. Find out how IRIX makes that feedback (XTrap log of
+   CreateGlyphCursor 94, CreateCursor 93, ChangeWindowAttributes with
+   CWCursor, GrabPointer 26, ChangeActivePointerGrab 30, RecolorCursor 96,
+   while launching from the Toolchest) and decide whether to send cursor
+   shapes (cdv_send_cursor takes RGBA; glyph cursors would need the cursor
+   font's bitmaps).
+3. **The file-manager username.** IRIX already sends the user logged in on
+   `:0` (utmp; `console_user()` in `src/main.c`), root at the login screen --
+   the agent runs as root but reports the desktop's user, which is what the
+   client means. **The Mac must send "none"** (the user's choice): set
+   `ident.username = "none"` in `../crustdesk-macos-classic/src/mac/main.c`
+   where `ident` is filled (~line 2009); any non-empty name satisfies the
+   client. Test with a real client's file manager if one can be driven
+   (cdvpoke ignores PeerInfo), at least in QEMU (`scripts/q800.sh`).
+4. **Networking** is the user's to finish (a default route via 192.168.99.1
+   and DNS). They want the agent to work by name over DNS and over **https**:
+   - DNS: the agent resolves with `gethostbyname` (IRIX's resolver,
+     `/etc/resolv.conf`); test `server=` by name once it is set up (the public
+     `rs-ny.rustdesk.com` and the user's own). The core's own DNS client
+     (`src/core/dns.c`, the Mac's fallback) is not built here.
+   - https: **not built on IRIX yet.** The core has the console client
+     (`console.c`, `https.c`, BearSSL in `third_party/bearssl`, ISRG anchors
+     from `tools/gen-anchors.py`): `/api/sysinfo` and the 15 s
+     `/api/heartbeat`, which put the machine in a RustDesk console's device
+     list. A TLS handshake took ~11 s on a 68040; on the R3000 it would stall
+     sessions if done in the main loop -- run it in a forked child with a pipe.
+     `api=` in prefs, empty by default (generic builds carry no console; the
+     user's is `https://remote.home.dani.tech`, for their own prefs only).
+     Certificate dates need the Indigo's clock (it is right today).
+5. **Boot start through chkconfig: approved.** `pkg/install.sh` already
+   copies the rc script, links S99/K01 and runs `chkconfig -f cdeskvint on`;
+   it has never been run. Run it on the Indigo (stop the development agent in
+   /usr/tmp first; the installed one gets its own identity in
+   `/var/C-Desk-Vint/prefs`), check `chkconfig` lists `cdeskvint on`, reboot
+   and check it registers and serves at the login screen.
+6. **inst packaging, then the release.** The user asked whether IRIX 5.3's
+   `inst` can install it: not as it stands (a tar and install.sh). It can be
+   made so:
+   - `gendist` is in **`inst_dev.sw`**, not installed on the Indigo but on its
+     own CD: `/CDROM2/dist/inst_dev.*` (`inst -f /CDROM2/dist`, pick
+     inst_dev.sw). The user's **irixscsitb** already makes 5.3 inst images
+     with the guest's own gendist and ships them as `/dist53` on its CD (the
+     Indigo's `/CDROM` is that CD): `~/repos/irixscsitb/scripts/iris-gendist.sh`,
+     `docs/ci-iris.md` ("Driving the guest" lessons), `inst/README.md`. The
+     IRIX 6.5 agent's templates are `../rustdesk-irix65-agent/inst/*.spec,*.idb`
+     (the idb must stay sorted by destination path).
+   - The product: /usr/local/sbin/C-Desk-Vint, /etc/init.d/cdeskvint and its
+     rc links, the chkconfig flag file (`config(noupdate)`), the read-me; an
+     exitop that turns chkconfig on and starts it, a removeop that stops it.
+   - **Release**: the user wants it in the version matrix of the
+     `r-deskway-1.5.0` release, like the other vintage builds (see the memory
+     notes: assets named for the platform, `C-Desk-Vint-IRIX-5.3+-<build>.*`;
+     notes are CRLF; say exactly what was tested and where). Release the build
+     that was installed and run on the Indigo; ask before uploading.
+
+Still open from before: speed for coded text (~2.7 ms a macroblock on the
+R3000) and a refresh pass that sharpens what was sent coarsely.
