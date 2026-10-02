@@ -21,21 +21,28 @@ CC    := tools/irix-gcc
 CORE  := ../crustdesk-macos-classic/src/core
 TP    := ../crustdesk-macos-classic/third_party
 NACL  := $(TP)/libsodium-min
+BSSL  := $(TP)/bearssl
 O     := build/obj
 INC   := -Isrc -I$(CORE) -I../crustdesk-macos-classic/host -I$(NACL)/include -I$(NACL)/include/sodium -I$(TP)/zstd-decoder \
-         -I$(SYSROOT)/usr/include/X11
+         -I$(SYSROOT)/usr/include/X11 -I$(BSSL)/inc
 CFLAGS := -std=gnu99 -O2 -Wall -Wno-unused-parameter -Wno-unused-function \
           -include src/compat.h $(INC) -DCONFIGURED=1 $(EXTRA_CFLAGS)
 
-IRIX_SRC := main screen input clip log compat
-CORE_SRC := vp8enc pb sha256 session rng rdv unzstd files macbin
+IRIX_SRC := main screen input clip log compat report
+CORE_SRC := vp8enc pb sha256 session rng rdv unzstd files macbin console https anchors macroman
 HOST     := ../crustdesk-macos-classic/host
 NACL_SRC := $(shell find $(NACL) -name '*.c')
+# BearSSL, for the console's https. Linked from an archive made on the IRIX
+# machine, so only what TLS uses ends up in the agent. IRIX 5.3 has no
+# /dev/urandom: https.c seeds it, and gives it the date.
+BSSL_SRC := $(shell find $(BSSL)/src -name '*.c')
+BSSL_OBJ := $(patsubst %.c,$(O)/bssl_%.o,$(notdir $(BSSL_SRC)))
+BSSL_DEF := -DBR_USE_URANDOM=0 -DBR_USE_GETENTROPY=0 -DBR_USE_UNIX_TIME=0 -DBR_RDRAND=0
 
 OBJS := $(IRIX_SRC:%=$(O)/%.o) $(CORE_SRC:%=$(O)/core_%.o) $(O)/fs_posix.o \
         $(patsubst %.c,$(O)/nacl_%.o,$(notdir $(NACL_SRC))) $(O)/zstddeclib.o
 
-all: $(OBJS) $(O)/LINK
+all: $(OBJS) $(BSSL_OBJ) $(O)/LINK
 
 $(O):
 	mkdir -p $(O)
@@ -56,13 +63,18 @@ vpath %.c $(sort $(dir $(NACL_SRC)))
 $(O)/nacl_%.o: %.c | $(O)
 	$(CC) $(CFLAGS) -w -c $< -o $@
 
+vpath %.c $(sort $(dir $(BSSL_SRC)))
+$(O)/bssl_%.o: %.c | $(O)
+	$(CC) -O2 -w -include src/compat.h -I$(BSSL)/inc -I$(BSSL)/src $(BSSL_DEF) -c $< -o $@
+
 $(O)/zstddeclib.o: $(TP)/zstd-decoder/zstddeclib.c | $(O)
 	$(CC) -O2 -w -include src/compat.h -DHUF_FORCE_DECOMPRESS_X1 \
 	    -DZSTD_FORCE_DECOMPRESS_SEQUENCES_SHORT -DZSTD_NO_INLINE -c $< -o $@
 
 # What the IRIX side runs to link: the object list and the libraries.
 $(O)/LINK: Makefile | $(O)
-	echo "cc $(IRIX_LDFLAGS) -o C-Desk-Vint $(notdir $(OBJS)) -lXTrap -lXt -lXtst -lXext -lX11 -lm" > $@
+	echo "rm -f libbssl.a; ar crs libbssl.a bssl_*.o" > $@
+	echo "cc $(IRIX_LDFLAGS) -o C-Desk-Vint $(notdir $(OBJS)) libbssl.a -lXTrap -lXt -lXtst -lXext -lX11 -lm" >> $@
 
 toolchain:
 	sh scripts/fetch-toolchain.sh $(TOOLCHAIN)

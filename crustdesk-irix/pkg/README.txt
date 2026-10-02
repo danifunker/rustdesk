@@ -49,6 +49,8 @@ Connecting
   the ID into the client, then the password. The SGI must be able to reach
   the server: it needs a default route and, for a server given by name, DNS
   (/etc/resolv.conf). Many SGIs on a home network have neither set up.
+  If the server's address changes, the agent looks the name up again once
+  the server has not answered for a minute and a half.
 - Directly by IP address on the same network: in the client, type the SGI's
   IP address as the ID. This needs no server at all.
 
@@ -68,6 +70,8 @@ One setting a line. Restart the agent after a change:
     gamma=1.7       the monitor gamma to undo (default: the system's)
     files=/         what the file manager may see; "off" for no file transfer
     name=...        what peers see this machine called (default: its name)
+    api=https://... a RustDesk console (Pro, CortenDesk) to appear in: the
+                    agent reports in every 15 s over https. Empty: none.
 
 id, uuid and seed are this machine's identity: keep them, or it becomes a
 new machine to every client. The seed is a private key: the file is
@@ -92,3 +96,7 @@ What it does not do (yet)
 - 24-bit displays; audio; more than one screen.
 - The pointer is shown as a plain arrow on the client, not IRIX's own shapes.
 - A client cannot restart or shut down the SGI.
+- The console's https handshake takes the R3000 about 7 seconds (it runs in
+  a separate, lower-priority process); a server that allows less than that
+  -- the one tested allows 10 -- will not list the machine. Certificates are
+  checked against ISRG's roots and Let's Encrypt's own intermediates only.

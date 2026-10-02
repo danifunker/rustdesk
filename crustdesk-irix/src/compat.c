@@ -12,6 +12,7 @@
 
 #include <stdint.h>
 #include <string.h>
+#include <sys/time.h>
 
 typedef struct {
     char *p;
@@ -177,6 +178,25 @@ int cdv_snprintf(char *buf, size_t n, const char *fmt, ...)
 }
 
 /* ---- libgcc, the parts MIPS I needs ------------------------------------- */
+
+uint32_t cdv_ms(void)
+{
+    static uint32_t last, skew;
+    static int started;
+    struct timeval tv;
+    uint32_t t;
+    int32_t d;
+    gettimeofday(&tv, 0);
+    t = (uint32_t)tv.tv_sec * 1000u + (uint32_t)tv.tv_usec / 1000u + skew;
+    d = (int32_t)(t - last);
+    if (started && (d < 0 || d > 60000)) {
+        skew += last - t;
+        t = last;
+    }
+    started = 1;
+    last = t;
+    return t;
+}
 
 uint32_t __bswapsi2(uint32_t x);
 uint64_t __bswapdi2(uint64_t x);

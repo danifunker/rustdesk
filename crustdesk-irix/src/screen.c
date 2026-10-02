@@ -67,9 +67,7 @@ static uint8_t *scanflag;
 
 static uint32_t now_ms(void)
 {
-    struct timeval tv;
-    gettimeofday(&tv, 0);
-    return (uint32_t)(tv.tv_sec * 1000 + tv.tv_usec / 1000);
+    return cdv_ms();
 }
 
 /* ---- damage ----------------------------------------------------------------- */

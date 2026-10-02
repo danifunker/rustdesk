@@ -26,6 +26,11 @@ void cdv_log_open(const char *path, int verbose)
     }
 }
 
+int cdv_log_fd(void)
+{
+    return logf ? fileno(logf) : -1;
+}
+
 static void vlog(const char *fmt, va_list ap)
 {
     char line[512];

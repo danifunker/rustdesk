@@ -20,3 +20,18 @@ $(O)/LINK: | $(O)
 	echo "cc -p -o encbench encbench.o vp8enc.o yuv.o compat.o -lX11" > $@
 clean:
 	rm -rf $(O)
+
+# The TLS benchmark: BearSSL's public-key operations, timed on the machine.
+# Linked against the agent's BearSSL archive (make; scripts/indigo.py link):
+#   make -C bench tls; scripts/indigo.py linkobj build/tlsbench /usr/tmp/cdv-tlsbench
+TO := ../build/tlsbench
+tls: $(TO)/tlsbench.o $(TO)/compat.o $(TO)/LINK
+$(TO):
+	mkdir -p $(TO)
+$(TO)/tlsbench.o: tlsbench.c | $(TO)
+	$(CC) -std=gnu99 -O2 -include ../src/compat.h -I../../crustdesk-macos-classic/third_party/bearssl/inc -c $< -o $@
+$(TO)/compat.o: ../src/compat.c | $(TO)
+	$(CC) $(FLAGS) -c $< -o $@
+$(TO)/LINK: | $(TO)
+	echo "cc -o tlsbench tlsbench.o compat.o /usr/tmp/cdv-build/libbssl.a" > $@
+.PHONY: tls

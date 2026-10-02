@@ -14,6 +14,7 @@
 #include "clip.h"
 #include "input.h"
 #include "log.h"
+#include "report.h"
 #include "screen.h"
 #include "unzstd.h"
 
@@ -39,6 +40,7 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <sys/utsname.h>
 #include <utmp.h>
 #include <time.h>
@@ -80,14 +82,13 @@ static struct {
     char relay[64];
     char name[64];
     char files[256];      /* what the file manager sees as "/"; "off" for none */
+    char api[128];        /* a console's URL, for its device list; none by default */
 } prefs;
 static char prefs_path[256];
 
 static uint32_t now_ms(void)
 {
-    struct timeval tv;
-    gettimeofday(&tv, 0);
-    return (uint32_t)(tv.tv_sec * 1000 + tv.tv_usec / 1000);
+    return cdv_ms();
 }
 
 static const char *hex(const uint8_t *b, int n, char *out)
@@ -156,6 +157,8 @@ static void read_prefs(void)
             copy(prefs.name, eq, sizeof prefs.name);
         else if (!strcmp(line, "files"))
             copy(prefs.files, eq, sizeof prefs.files);
+        else if (!strcmp(line, "api"))
+            copy(prefs.api, eq, sizeof prefs.api);
     }
     fclose(f);
 }
@@ -174,8 +177,8 @@ static void write_prefs(void)
             prefs.password, prefs.port, prefs.q, prefs.scan_ms);
     if (prefs.gamma >= 0)
         fprintf(f, "gamma=%g\n", prefs.gamma);
-    fprintf(f, "server=%s\nkey=%s\nrelay=%s\nname=%s\nfiles=%s\n", prefs.server, prefs.key,
-            prefs.relay, prefs.name, prefs.files);
+    fprintf(f, "server=%s\nkey=%s\nrelay=%s\nname=%s\nfiles=%s\napi=%s\n", prefs.server,
+            prefs.key, prefs.relay, prefs.name, prefs.files, prefs.api);
     fprintf(f, "uuid=%s\nseed=%s\n", hex(prefs.uuid, 16, u), hex(prefs.seed, 32, k));
     fclose(f);
 }
@@ -910,25 +913,92 @@ static void rdv_setup(void)
         rdv_split_host(prefs.server, hbbs_host, sizeof hbbs_host, &hbbs_port, RDV_PORT);
 }
 
+/* Looking the ID server up without waiting on it: gethostbyname can take
+ * tens of seconds when DNS is unreachable, and the main loop must not. A child
+ * asks, writes the address down a pipe, and exits. */
+static int look_fd = -1;
+static pid_t look_pid;
+static uint32_t look_began;
+
+static void lookup_start(const char *host)
+{
+    int p[2];
+    pid_t pid;
+    if (pipe(p) < 0)
+        return;
+    pid = fork();
+    if (pid < 0) {
+        close(p[0]);
+        close(p[1]);
+        return;
+    }
+    if (pid == 0) {
+        /* none of the agent's connections: a session it closes must close */
+        uint32_t ip = 0;
+        int fd;
+        for (fd = 3; fd < 256; fd++)
+            if (fd != p[1])
+                close(fd);
+        resolve(host, &ip);
+        write(p[1], &ip, 4);
+        _exit(0);
+    }
+    close(p[1]);
+    nonblock(p[0]);
+    look_fd = p[0];
+    look_pid = pid;
+    look_began = now_ms();
+}
+
+/* -1 still asking, 0 no answer, 1 *ip is the address. */
+static int lookup_done(uint32_t *ip)
+{
+    uint32_t v = 0;
+    int r = read(look_fd, (char *)&v, 4);
+    if (r < 0 && errno == EAGAIN) {
+        if ((int32_t)(now_ms() - look_began) < 60000)
+            return -1;
+        kill(look_pid, SIGKILL);
+    }
+    close(look_fd);
+    look_fd = -1;
+    waitpid(look_pid, NULL, 0);
+    if (r != 4 || !v)
+        return 0;
+    *ip = v;
+    return 1;
+}
+
 static void rdv_step(void)
 {
     uint8_t buf[2048];
     size_t n;
     struct sockaddr_in sa;
-    uint32_t now = now_ms();
+    uint32_t now = now_ms(), ip;
     if (!prefs.server[0])
         return;
-    if (!hbbs_ip) {
-        if ((int32_t)(now - resolve_at) < 0)
-            return;
-        resolve_at = now + 30000;
-        if (!resolve(hbbs_host, &hbbs_ip)) {
+    if (look_fd >= 0) {
+        int r = lookup_done(&ip);
+        if (r == 1 && ip != hbbs_ip) {
+            cdv_log("ID server %s is %u.%u.%u.%u", hbbs_host, ip >> 24, ip >> 16 & 255,
+                    ip >> 8 & 255, ip & 255);
+            hbbs_ip = ip;
+        } else if (r == 0 && !hbbs_ip) {
             cdv_log("cannot resolve %s; trying again in 30 s", hbbs_host);
-            return;
         }
-        cdv_log("ID server %s is %u.%u.%u.%u", hbbs_host, hbbs_ip >> 24, hbbs_ip >> 16 & 255,
-                hbbs_ip >> 8 & 255, hbbs_ip & 255);
     }
+    /* Not yet known, or no answer from it for a while (a server on a home
+     * line changes address): look it up (again). */
+    if (look_fd < 0 && (int32_t)(now - resolve_at) >= 0 &&
+        (!hbbs_ip || (int32_t)(now - rdv.answered_at) > 90000)) {
+        resolve_at = now + (hbbs_ip ? 60000 : 30000);
+        if (inet_addr(hbbs_host) != (unsigned long)-1)
+            resolve(hbbs_host, &hbbs_ip);
+        else
+            lookup_start(hbbs_host);
+    }
+    if (!hbbs_ip)
+        return;
     if (udp_rdv < 0 && (udp_rdv = listen_on(0, 1)) < 0)
         return;
     n = rdv_tick(&rdv, now, buf, sizeof buf);
@@ -1052,6 +1122,39 @@ static void lan_step(void)
     n = lan_answer(buf, (size_t)r, prefs.id, prefs.id, hostname, out, sizeof out);
     if (n)
         sendto(udp_lan, (const char *)out, (int)n, 0, (struct sockaddr *)&from, sizeof from);
+}
+
+/* ---- the console ------------------------------------------------------------- */
+
+/* The reporter runs as a child (report.h); if it dies, start another after a
+ * minute. */
+static pid_t reporter;
+static uint32_t reporter_at;
+
+static void report_step(void)
+{
+    report_config rc;
+    int status;
+    if (!prefs.api[0])
+        return;
+    if (reporter > 0) {
+        if (waitpid(reporter, &status, WNOHANG) != reporter)
+            return;
+        cdv_log("console: the reporter stopped (status %d); again in a minute", status);
+        reporter = 0;
+        reporter_at = now_ms() + 60000;
+    }
+    if (reporter < 0 || (int32_t)(now_ms() - reporter_at) < 0)
+        return;
+    rc.url = prefs.api;
+    rc.id = prefs.id;
+    rc.uuid = prefs.uuid;
+    rc.secret = prefs.seed;
+    rc.hostname = hostname;
+    rc.username = console_user;
+    reporter = report_start(&rc);
+    if (reporter == 0)
+        reporter_at = now_ms() + 60000;
 }
 
 /* ---- main ------------------------------------------------------------------ */
@@ -1201,7 +1304,7 @@ int main(int argc, char **argv)
         display = ":0";
     x_display = display;
     /* deadlines are compared as int32 differences of a wrapping clock */
-    x_retry = resolve_at = self_check = now_ms();
+    x_retry = resolve_at = self_check = reporter_at = now_ms();
     x_try_open();
     if (!x_ok)
         cdv_log("no X display yet; trying every 5 s");
@@ -1249,6 +1352,8 @@ int main(int argc, char **argv)
     rdv_setup();
     cdv_log("ID %s, password %s; direct access on port %d; ID server %s", prefs.id,
             prefs.password, prefs.port, prefs.server[0] ? prefs.server : "(none)");
+    if (prefs.api[0])
+        cdv_log("console: reporting to %s", prefs.api);
 
     if (setjmp(x_jmp))
         x_lost();
@@ -1261,6 +1366,7 @@ int main(int argc, char **argv)
         rdv_step();
         x_try_open();
         self_step();
+        report_step();
         if (desk && desk->s.state == CDV_LIVE) {
             /* busy: something to read back or a frame being encoded */
             if (S.encoding || (desk->s.vstate == VID_FREE &&
@@ -1342,6 +1448,8 @@ int main(int argc, char **argv)
     }
     for (i = 0; i < NSLOTS; i++)
         session_end(&slots[i], "the agent is stopping");
+    if (reporter > 0)
+        kill(reporter, SIGTERM);
     cdv_log("stopped");
     return 0;
 }
