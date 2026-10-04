@@ -44,12 +44,14 @@ enum RdCapture {}
 
 extern "C" {
     fn rd_display_size(w: *mut c_int, h: *mut c_int) -> c_int;
+    fn rd_capture_screen_size(c: *mut RdCapture, w: *mut c_int, h: *mut c_int) -> c_int;
     fn rd_capture_open(display: *const c_char) -> *mut RdCapture;
     fn rd_capture_open_forced(display: *const c_char, max_path: c_int) -> *mut RdCapture;
     fn rd_capture_close(c: *mut RdCapture);
     fn rd_capture_width(c: *const RdCapture) -> c_int;
     fn rd_capture_height(c: *const RdCapture) -> c_int;
     fn rd_capture_depth(c: *const RdCapture) -> c_int;
+    fn rd_capture_indexed(c: *const RdCapture) -> c_int;
     fn rd_capture_stride(c: *const RdCapture) -> c_int;
     fn rd_capture_path(c: *const RdCapture) -> c_int;
     fn rd_capture_pixel_order(c: *const RdCapture) -> c_int;
@@ -204,11 +206,20 @@ impl Capturer {
         unsafe { rd_capture_path(self.inner) }
     }
 
+    /// An 8-bit colormapped screen, expanded through its colormap by the shim.
+    /// The canvas is A,R,G,B either way; this is for saying so in the log.
+    pub fn indexed(&self) -> bool {
+        unsafe { rd_capture_indexed(self.inner) != 0 }
+    }
+
     pub fn path_name(&self) -> &'static str {
-        match self.path() {
-            PATH_DAMAGE => "DAMAGE + MIT-SHM",
-            PATH_SHM => "MIT-SHM, full screen per poll",
-            PATH_GETIMAGE => "XGetImage (slow fallback)",
+        match (self.path(), self.indexed()) {
+            (PATH_DAMAGE, false) => "DAMAGE + MIT-SHM",
+            (PATH_DAMAGE, true) => "DAMAGE + MIT-SHM, 8-bit colormap",
+            (PATH_SHM, false) => "MIT-SHM, full screen per poll",
+            (PATH_SHM, true) => "MIT-SHM, 8-bit colormap, full screen per poll",
+            (PATH_GETIMAGE, false) => "XGetImage (slow fallback)",
+            (PATH_GETIMAGE, true) => "XGetImage, 8-bit colormap (slow fallback)",
             _ => "?",
         }
     }
@@ -412,16 +423,18 @@ impl Capturer {
     pub fn refresh(&mut self) -> bool {
         // Rate-limited, because `session` calls this at the top of every pass
         // of the message loop and a resolution does not change several times a
-        // second. It is a bare X connection rather than a whole capture
-        // context, but a connection per frame is still not free.
+        // second.
         match self.last_refresh {
             Some(t) if t.elapsed() < std::time::Duration::from_secs(5) => return false,
             _ => self.last_refresh = Some(std::time::Instant::now()),
         }
-        let (w, h) = match display_size() {
-            Some(wh) => wh,
-            None => return false,
-        };
+        // Over the capture's own connection, not `display_size`'s fresh one:
+        // while dtwm holds a server grab for a window move, a new connection
+        // cannot even be set up, and this one is impervious to grabs.
+        let (mut w, mut h): (c_int, c_int) = (0, 0);
+        if unsafe { rd_capture_screen_size(self.inner, &mut w, &mut h) } != 0 {
+            return false;
+        }
         if w <= 0 || h <= 0 {
             return false;
         }

@@ -286,6 +286,22 @@ to do, so the server and everything under it have to live inside a **single**
 `ssh` invocation. `scripts/sol9-console-test.sh` does that, and hands the console
 back to CDE when it is finished.
 
+**An 8-bit display** -- an Ultra 5/10's onboard PGX24 (`m64`) at its native
+resolution -- is read as colormap indices and expanded through whichever
+colormap the hardware is showing, re-read every frame; the capture path says
+`8-bit colormap`. Only rows that differ from the last read are expanded, and
+the dirty bands come from that comparison rather than a hash. Measured on a
+333 MHz Ultra 5 at 1280x1024: the XShmGetImage itself is 84 ms (a PCI
+framebuffer read, ~15 MB/s), the row comparison 10 ms, the colormap re-read
+under 1 ms -- so the read is the floor, about seven polls a second.
+
+**Server grabs.** dtwm grabs the server for an interactive move or resize
+(Motif's `freezeOnConfig`). Every X connection the agent holds calls
+`XTestGrabControl(dpy, True)`, so the fake button release that ends a move
+gets through; without it a drag from the peer deadlocked the session and the
+console with it. A fresh `XOpenDisplay` still blocks during a grab, which is
+why the session polls the screen size over the capture's own connection.
+
 Two quirks of this framebuffer worth knowing:
 
 * Every TrueColor visual the XVR-600 offers is **BGR** — red in the low byte.

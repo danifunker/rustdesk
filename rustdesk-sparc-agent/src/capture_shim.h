@@ -55,6 +55,12 @@ typedef struct rd_capture rd_capture;
  * shmget and an XShmAttach each time. */
 int rd_display_size(int *w, int *h);
 
+/* The screen's size as it is now, over the capture's own connection. What a
+ * session polls, rather than rd_display_size: a fresh connection cannot even
+ * be set up while another client holds a server grab, and this one is
+ * impervious to grabs. 0 on success. */
+int rd_capture_screen_size(rd_capture *c, int *w, int *h);
+
 /* Open the display and set up the best available capture path. `display` may
  * be NULL, meaning $DISPLAY. NULL on failure; rd_capture_last_error says why. */
 rd_capture *rd_capture_open(const char *display);
@@ -67,6 +73,10 @@ void rd_capture_close(rd_capture *c);
 int rd_capture_width(const rd_capture *c);
 int rd_capture_height(const rd_capture *c);
 int rd_capture_depth(const rd_capture *c);       /* the screen's depth */
+/* 1 when the screen is 8-bit colormapped (PseudoColor and kin). The canvas is
+ * A,R,G,B all the same: the shim expands each index through the colormap the
+ * hardware is showing, re-read with every full read of the screen. */
+int rd_capture_indexed(const rd_capture *c);
 int rd_capture_stride(const rd_capture *c);      /* bytes per canvas row */
 int rd_capture_path(const rd_capture *c);        /* RD_PATH_* in use */
 int rd_capture_pixel_order(const rd_capture *c); /* RD_ORDER_* */

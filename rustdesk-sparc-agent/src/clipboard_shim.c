@@ -37,6 +37,13 @@
 
 #include <X11/Xlib.h>
 #include <X11/Xatom.h>
+
+/* Carry on through a server grab. dtwm grabs the server for the whole of an
+ * interactive move or resize (Motif's freezeOnConfig, on by default), and a
+ * client that is not impervious has every request held until it lets go --
+ * which it does on the button release that the agent, stuck behind the grab,
+ * can never send. See rd_x_impervious in capture_shim.c. */
+int rd_x_impervious(Display *d);
 #if RD_HAVE_XFIXES
 #include <X11/extensions/Xfixes.h>
 #else
@@ -83,6 +90,7 @@ static int init(void)
         return 0;
     }
     XSetErrorHandler(on_x_error);
+    rd_x_impervious(g_dpy);
     A_CLIPBOARD = XInternAtom(g_dpy, "CLIPBOARD", False);
     A_UTF8      = XInternAtom(g_dpy, "UTF8_STRING", False);
     A_TARGETS   = XInternAtom(g_dpy, "TARGETS", False);

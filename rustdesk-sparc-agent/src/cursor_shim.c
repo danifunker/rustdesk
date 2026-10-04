@@ -25,6 +25,13 @@
 #include <string.h>
 
 #include <X11/Xlib.h>
+
+/* Carry on through a server grab. dtwm grabs the server for the whole of an
+ * interactive move or resize (Motif's freezeOnConfig, on by default), and a
+ * client that is not impervious has every request held until it lets go --
+ * which it does on the button release that the agent, stuck behind the grab,
+ * can never send. See rd_x_impervious in capture_shim.c. */
+int rd_x_impervious(Display *d);
 #if RD_HAVE_XFIXES
 #include <X11/extensions/Xfixes.h>
 #else
@@ -67,6 +74,7 @@ static Display *dpy(void)
         return NULL;
     }
     XSetErrorHandler(on_x_error);
+    rd_x_impervious(g_dpy);
     g_have_xfixes = XFixesQueryExtension(g_dpy, &ev, &er) ? 1 : 0;
     if (!g_have_xfixes)
         fprintf(stderr, "cursor: XFIXES absent; falling back to a drawn arrow\n");

@@ -294,6 +294,24 @@ Two things will stop it dead, both silently:
     /usr/openwin/bin/Xvfb is a wrapper for `Xsun -dev vfb` and the vfb module is
     not installed.
 
+An 8-bit display works too. An Ultra 5 or 10's built-in graphics (PGX24, the
+m64 driver) comes up in 256 colours at its native resolution, and the agent
+reads it through the colour table the screen is showing, re-read every frame.
+The startup line says so:
+
+    capture path: MIT-SHM, 8-bit colormap, full screen per poll
+
+On that machine copying the screen out of video memory takes about 84 ms at
+1280x1024, so the agent looks for changes about seven times a second.
+`m64config -depth 24` would trade resolution for colour depth; the agent does
+not need it.
+
+Window moves are safe to make from the peer. CDE's window manager freezes the
+X server for the length of a move or resize; the agent's connections are made
+immune to that freeze, so the button release that ends a move gets through.
+Before 1.0.1 it did not, and a remote window drag froze the console until
+dtwm was killed.
+
 Two things about the framebuffer itself, on an XVR-600:
 
   * Every TrueColor visual it offers is BGR -- red in the low byte. The agent

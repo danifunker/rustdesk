@@ -44,6 +44,13 @@
 #include "../../rustdesk-ppc-agent/src/linux_keycodes.h"
 #include <X11/extensions/XTest.h>
 
+/* Carry on through a server grab. dtwm grabs the server for the whole of an
+ * interactive move or resize (Motif's freezeOnConfig, on by default), and a
+ * client that is not impervious has every request held until it lets go --
+ * which it does on the button release that the agent, stuck behind the grab,
+ * can never send. See rd_x_impervious in capture_shim.c. */
+int rd_x_impervious(Display *d);
+
 /* Mac modifier masks, as `input.rs` sends them. */
 #define MAC_SHIFT   0x00020000u
 #define MAC_CONTROL 0x00040000u
@@ -88,6 +95,8 @@ static Display *dpy(void)
                                        &major, &minor) ? 1 : 0;
     if (!g_have_xtest)
         fprintf(stderr, "input: XTEST absent; no input will be injected\n");
+    else
+        rd_x_impervious(g_dpy);   /* the release that ends a dtwm move must get through */
     {
         /* How many buttons the pointer has, which is not always five. A wheel
          * is buttons 4 and 5 in X, and this machine's server has a three-button

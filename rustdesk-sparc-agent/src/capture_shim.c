@@ -19,6 +19,7 @@
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/extensions/XShm.h>
+#include <X11/extensions/XTest.h>
 #if RD_HAVE_XDAMAGE
 #include <X11/extensions/Xdamage.h>
 #else
@@ -56,17 +57,34 @@ struct rd_capture {
     int             path;
     int             order;
     int             swap_rb;    /* server hands back B and R the other way round */
+    int             indexed;    /* 8-bit colormapped screen; see load_palette */
     int             cursor_embedded;
     int             dead;
 
     /* The canvas. Under the shm paths it *is* the XImage's data, so a capture
-     * lands in it with no copy; under XGetImage it is our own buffer. */
+     * lands in it with no copy; under XGetImage it is our own buffer. An
+     * indexed screen is the exception: the segment holds colormap indices and
+     * the canvas is ours, filled through `pal`. */
     XShmSegmentInfo shminfo;
     XImage         *shm_img;
     unsigned char  *buf;
     size_t          bufsz;
     int             stride;
     int             shm_ok;
+
+    /* Indexed screens only. `pal` holds each colormap entry as the four canvas
+     * bytes A,R,G,B, packed so that one 32-bit store writes a pixel. */
+    const unsigned char *idx;
+    int             idx_stride;
+    unsigned int    pal[256];
+    Colormap        cmap_cur;
+    /* The indices as of the last read, packed at `width` a row. Compared a row
+     * at a time, they say exactly what changed -- so only those rows are
+     * expanded, and the bands come from here rather than from hashing a
+     * canvas four times the size. See absorb_indices. */
+    unsigned char  *prev_idx;
+    int             pal_changed;
+    unsigned char   band_dirty[RD_BANDS];
 
     int             damage_ev_base, damage_er_base;
     Damage          damage;
@@ -145,6 +163,29 @@ static void err_set(rd_capture *c, const char *fmt, ...)
 
 static void x_err_reset(void) { g_x_err_count = 0; g_last_x_err[0] = 0; }
 
+/* Make this connection immune to other clients' server grabs.
+ *
+ * Every X connection the agent holds needs this, and the failure without it is
+ * a deadlock rather than a delay. Dragging a window's title bar from the peer
+ * goes: the agent fakes a button press; dtwm starts the move and grabs the
+ * server, as Motif window managers do for the length of a move or resize
+ * (freezeOnConfig); the agent's next screen read is held by the grab; and the
+ * grab ends only on the button release the agent would send next, from the
+ * same thread. The session goes silent and the client falls back to
+ * "Connecting...". XTEST's GrabControl is the X server's answer to exactly
+ * this: requests on an impervious connection are served during the grab.
+ *
+ * Exported for the other shims, so the reasoning lives in one place. Returns
+ * 1 if the server took it. */
+int rd_x_impervious(Display *d)
+{
+    int ev, er, major, minor;
+    if (!d || !XTestQueryExtension(d, &ev, &er, &major, &minor))
+        return 0;
+    XTestGrabControl(d, True);
+    return 1;
+}
+
 /* RD_DEBUG=1 traces change detection to stderr. Worth keeping: what this path
  * decides is invisible from the outside, and the machine it runs on is usually
  * somewhere else. */
@@ -197,6 +238,135 @@ static void swap_rb_rect(rd_capture *c, int x, int y, int w, int h)
     }
 }
 
+/* ------------------------------------------------------------------------ *
+ * 8-bit screens
+ *
+ * An Ultra 5/10's onboard PGX24 (m64) comes up at depth 8 unless m64config is
+ * told otherwise, and at its native resolution that is the only depth its
+ * memory allows. A PseudoColor visual has no masks: what XGetImage hands back
+ * is an index per pixel, and the colour is wherever the colormap says. So the
+ * screen is read as indices and expanded into the same A,R,G,B canvas a
+ * 24-bit server would have produced, and nothing downstream knows the
+ * difference.
+ *
+ * Which colormap: the one the hardware is showing, not necessarily the
+ * default. One hardware colormap is the norm at this depth, and a program with
+ * a private map (Netscape, an image viewer) installs it while it has focus --
+ * at which point everything on screen, including every other window, is drawn
+ * through *that* map. Reading the default instead would show the user's
+ * screen correctly coloured while their own console shows it in false colour,
+ * which is the wrong way round. Where several are installed, the default is
+ * preferred because most windows use it.
+ *
+ * The palette is re-read with every full read of the screen: one
+ * XListInstalledColormaps and one XQueryColors, about 3 KB, against a 1.3 MB
+ * frame. A colormap change that moves no pixel -- focus passing to a window
+ * with its own map -- recolours the whole screen, and only re-reading catches
+ * it.
+ * ------------------------------------------------------------------------ */
+
+static void load_palette(rd_capture *c)
+{
+    XColor cols[256];
+    Colormap def = DefaultColormap(c->dpy, c->screen);
+    Colormap cm = def, *list;
+    int n = 0, i, k, cells;
+
+    list = XListInstalledColormaps(c->dpy, c->root, &n);
+    for (k = 0; k < n; k++)
+        if (list[k] == def)
+            break;
+    if (k == n && n > 0)
+        cm = list[0];
+    if (list)
+        XFree(list);
+
+    cells = DefaultVisual(c->dpy, c->screen)->map_entries;
+    if (cells > 256 || cells <= 0) cells = 256;
+    for (;;) {
+        for (i = 0; i < cells; i++) {
+            cols[i].pixel = (unsigned long)i;
+            cols[i].flags = DoRed | DoGreen | DoBlue;
+        }
+        x_err_reset();
+        XQueryColors(c->dpy, cm, cols, cells);
+        XSync(c->dpy, False);
+        if (!g_x_err_count || cm == def)
+            break;
+        /* An installed map of another visual can refuse a query this size;
+         * the default always answers. */
+        cm = def;
+    }
+    if (g_x_err_count) {
+        /* Keep the last good palette rather than go black. */
+        err_set(c, "XQueryColors: %s", g_last_x_err);
+        return;
+    }
+    if (cm != c->cmap_cur && rd_debug())
+        fprintf(stderr, "palette: colormap 0x%lx%s\n", (unsigned long)cm,
+                cm == def ? " (default)" : " (a client's own)");
+    c->cmap_cur = cm;
+
+    for (i = 0; i < 256; i++) {
+        unsigned int v;
+        unsigned char *b = (unsigned char *)&v;
+        b[0] = 0;
+        b[1] = i < cells ? (unsigned char)(cols[i].red   >> 8) : 0;
+        b[2] = i < cells ? (unsigned char)(cols[i].green >> 8) : 0;
+        b[3] = i < cells ? (unsigned char)(cols[i].blue  >> 8) : 0;
+        if (v != c->pal[i]) {
+            c->pal[i] = v;
+            c->pal_changed = 1;
+        }
+    }
+}
+
+/* Indices at `src` into the canvas at (x,y), through the palette. */
+static void expand_rect(rd_capture *c, const unsigned char *src, int src_stride,
+                        int x, int y, int w, int h)
+{
+    int row, col;
+    for (row = 0; row < h; row++) {
+        const unsigned char *s = src + (size_t)row * src_stride;
+        unsigned int *d = (unsigned int *)(c->buf + (size_t)(y + row) * c->stride
+                                           + (size_t)x * 4);
+        for (col = 0; col < w; col++)
+            d[col] = c->pal[s[col]];
+    }
+}
+
+/* Rows per band, the same division band_bounds makes. */
+static int band_rows(const rd_capture *c)
+{
+    return (c->height + RD_BANDS - 1) / RD_BANDS;
+}
+
+/* Take a fresh read of the whole screen's indices into the canvas.
+ *
+ * Only rows that differ from the last read are expanded, and each marks its
+ * band dirty. That is the point of this function, and it was measured as the
+ * difference between usable and not on an Ultra 5: expanding every index on
+ * every poll writes 5 MB per pass at 1280x1024, and hashing that canvas reads
+ * another quarter of it, while a still desktop costs only the comparison of
+ * 1.3 MB against 1.3 MB. It is exact rather than sampled, too.
+ *
+ * A palette change recolours every row, since any of them may use the entry
+ * that moved. */
+static void absorb_indices(rd_capture *c, const unsigned char *src, int src_stride)
+{
+    int y, rows = band_rows(c), all = c->pal_changed || !c->hash_valid;
+    for (y = 0; y < c->height; y++) {
+        const unsigned char *s = src + (size_t)y * src_stride;
+        unsigned char *p = c->prev_idx + (size_t)y * c->width;
+        if (all || memcmp(s, p, (size_t)c->width) != 0) {
+            memcpy(p, s, (size_t)c->width);
+            expand_rect(c, s, src_stride, 0, y, c->width, 1);
+            c->band_dirty[y / rows] = 1;
+        }
+    }
+    c->pal_changed = 0;
+}
+
 static int alloc_shm_canvas(rd_capture *c)
 {
     Visual *vis = DefaultVisual(c->dpy, c->screen);
@@ -241,9 +411,21 @@ static int alloc_shm_canvas(rd_capture *c)
      * the last detach, and this way a crash does not leave 5 MB behind. */
     shmctl(c->shminfo.shmid, IPC_RMID, NULL);
 
+    c->shm_ok = 1;
+    if (c->indexed) {
+        c->idx        = (const unsigned char *)c->shm_img->data;
+        c->idx_stride = c->shm_img->bytes_per_line;
+        c->stride     = c->width * 4;
+        c->bufsz      = (size_t)c->stride * (size_t)c->height;
+        c->buf        = (unsigned char *)calloc(1, c->bufsz);
+        if (!c->buf) {
+            err_set(c, "cannot allocate a %lu byte canvas", (unsigned long)c->bufsz);
+            return -1;  /* the caller sees no canvas; close frees the segment */
+        }
+        return 0;
+    }
     c->buf    = (unsigned char *)c->shm_img->data;
     c->stride = c->shm_img->bytes_per_line;
-    c->shm_ok = 1;
     return 0;
 
 fail:
@@ -260,8 +442,12 @@ static void free_canvas(rd_capture *c)
         if (c->shm_img) { c->shm_img->data = NULL; XDestroyImage(c->shm_img); c->shm_img = NULL; }
         if (c->shminfo.shmaddr) shmdt(c->shminfo.shmaddr);
         c->shm_ok = 0;
-        c->buf = NULL;
-    } else if (c->buf) {
+        c->idx = NULL;
+        /* The canvas was the segment, unless the screen is indexed. */
+        if (!c->indexed)
+            c->buf = NULL;
+    }
+    if (c->buf) {
         free(c->buf);
         c->buf = NULL;
     }
@@ -291,6 +477,7 @@ static rd_capture *open_common(const char *display, int max_path)
                 display ? display : (getenv("DISPLAY") ? getenv("DISPLAY") : "(unset)"));
         return c;
     }
+    rd_x_impervious(c->dpy);
     c->screen = DefaultScreen(c->dpy);
     c->root   = RootWindow(c->dpy, c->screen);
     c->width  = DisplayWidth(c->dpy, c->screen);
@@ -306,7 +493,12 @@ static rd_capture *open_common(const char *display, int max_path)
                 g_x_err_count ? g_last_x_err : "no reason given");
         return c;
     }
-    if (pixel_order_of(probe, &order, &c->swap_rb) != 0) {
+    if (probe->bits_per_pixel == 8) {
+        /* Indices, not colours: expanded through the colormap into an
+         * A,R,G,B canvas, so this is the order everything downstream sees. */
+        c->indexed = 1;
+        order = RD_ORDER_ARGB;
+    } else if (pixel_order_of(probe, &order, &c->swap_rb) != 0) {
         err_set(c, "unsupported pixel format: depth %d, %d bpp, masks R=%08lx G=%08lx B=%08lx",
                 probe->depth, probe->bits_per_pixel,
                 probe->red_mask, probe->green_mask, probe->blue_mask);
@@ -316,8 +508,20 @@ static rd_capture *open_common(const char *display, int max_path)
     c->order = order;
     XDestroyImage(probe);
 
+    if (c->indexed) {
+        c->prev_idx = (unsigned char *)calloc(1, (size_t)c->width * (size_t)c->height);
+        if (!c->prev_idx) {
+            err_set(c, "cannot allocate a %dx%d index copy", c->width, c->height);
+            return c;
+        }
+        load_palette(c);
+    }
+
     if (max_path <= RD_PATH_SHM && alloc_shm_canvas(c) == 0) {
         c->path = RD_PATH_SHM;
+    } else if (c->shm_ok) {
+        /* Attached, but the indexed canvas could not be allocated. */
+        return c;
     } else {
         /* Either shm was refused or the caller asked for the slow path on
          * purpose. Either way the canvas is ours to allocate. */
@@ -359,6 +563,27 @@ int rd_display_size(int *w, int *h)
     return 0;
 }
 
+int rd_capture_screen_size(rd_capture *c, int *w, int *h)
+{
+    Window root_ret;
+    int x, y;
+    unsigned int gw = 0, gh = 0, bw, depth;
+    int rc = -1;
+
+    if (!c || !c->dpy || c->dead) return -1;
+    WITH_X_GUARD(c, dead_out);
+    if (XGetGeometry(c->dpy, c->root, &root_ret, &x, &y, &gw, &gh, &bw, &depth)) {
+        if (w) *w = (int)gw;
+        if (h) *h = (int)gh;
+        rc = 0;
+    }
+    END_X_GUARD();
+    return rc;
+
+dead_out:
+    return -1;
+}
+
 rd_capture *rd_capture_open(const char *display)
 {
     return rd_capture_open_forced(display, RD_PATH_DAMAGE);
@@ -389,12 +614,14 @@ void rd_capture_close(rd_capture *c)
     } else {
         free_canvas(c);
     }
+    free(c->prev_idx);
     free(c);
 }
 
 int rd_capture_width(const rd_capture *c)  { return c ? c->width  : 0; }
 int rd_capture_height(const rd_capture *c) { return c ? c->height : 0; }
 int rd_capture_depth(const rd_capture *c)  { return c ? c->depth  : 0; }
+int rd_capture_indexed(const rd_capture *c){ return c ? c->indexed : 0; }
 int rd_capture_stride(const rd_capture *c) { return c ? c->stride : 0; }
 int rd_capture_path(const rd_capture *c)   { return c ? c->path   : -1; }
 int rd_capture_is_dead(const rd_capture *c){ return c ? c->dead   : 1; }
@@ -420,6 +647,11 @@ static void blit_image(rd_capture *c, XImage *im, int x, int y)
 {
     int row;
     int bytes = im->width * 4;
+    if (c->indexed) {
+        expand_rect(c, (const unsigned char *)im->data, im->bytes_per_line,
+                    x, y, im->width, im->height);
+        return;
+    }
     for (row = 0; row < im->height; row++) {
         memcpy(c->buf + (size_t)(y + row) * c->stride + (size_t)x * 4,
                im->data + (size_t)row * im->bytes_per_line,
@@ -432,6 +664,8 @@ static void blit_image(rd_capture *c, XImage *im, int x, int y)
 static int full_getimage(rd_capture *c)
 {
     XImage *im;
+    if (c->indexed)
+        load_palette(c);
     x_err_reset();
     im = XGetImage(c->dpy, c->root, 0, 0, c->width, c->height, AllPlanes, ZPixmap);
     if (!im) {
@@ -439,7 +673,10 @@ static int full_getimage(rd_capture *c)
                 g_x_err_count ? g_last_x_err : "no reason given");
         return -1;
     }
-    blit_image(c, im, 0, 0);
+    if (c->indexed)
+        absorb_indices(c, (const unsigned char *)im->data, im->bytes_per_line);
+    else
+        blit_image(c, im, 0, 0);
     XDestroyImage(im);
     return 0;
 }
@@ -461,9 +698,15 @@ int rd_capture_full(rd_capture *c)
             XSync(c->dpy, False);
             rc = g_x_err_count ? -1 : 0;
             if (rc != 0) err_set(c, "XShmGetImage: %s", g_last_x_err);
-            /* Nothing copied this one: the segment is the canvas. */
-            if (rc == 0 && c->swap_rb)
+            /* Nothing copied this one: the segment is the canvas -- except
+             * on an indexed screen, where it holds what the canvas is made
+             * from. */
+            if (rc == 0 && c->indexed) {
+                load_palette(c);
+                absorb_indices(c, c->idx, c->idx_stride);
+            } else if (rc == 0 && c->swap_rb) {
                 swap_rb_rect(c, 0, 0, c->width, c->height);
+            }
         }
     } else {
         rc = full_getimage(c);
@@ -611,6 +854,13 @@ static void band_bounds(const rd_capture *c, int b, int *y0, int *y1)
 static void rehash_all(rd_capture *c)
 {
     int b, y0, y1;
+    if (c->indexed) {
+        /* The read just absorbed is the baseline; absorb_indices marks
+         * against it from here on. */
+        memset(c->band_dirty, 0, sizeof c->band_dirty);
+        c->hash_valid = 1;
+        return;
+    }
     for (b = 0; b < RD_BANDS; b++) {
         band_bounds(c, b, &y0, &y1);
         c->band_hash[b] = (y1 > y0) ? hash_band(c, y0, y1) : 0;
@@ -631,7 +881,11 @@ static int diff_bands(rd_capture *c, int *rects, int max_rects)
         int dirty = 0;
         if (b < RD_BANDS) {
             band_bounds(c, b, &y0, &y1);
-            if (y1 > y0) {
+            if (y1 > y0 && c->indexed) {
+                dirty = c->band_dirty[b];
+                c->band_dirty[b] = 0;
+                if (dirty) n_dirty++;
+            } else if (y1 > y0) {
                 h = hash_band(c, y0, y1);
                 dirty = (h != c->band_hash[b]);
                 if (dirty) n_dirty++;
