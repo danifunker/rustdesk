@@ -164,28 +164,37 @@ Install
   un-wires startup first, so it cannot leave the machine without a login
   manager. Full instructions ship at /opt/rdeskvint/doc/README.txt.
 
-Verified for this build, on a Sun Blade 2500 running Solaris 9
---------------------------------------------------------------
-  * pkgadd, pkginfo, enable, disable and pkgrm round trip, with pkgrm
-    leaving nothing behind
+Verified for this build, on a 333 MHz Ultra 5 running Solaris 9
+---------------------------------------------------------------
+  The console is the onboard PGX24 at 1280x1024 in 8-bit colour, which is
+  what 1.0.1 is for.
+
+  * pkgrm of 1.0.0 and pkgadd of this package, then rdeskvint-enable in
+    session mode
   * the packaged binary serves video to a client speaking the real
-    protocol, at 1280x1024 on the console framebuffer
+    protocol, reading the 8-bit screen through its colormap (colours
+    checked by eye from a RustDesk 1.4.9 client)
+  * a window dragged by its title bar from the peer moves, and video keeps
+    coming through and after the move -- the dtwm server-grab deadlock
+    that froze 1.0.0's sessions and the console with them
+  * the agent does not report the pointer back at the peer that moved it
   * registers with hbbs and appears in a console's device list
-  * keyboard and mouse injection, after the Map-mode keycode fix
-  * the private libgcc_s.so.1 resolves through the binary's rpath with
-    the system copy moved out of the way -- so the package is
-    self-contained, which is the whole point of shipping it
+  * the private libgcc_s.so.1 resolves through the binary's rpath: this
+    Ultra has no system copy at all, so the package is self-contained
+  * off the target, on Linux: the capture shim against an 8-bit Xephyr
+    (colours on all three capture paths, a colormap change with no pixel
+    change, a 16-row change reported as one band, capture continuing
+    while another client holds a server grab -- and blocking without
+    the fix)
 
 Not verified
 ------------
-  * Solaris 10 and later. This is linked against Solaris 9 and Sun's
-    forward compatibility is documented, but there is no Solaris 10
-    machine here to test it on. DAMAGE and XFIXES are compiled out
-    because Solaris 9 has neither, so a Solaris 10 host would not use
-    them even though it has them.
-  * The relay path from outside the LAN, and a keyed relay: no external
-    caller and no hbbr started with -k was available.
-  * IRIX shares the keycode fix in this build and has not been run.
+  * The 24-bit path on real hardware. The XVR-600 Blade that 1.0.0 was
+    verified on was not reachable; the shared code changed around it
+    (canvas ownership, the grab handling), and a 24-bit Xephyr passed.
+  * Keyboard injection in this build.
+  * Solaris 10 and later; the relay path from outside the LAN and a keyed
+    relay; IRIX and PowerPC, which share the pointer-echo change.
 MAN
 
 echo
