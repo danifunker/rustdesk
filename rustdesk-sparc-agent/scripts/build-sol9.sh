@@ -93,7 +93,15 @@ done
 # Removing only the directory is not enough: minicargo decides whether to re-run
 # the script from the .txt beside it, so that goes too, and with it everything
 # built from the old archive.
-BUILD_MARK="$OUT/host/build_rustdesk-sparc-agent-0_1_0"
+#
+# The directory is named for the crate's version, so it is read from Cargo.toml
+# rather than written here: this said 0_1_0 through the bump to 1.0.0, after
+# which the guard checked a directory that no longer existed, and the shims
+# were never rebuilt at all -- an 8-bit capture fix shipped to a test machine
+# without its C half, and looked like a fix that did not work.
+CRATE_VER="$(sed -n 's/^version *= *"\(.*\)"/\1/p' "$HERE/Cargo.toml" | head -1)"
+[ -n "$CRATE_VER" ] || { echo "could not read the version from Cargo.toml" >&2; exit 1; }
+BUILD_MARK="$OUT/host/build_rustdesk-sparc-agent-$(echo "$CRATE_VER" | tr . _)"
 for shim in "$HERE"/src/*.c "$HERE"/src/*.h; do
     [ -e "$shim" ] || continue
     if [ ! -d "$BUILD_MARK" ] || [ -n "$(find "$shim" -newer "$BUILD_MARK" 2>/dev/null)" ]; then

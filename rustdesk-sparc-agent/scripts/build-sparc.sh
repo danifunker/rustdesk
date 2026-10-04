@@ -58,7 +58,9 @@ export SPARC_DEPS="$REMOTE_DEPS"
 # only the directory is not enough: minicargo decides whether to re-run the
 # script from the .txt beside it, so that has to go too, and with it anything
 # built from the old archive.
-BUILD_MARK="$OUT/host/build_rustdesk-sparc-agent-0_1_0"
+# Named for the crate's version; see the same guard in build-sol9.sh.
+CRATE_VER="$(sed -n 's/^version *= *"\(.*\)"/\1/p' "$HERE/Cargo.toml" | head -1)"
+BUILD_MARK="$OUT/host/build_rustdesk-sparc-agent-$(echo "$CRATE_VER" | tr . _)"
 for shim in "$HERE"/src/*.c "$HERE"/src/*.h; do
     [ -e "$shim" ] || continue
     if [ ! -d "$BUILD_MARK" ] || [ -n "$(find "$shim" -newer "$BUILD_MARK" 2>/dev/null)" ]; then
