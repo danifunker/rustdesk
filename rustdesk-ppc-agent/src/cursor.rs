@@ -168,13 +168,16 @@ pub const SUPPRESS_AFTER_INPUT_MS: u64 = 300;
 /// moment before the first position arrives, then stops.
 pub struct Tracker {
     last: Option<(i32, i32)>,
+    /// Where the peer last put the pointer, in its own coordinates. See
+    /// [`Tracker::peer_put`].
+    peer_at: Option<(i32, i32)>,
     /// Framebuffer pixels per peer pixel. See [`Tracker::set_scale`].
     scale: i32,
 }
 
 impl Tracker {
     pub fn new() -> Self {
-        Self { last: None, scale: 1 }
+        Self { last: None, peer_at: None, scale: 1 }
     }
 
     /// Tell the tracker the peer's coordinate space is *downscaled*, and by
@@ -204,6 +207,21 @@ impl Tracker {
     /// needs a position now, not whenever the pointer next happens to move.
     pub fn reset(&mut self) {
         self.last = None;
+        self.peer_at = None;
+    }
+
+    /// The peer moved the pointer to (x, y), in the coordinates it sent.
+    ///
+    /// The time window alone is not enough on a slow machine. Injected motion
+    /// lands when the X server gets round to it, and the loop may not look at
+    /// the pointer again until a frame later -- on an Ultra 5 converting a full
+    /// screen, well past `SUPPRESS_AFTER_INPUT_MS`. The pointer is then found
+    /// "moved" to exactly where the peer put it, and reporting that is the echo
+    /// the window exists to prevent. So a pointer still where the peer left it
+    /// is the peer's, however long ago that was. The IRIX C agent learned the
+    /// same thing on an R3000 (`crustdesk-irix`, `cursor_step`).
+    pub fn peer_put(&mut self, x: i32, y: i32) {
+        self.peer_at = Some((x, y));
     }
 
     /// Returns the position to send, or None to stay quiet.
@@ -215,7 +233,10 @@ impl Tracker {
         let (x, y) = (x / self.scale, y / self.scale);
         let changed = self.last != Some((x, y));
         self.last = Some((x, y));
-        if !changed || since_peer_input_ms < SUPPRESS_AFTER_INPUT_MS {
+        if !changed
+            || since_peer_input_ms < SUPPRESS_AFTER_INPUT_MS
+            || self.peer_at == Some((x, y))
+        {
             return None;
         }
         Some((x, y))
@@ -292,6 +313,29 @@ mod tests {
         assert_eq!(t.update(100, 100, 0), None, "input this instant");
         assert_eq!(t.update(120, 120, 299), None, "still inside the window");
         assert_eq!(t.update(140, 140, 300), Some((140, 140)), "the window has passed");
+    }
+
+    /// A slow loop looks at the pointer long after the peer moved it. Where the
+    /// peer left it is still the peer's doing, and must not be echoed; a move
+    /// made at the console afterwards is news.
+    #[test]
+    fn where_the_peer_left_the_pointer_is_never_echoed() {
+        let mut t = Tracker::new();
+        assert_eq!(t.update(10, 10, IDLE), Some((10, 10)));
+        t.peer_put(200, 150);
+        assert_eq!(t.update(10, 10, 0), None, "the injected move has not landed yet");
+        assert_eq!(t.update(200, 150, 900), None, "landed, and seen well after the window");
+        assert_eq!(t.update(201, 150, 900), Some((201, 150)), "a console move is reported");
+    }
+
+    /// Positions compare in the peer's space, which is the one it sends.
+    #[test]
+    fn the_peer_position_is_compared_after_scaling() {
+        let mut t = Tracker::new();
+        t.set_scale(2);
+        t.peer_put(100, 50);
+        assert_eq!(t.update(200, 100, IDLE), None);
+        assert_eq!(t.update(201, 101, IDLE), None, "the same peer pixel");
     }
 
     /// Suppressed positions are still recorded, so when the window passes a

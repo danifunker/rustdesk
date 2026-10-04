@@ -1487,9 +1487,20 @@ fn message_loop(peer: &mut Peer) -> io::Result<()> {
             // session still runs, with input but no picture, which is a
             // confusing thing to debug from the client end.
             log::warn!("video unavailable: {} -- retrying every {}s", e, VIDEO_RETRY.as_secs());
+            // The usual cause differs per platform, so the hint does too: a
+            // Mac's detached agent cannot reach the window server at all, while
+            // an X11 agent is far more often pointed at no display, or at a
+            // display whose format the capture shim refused (which the line
+            // above names).
+            #[cfg(target_os = "macos")]
             log::warn!(
                 "if the display reads 0x0, the agent has no window server: start it \
                  under `screen` or as the LaunchAgent, not with `&` or nohup"
+            );
+            #[cfg(not(target_os = "macos"))]
+            log::warn!(
+                "check DISPLAY names the console's X server and that this account may \
+                 open it; the error above says which part failed"
             );
             None
         }
@@ -1997,6 +2008,11 @@ fn drain_input(
                 #[cfg(any(target_os = "macos", target_os = "irix", target_os = "solaris"))]
                 {
                     injector.mouse(&me);
+                    // A move, press or release carries where; a wheel's x, y
+                    // are its deltas.
+                    if me.mask & 7 < 3 {
+                        cursor_tracker.peer_put(me.x, me.y);
+                    }
                     *last_peer_input = std::time::Instant::now();
                     send_cursor_position(peer, cursor_tracker, *last_peer_input)?;
                 }
