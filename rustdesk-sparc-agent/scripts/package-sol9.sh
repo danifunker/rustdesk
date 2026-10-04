@@ -176,7 +176,10 @@ Verified for this build, on a 333 MHz Ultra 5 running Solaris 9
     checked by eye from a RustDesk 1.4.9 client)
   * a window dragged by its title bar from the peer moves, and video keeps
     coming through and after the move -- the dtwm server-grab deadlock
-    that froze 1.0.0's sessions and the console with them
+    that froze 1.0.0's sessions and the console with them. Run on this
+    source before the version bump; the packaged binary then kept serving
+    video through a drag, but by then the screen was blanked by dtscreen,
+    so that drag moved nothing
   * the agent does not report the pointer back at the peer that moved it
   * registers with hbbs and appears in a console's device list
   * the private libgcc_s.so.1 resolves through the binary's rpath: this
