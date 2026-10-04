@@ -107,6 +107,16 @@ fn main() {
         let y = args.get(i + 2)?.parse().ok()?;
         Some((x, y))
     });
+    // `drag x0 y0 x1 y1`: press the left button at the first point, move to
+    // the second with it held, release. Aimed at a title bar it is a window
+    // move -- which a Motif window manager performs under a server grab, and
+    // which deadlocked the Solaris agent until its X connections were made
+    // impervious to grabs. The frames that arrive afterwards are the check.
+    let drag: Option<(i32, i32, i32, i32)> = args.iter().position(|a| a == "drag").and_then(|i| {
+        let v: Option<Vec<i32>> = (1..=4).map(|k| args.get(i + k)?.parse().ok()).collect();
+        let v = v?;
+        Some((v[0], v[1], v[2], v[3]))
+    });
 
     println!("connecting to {}", addr);
     let stream = match TcpStream::connect(&addr) {
@@ -153,7 +163,7 @@ fn main() {
             let hash = early_hash.unwrap();
             println!("hash: salt {} chars, challenge {} chars",
                      hash.salt.len(), hash.challenge.len());
-            finish_login(&mut c, &hash, &password, secs, mouse_at, want_decode, quality, spin_ms);
+            finish_login(&mut c, &hash, &password, secs, mouse_at, drag, want_decode, quality, spin_ms);
             return;
         }
     };
@@ -218,7 +228,7 @@ fn main() {
     };
     println!("hash: salt {} chars, challenge {} chars", hash.salt.len(), hash.challenge.len());
 
-    finish_login(&mut c, &hash, &password, secs, mouse_at, want_decode, quality, spin_ms);
+    finish_login(&mut c, &hash, &password, secs, mouse_at, drag, want_decode, quality, spin_ms);
 }
 
 fn finish_login(
@@ -227,6 +237,7 @@ fn finish_login(
     password: &str,
     secs: u64,
     mouse_at: Option<(i32, i32)>,
+    drag: Option<(i32, i32, i32, i32)>,
     want_decode: bool,
     quality: Option<ImageQuality>,
     spin_ms: Option<u64>,
@@ -311,6 +322,35 @@ fn finish_login(
         }
     }
 
+    if let Some((x0, y0, x1, y1)) = drag {
+        // The client's mask: kind in the low three bits (0 move, 1 down,
+        // 2 up), the button above them (1 left).
+        const LEFT: i32 = 1 << 3;
+        let send_mouse = |c: &mut Peer, mask: i32, x: i32, y: i32| {
+            let mut me = MouseEvent::new();
+            me.mask = mask;
+            me.x = x;
+            me.y = y;
+            let mut m = Message::new();
+            m.set_mouse_event(me);
+            c.send(&m).is_ok()
+        };
+        let mut ok = send_mouse(c, 0, x0, y0);
+        std::thread::sleep(Duration::from_millis(200));
+        ok &= send_mouse(c, LEFT | 1, x0, y0);
+        for k in 1..=10 {
+            std::thread::sleep(Duration::from_millis(80));
+            ok &= send_mouse(c, LEFT, x0 + (x1 - x0) * k / 10, y0 + (y1 - y0) * k / 10);
+        }
+        std::thread::sleep(Duration::from_millis(200));
+        ok &= send_mouse(c, LEFT | 2, x1, y1);
+        println!(
+            "dragged ({}, {}) -> ({}, {}) in the served space{}",
+            x0, y0, x1, y1,
+            if ok { "" } else { " -- a send FAILED" }
+        );
+    }
+
     // Decode what arrives. The frames have to go through in order and none may
     // be skipped -- an inter frame is a difference against its predecessor --
     // so this decodes every one and keeps the last, which is then written out
@@ -336,6 +376,7 @@ fn finish_login(
     let start = Instant::now();
     let (mut frames, mut bytes, mut keyframes, mut cursors, mut others) = (0u32, 0usize, 0u32, 0u32, 0u32);
     let mut first_frame_ms = None;
+    let mut last_frame_ms: u64 = 0;
     // Short reads when driving the pointer, so a move goes out on schedule
     // rather than whenever a frame happens to arrive.
     let _ = c.stream.set_read_timeout(Some(if spin {
@@ -386,6 +427,7 @@ fn finish_login(
                             if f.key {
                                 keyframes += 1;
                             }
+                            last_frame_ms = start.elapsed().as_millis() as u64;
                             if first_frame_ms.is_none() {
                                 first_frame_ms = Some(start.elapsed().as_secs() as f64 * 1000.0
                                     + start.elapsed().subsec_millis() as f64);
@@ -401,6 +443,9 @@ fn finish_login(
                 }
                 Some(message::Union::cursor_position(cp)) => {
                     cursors += 1;
+                    if drag.is_some() {
+                        println!("  agent reports the pointer at ({}, {}) -- an echo if that is where we put it", cp.x, cp.y);
+                    }
                     if mouse_at.is_some() && cursors < 8 {
                         println!("  agent reports the pointer at ({}, {})", cp.x, cp.y);
                     }
@@ -457,6 +502,9 @@ fn finish_login(
     println!("  video frames   {} ({} key), {} bytes total", frames, keyframes, bytes);
     if let Some(ms) = first_frame_ms {
         println!("  first frame    {:.0} ms after login", ms);
+        // A session that stalls keeps its connection but stops sending: the
+        // last frame's time is what shows it, not the count.
+        println!("  last frame     {} ms after login, of {} s", last_frame_ms, secs);
     }
     if frames > 0 {
         println!("  average        {} bytes/frame, {:.2} fps over {:.1} s",
