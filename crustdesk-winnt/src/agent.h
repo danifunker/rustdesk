@@ -6,9 +6,7 @@
 
 #include "win.h"
 
-#ifndef CDV_BUILD
-#define CDV_BUILD "dev"
-#endif
+#include "buildid.h" /* written by scripts/stage.py */
 #define VERSION_STRING "C-Desk-Vint for Windows NT " CDV_BUILD
 
 int agent_run(HANDLE stop, int console, int verbose);

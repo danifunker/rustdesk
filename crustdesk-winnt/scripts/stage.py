@@ -216,6 +216,17 @@ def main():
             put(os.path.join(res, n), "nt/" + n)
 
     build_id = os.environ.get("BUILD_ID", "dev")
+    # a header, not a /D: nmake rebuilds what includes it when it changes,
+    # and knows nothing of a changed makefile
+    bid = os.path.join(OUT, "nt", "buildid.h")
+    text = '#define CDV_BUILD "%s"\n' % build_id
+    try:
+        same = open(bid).read() == text
+    except OSError:
+        same = False
+    if not same:
+        open(bid, "w").write(text)
+        written.append("nt/buildid.h")
     extra = os.environ.get("EXTRA_CFLAGS", "")
     m = []
     m.append("# Written by scripts/stage.py; nmake on the NT machine.")
@@ -234,7 +245,7 @@ def main():
     for n in nt:
         o = "obj\\nt_%s.obj" % n
         objs.append(o)
-        flags = '$(CFLAGS) /DCDV_BUILD="\\"%s\\""' % build_id
+        flags = "$(CFLAGS)"
         rules.append("%s: nt\\%s.c nt\\*.h\n\t$(CC) %s /Fo%s nt\\%s.c" % (o, n, flags, o, n))
     for n in CORE:
         o = "obj\\core_%s.obj" % n
