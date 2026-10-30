@@ -18,7 +18,7 @@ ARCH     ?= ppc
 NTDIR    ?= c:\cdv\src
 NTINST   ?= C:\Program Files\C-Desk-Vint
 BUILD_ID ?= $(shell date -u +%Y%m%d)-$(shell git rev-parse --short=9 HEAD 2>/dev/null || echo dev)
-NTX      := python3 scripts/ntx.py
+NTXPY    := python3 scripts/ntx.py
 
 MAC  := ../crustdesk-macos-classic
 CORE := $(MAC)/src/core
@@ -28,19 +28,19 @@ stage:
 	BUILD_ID=$(BUILD_ID) python3 scripts/stage.py build/stage
 
 nt: stage
-	$(NTX) sync build/stage '$(NTDIR)'
-	$(NTX) run 'cd /d $(NTDIR) && nmake /nologo'
+	$(NTXPY) sync build/stage '$(NTDIR)'
+	$(NTXPY) run 'cd /d $(NTDIR) && nmake /nologo'
 	mkdir -p build/$(ARCH)
-	$(NTX) get '$(NTDIR)\C-Desk-Vint.exe' build/$(ARCH)/C-Desk-Vint.exe
+	$(NTXPY) get '$(NTDIR)\C-Desk-Vint.exe' build/$(ARCH)/C-Desk-Vint.exe
 	@ls -l build/$(ARCH)/C-Desk-Vint.exe
 
 install-nt: nt
-	$(NTX) run '"$(NTINST)\C-Desk-Vint.exe" -stop'
-	$(NTX) run 'copy $(NTDIR)\C-Desk-Vint.exe "$(NTINST)"'
-	$(NTX) run '"$(NTINST)\C-Desk-Vint.exe" -start'
+	$(NTXPY) run '"$(NTINST)\C-Desk-Vint.exe" -stop'
+	$(NTXPY) run 'copy $(NTDIR)\C-Desk-Vint.exe "$(NTINST)"'
+	$(NTXPY) run '"$(NTINST)\C-Desk-Vint.exe" -start'
 
 selftest-nt:
-	$(NTX) run '$(NTDIR)\C-Desk-Vint.exe -selftest'
+	$(NTXPY) run '$(NTDIR)\C-Desk-Vint.exe -selftest'
 
 build/selftest-host: src/selftest.c $(CORE)/*.c $(CORE)/*.h
 	mkdir -p build

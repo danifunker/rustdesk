@@ -1,9 +1,13 @@
-/* cdv_fs_ops over NT's file system, in UTF-16 (the W calls), so a name in
- * any language arrives whole. */
+/* cdv_fs_ops over the Windows file system. On NT in UTF-16 (the W calls),
+ * so a name in any language arrives whole; on 95 and 98, whose W calls are
+ * stubs, through the ANSI ones in the machine's code page (the x_ wrappers
+ * below), where a name the code page cannot spell cannot be reached. */
 #include "fs_win32.h"
+#include "plat.h"
 #include "text.h"
 
 #include "win.h"
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,6 +16,105 @@
 
 static WCHAR root[MAX_PATH];  /* L"" for the whole machine */
 static char err[256];
+
+/* ---- the W calls, or the A ones on Windows 9x --------------------------- */
+
+static int to_ansi(const WCHAR *w, char *a, int cap)
+{
+    BOOL lost = FALSE;
+    int n = WideCharToMultiByte(CP_ACP, 0, w, -1, a, cap, NULL, &lost);
+    if (!n || lost) {
+        SetLastError(ERROR_INVALID_NAME);
+        return 0;
+    }
+    return 1;
+}
+
+static void find_data_w(const WIN32_FIND_DATAA *a, WIN32_FIND_DATAW *w)
+{
+    memcpy(w, a, offsetof(WIN32_FIND_DATAA, cFileName));
+    MultiByteToWideChar(CP_ACP, 0, a->cFileName, -1, w->cFileName, MAX_PATH);
+    w->cAlternateFileName[0] = 0;
+}
+
+static HANDLE x_CreateFile(const WCHAR *p, DWORD acc, DWORD share, LPSECURITY_ATTRIBUTES sa,
+                           DWORD disp, DWORD fl, HANDLE tmpl)
+{
+    char a[MAX_PATH * 2];
+    if (plat_nt())
+        return CreateFileW(p, acc, share, sa, disp, fl, tmpl);
+    return to_ansi(p, a, sizeof a) ? CreateFileA(a, acc, share, sa, disp, fl, tmpl)
+                                   : INVALID_HANDLE_VALUE;
+}
+
+static HANDLE x_FindFirstFile(const WCHAR *p, WIN32_FIND_DATAW *fd)
+{
+    char a[MAX_PATH * 2];
+    WIN32_FIND_DATAA fa;
+    HANDLE h;
+    if (plat_nt())
+        return FindFirstFileW(p, fd);
+    if (!to_ansi(p, a, sizeof a))
+        return INVALID_HANDLE_VALUE;
+    h = FindFirstFileA(a, &fa);
+    if (h != INVALID_HANDLE_VALUE)
+        find_data_w(&fa, fd);
+    return h;
+}
+
+static BOOL x_FindNextFile(HANDLE h, WIN32_FIND_DATAW *fd)
+{
+    WIN32_FIND_DATAA fa;
+    if (plat_nt())
+        return FindNextFileW(h, fd);
+    if (!FindNextFileA(h, &fa))
+        return FALSE;
+    find_data_w(&fa, fd);
+    return TRUE;
+}
+
+static DWORD x_GetFileAttributes(const WCHAR *p)
+{
+    char a[MAX_PATH * 2];
+    if (plat_nt())
+        return GetFileAttributesW(p);
+    return to_ansi(p, a, sizeof a) ? GetFileAttributesA(a) : 0xffffffff;
+}
+
+#define ONE_PATH(name, ret, fail)                               \
+    static ret x_##name(const WCHAR *p)                         \
+    {                                                           \
+        char a[MAX_PATH * 2];                                   \
+        if (plat_nt())                                          \
+            return name##W(p);                                  \
+        return to_ansi(p, a, sizeof a) ? name##A(a) : fail;     \
+    }
+ONE_PATH(DeleteFile, BOOL, FALSE)
+ONE_PATH(RemoveDirectory, BOOL, FALSE)
+
+static BOOL x_CreateDirectory(const WCHAR *p, LPSECURITY_ATTRIBUTES sa)
+{
+    char a[MAX_PATH * 2];
+    if (plat_nt())
+        return CreateDirectoryW(p, sa);
+    return to_ansi(p, a, sizeof a) ? CreateDirectoryA(a, sa) : FALSE;
+}
+
+static BOOL x_SetFileAttributes(const WCHAR *p, DWORD attr)
+{
+    char a[MAX_PATH * 2];
+    if (plat_nt())
+        return SetFileAttributesW(p, attr);
+    return to_ansi(p, a, sizeof a) ? SetFileAttributesA(a, attr) : FALSE;
+}
+
+static BOOL x_MoveFile(const WCHAR *from, const WCHAR *to)
+{
+    char a[MAX_PATH * 2], b[MAX_PATH * 2];
+    if (plat_nt())
+        return MoveFileW(from, to);
+    return to_ansi(from, a, sizeof a) && to_ansi(to, b, sizeof b) ? MoveFileA(a, b) : FALSE;
+}
 
 static int fail(const char *what)
 {
@@ -156,7 +259,7 @@ static int w_list(void *u, const char *path, int hidden, char *real, size_t cap,
         full[n++] = '\\';
     full[n++] = '*';
     full[n] = 0;
-    h = FindFirstFileW(full, &fd);
+    h = x_FindFirstFile(full, &fd);
     if (h == INVALID_HANDLE_VALUE) {
         if (GetLastError() == ERROR_FILE_NOT_FOUND)
             return 0; /* an empty drive root */
@@ -170,7 +273,7 @@ static int w_list(void *u, const char *path, int hidden, char *real, size_t cap,
         if (e.hidden && !hidden)
             continue;
         each(ctx, &e);
-    } while (FindNextFileW(h, &fd));
+    } while (x_FindNextFile(h, &fd));
     FindClose(h);
     return 0;
 }
@@ -187,7 +290,7 @@ static int w_stat(void *u, const char *path, cdv_entry *e)
     n = wcslen(full);
     if (n <= 3 || (root[0] && n == wcslen(root))) {
         /* a drive's or the share's root: FindFirstFile cannot name it */
-        DWORD a = GetFileAttributesW(full);
+        DWORD a = x_GetFileAttributes(full);
         if (a == 0xffffffff)
             return fail(path);
         memset(e, 0, sizeof *e);
@@ -195,7 +298,7 @@ static int w_stat(void *u, const char *path, cdv_entry *e)
         utf16_to_utf8(full, n, e->name, sizeof e->name);
         return 0;
     }
-    h = FindFirstFileW(full, &fd);
+    h = x_FindFirstFile(full, &fd);
     if (h == INVALID_HANDLE_VALUE)
         return fail(path);
     FindClose(h);
@@ -210,7 +313,7 @@ static int w_open_read(void *u, const char *path, void **h)
     (void)u;
     if (map(path, full, WPATH) < 0)
         return -1;
-    f = CreateFileW(full, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+    f = x_CreateFile(full, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
                     FILE_FLAG_SEQUENTIAL_SCAN, NULL);
     if (f == INVALID_HANDLE_VALUE)
         return fail(path);
@@ -242,7 +345,7 @@ static int mkdirs(WCHAR *full)
         return 0;
     for (p = full + skip; (p = wcschr(p, '\\')) != NULL; p++) {
         *p = 0;
-        if (!CreateDirectoryW(full, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) {
+        if (!x_CreateDirectory(full, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) {
             *p = '\\';
             return fail("cannot make the folder");
         }
@@ -264,7 +367,7 @@ static int w_open_write(void *u, const char *path, void **h)
         free(w);
         return -1;
     }
-    w->f = CreateFileW(w->path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
+    w->f = x_CreateFile(w->path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
                        NULL);
     if (w->f == INVALID_HANDLE_VALUE) {
         free(w);
@@ -292,7 +395,7 @@ static int w_close_write(void *u, void *h, uint64_t mtime, int complete)
     }
     CloseHandle(w->f);
     if (!complete)
-        DeleteFileW(w->path);
+        x_DeleteFile(w->path);
     free(w);
     return 0;
 }
@@ -318,8 +421,8 @@ static int w_remove_file(void *u, const char *path)
     (void)u;
     if (map(path, full, WPATH) < 0)
         return -1;
-    SetFileAttributesW(full, FILE_ATTRIBUTE_NORMAL);
-    return DeleteFileW(full) ? 0 : fail(path);
+    x_SetFileAttributes(full, FILE_ATTRIBUTE_NORMAL);
+    return x_DeleteFile(full) ? 0 : fail(path);
 }
 
 /* Recursive: the empty folders only, as fs.rs does -- the client deletes
@@ -332,7 +435,7 @@ static int rm_empty(WCHAR *full)
     if (n + 3 >= WPATH)
         return refuse("path too long");
     wcscpy(full + n, L"\\*");
-    h = FindFirstFileW(full, &fd);
+    h = x_FindFirstFile(full, &fd);
     full[n] = 0;
     if (h != INVALID_HANDLE_VALUE) {
         do {
@@ -345,10 +448,10 @@ static int rm_empty(WCHAR *full)
                 rm_empty(full);
                 full[n] = 0;
             }
-        } while (FindNextFileW(h, &fd));
+        } while (x_FindNextFile(h, &fd));
         FindClose(h);
     }
-    return RemoveDirectoryW(full) ? 0 : fail("cannot remove the folder");
+    return x_RemoveDirectory(full) ? 0 : fail("cannot remove the folder");
 }
 
 static int w_remove_dir(void *u, const char *path, int recursive)
@@ -361,7 +464,7 @@ static int w_remove_dir(void *u, const char *path, int recursive)
         return refuse("that is a drive");
     if (recursive)
         return rm_empty(full);
-    return RemoveDirectoryW(full) ? 0 : fail(path);
+    return x_RemoveDirectory(full) ? 0 : fail(path);
 }
 
 static int w_rename(void *u, const char *path, const char *new_name)
@@ -377,7 +480,7 @@ static int w_rename(void *u, const char *path, const char *new_name)
     if (!slash)
         return refuse("cannot rename that");
     utf8_to_utf16(new_name, strlen(new_name), slash + 1, WPATH - (size_t)(slash + 1 - to));
-    return MoveFileW(full, to) ? 0 : fail(path);
+    return x_MoveFile(full, to) ? 0 : fail(path);
 }
 
 static const char *w_error(void *u)
@@ -400,6 +503,6 @@ const cdv_fs_ops *fs_win32(const char *dir)
     n = utf8_to_utf16(dir, strlen(dir), root, MAX_PATH);
     while (n > 3 && (root[n - 1] == '\\' || root[n - 1] == '/'))
         root[--n] = 0;
-    CreateDirectoryW(root, NULL);
+    x_CreateDirectory(root, NULL);
     return &ops;
 }

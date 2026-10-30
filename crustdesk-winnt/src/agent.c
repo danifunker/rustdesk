@@ -17,6 +17,7 @@
 #include "fs_win32.h"
 #include "input.h"
 #include "log.h"
+#include "plat.h"
 #include "prefs.h"
 #include "report.h"
 #include "screen.h"
@@ -351,6 +352,13 @@ static const char *console_user(void)
     DWORD nl = sizeof name, dl = sizeof dom, got;
     SID_NAME_USE use;
     int found = 0;
+    if (!plat_nt()) {
+        /* 9x: whoever logged on (nobody, at the logon dialog) */
+        DWORD n = sizeof name;
+        if (!GetUserName(name, &n) || !name[0])
+            strcpy(name, "nobody");
+        return name;
+    }
     strcpy(name, "SYSTEM");
     if (shell)
         GetWindowThreadProcessId(shell, &pid);
@@ -899,11 +907,10 @@ static DWORD WINAPI lookup_thread(LPVOID unused)
 
 static void lookup_start(const char *host)
 {
-    DWORD tid;
     copy(look_host, host, sizeof look_host);
     look_done = 0;
     look_ip = 0;
-    look_thread = CreateThread(NULL, 0, lookup_thread, NULL, 0, &tid);
+    look_thread = plat_thread(lookup_thread, NULL);
     look_began = now_ms();
 }
 
@@ -1148,7 +1155,7 @@ int agent_run(HANDLE stop, int console, int verbose)
         copy(hostname, "Windows NT", sizeof hostname);
 
     /* The interactive window station, whatever the service was given. */
-    {
+    if (plat_nt()) {
         HWINSTA ws = OpenWindowStation("WinSta0", FALSE, MAXIMUM_ALLOWED);
         if (ws && !SetProcessWindowStation(ws))
             cdv_log("cannot use the interactive window station (error %lu)", GetLastError());

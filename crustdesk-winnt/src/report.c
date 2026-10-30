@@ -4,6 +4,7 @@
  * a kept one has gone stale, a failure logged once until it clears. */
 #include "report.h"
 #include "log.h"
+#include "plat.h"
 #include "console.h"
 #include "https.h"
 #include "sha256.h"
@@ -63,6 +64,7 @@ void report_describe(char *cpu, size_t ncpu, char *mem, size_t nmem, char *os, s
     OSVERSIONINFO vi;
     char ident[96], *arch;
     DWORD mhz = 0;
+    BOOL vok;
     GetSystemInfo(&si);
     switch (si.wProcessorArchitecture) {
     case PROCESSOR_ARCHITECTURE_INTEL: arch = "x86"; break;
@@ -88,7 +90,13 @@ void report_describe(char *cpu, size_t ncpu, char *mem, size_t nmem, char *os, s
     GlobalMemoryStatus(&ms);
     snprintf(mem, nmem, "%lu MB", (unsigned long)((ms.dwTotalPhys + 512 * 1024) >> 20));
     vi.dwOSVersionInfoSize = sizeof vi;
-    if (GetVersionEx(&vi))
+    vok = GetVersionEx(&vi);
+    if (vok && vi.dwPlatformId == VER_PLATFORM_WIN32_WINDOWS)
+        snprintf(os, nos, "Windows %s (%lu.%lu.%lu%s)",
+                 vi.dwMinorVersion >= 90 ? "Me" : vi.dwMinorVersion >= 10 ? "98" : "95",
+                 vi.dwMajorVersion, vi.dwMinorVersion, vi.dwBuildNumber & 0xffff,
+                 vi.szCSDVersion);
+    else if (vok)
         snprintf(os, nos, "Windows NT %lu.%lu (build %lu%s%s) %s", vi.dwMajorVersion,
                  vi.dwMinorVersion, vi.dwBuildNumber & 0xffff, vi.szCSDVersion[0] ? ", " : "",
                  vi.szCSDVersion, arch);
@@ -384,14 +392,13 @@ static DWORD WINAPI run(LPVOID unused)
 
 int report_start(const report_config *c)
 {
-    DWORD tid;
     if (!console_parse_url(c->url, &U)) {
         cdv_log("console: api=%s is not a URL", c->url);
         return 0;
     }
     C = *c;
     stop_ev = CreateEvent(NULL, TRUE, FALSE, NULL);
-    thread = CreateThread(NULL, 0, run, NULL, 0, &tid);
+    thread = plat_thread(run, NULL);
     if (!thread) {
         cdv_log("console: cannot start the reporter (error %lu)", GetLastError());
         return 0;

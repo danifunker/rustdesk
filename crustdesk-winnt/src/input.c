@@ -10,6 +10,7 @@
  */
 #include "input.h"
 #include "log.h"
+#include "plat.h"
 
 #include "win.h"
 #include <string.h>
@@ -192,7 +193,18 @@ static void type_char(uint32_t cp, int down, int up)
         cp = '\r';
     if (cp > 0xffff)
         return;
-    r = VkKeyScanW((WCHAR)cp);
+    if (plat_nt()) {
+        r = VkKeyScanW((WCHAR)cp);
+    } else {
+        /* 9x's VkKeyScanW is a stub: the character in the code page */
+        WCHAR w = (WCHAR)cp;
+        char a[4];
+        BOOL lost = FALSE;
+        if (WideCharToMultiByte(CP_ACP, 0, &w, 1, a, sizeof a, NULL, &lost) == 1 && !lost)
+            r = VkKeyScanA(a[0]);
+        else
+            r = -1;
+    }
     if (r != -1 && (r & 0xff) != 0xff) {
         vk = r & 0xff;
         need = (r >> 8) & 7;
@@ -433,11 +445,16 @@ static DWORD WINAPI sas_thread(LPVOID unused)
 
 void input_sas(void)
 {
-    DWORD tid;
     HANDLE t;
+    if (!plat_nt()) {
+        /* 9x has no secure attention sequence to send: the keys would only
+         * bring up Close Program, which injected keys cannot */
+        cdv_log("the peer sent Ctrl-Alt-Del; Windows 9x has nothing to send it to");
+        return;
+    }
     cdv_log("the peer sent Ctrl-Alt-Del");
     input_release_all();
-    t = CreateThread(NULL, 0, sas_thread, NULL, 0, &tid);
+    t = plat_thread(sas_thread, NULL);
     if (t) {
         WaitForSingleObject(t, 5000);
         CloseHandle(t);

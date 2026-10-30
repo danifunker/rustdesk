@@ -219,6 +219,18 @@ static void install_dir(char *out, size_t cap)
     snprintf(out, cap, "%s\\C-Desk-Vint\\", pf);
 }
 
+/* Everyone's Start Menu programs; on a 9x machine without user profiles
+ * there is only the one, the current user's. */
+static int programs_dir(char *out, DWORD cap)
+{
+    return reg_string(HKEY_LOCAL_MACHINE,
+                      "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders",
+                      "Common Programs", out, cap) ||
+           reg_string(HKEY_CURRENT_USER,
+                      "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders",
+                      "Programs", out, cap);
+}
+
 /* A shortcut to the settings window in everyone's Start Menu. */
 static void make_shortcut(const char *exe)
 {
@@ -226,9 +238,7 @@ static void make_shortcut(const char *exe)
     WCHAR wlnk[MAX_PATH];
     IShellLink *sl;
     IPersistFile *pf;
-    if (!reg_string(HKEY_LOCAL_MACHINE,
-                    "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders",
-                    "Common Programs", dir, sizeof dir))
+    if (!programs_dir(dir, sizeof dir))
         return;
     snprintf(lnk, sizeof lnk, "%s\\C-Desk-Vint.lnk", dir);
     MultiByteToWideChar(CP_ACP, 0, lnk, -1, wlnk, MAX_PATH);
@@ -251,9 +261,7 @@ static void make_shortcut(const char *exe)
 static void remove_shortcut(void)
 {
     char dir[MAX_PATH], lnk[MAX_PATH];
-    if (!reg_string(HKEY_LOCAL_MACHINE,
-                    "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders",
-                    "Common Programs", dir, sizeof dir))
+    if (!programs_dir(dir, sizeof dir))
         return;
     snprintf(lnk, sizeof lnk, "%s\\C-Desk-Vint.lnk", dir);
     DeleteFile(lnk);

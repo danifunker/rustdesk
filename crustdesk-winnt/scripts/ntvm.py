@@ -11,7 +11,10 @@ a CD (genisoimage) and is built by typing at a command prompt.
 """
 import json, socket, sys, time, os
 
+# NTVM: the machine's directory (default the PowerPC one; NTVM=/run/media/
+# dani/BigDisk/winnt-x86 for the x86 one)
 SOCK = os.path.join(os.environ.get("NTVM", "/run/media/dani/BigDisk/winnt-ppc"), "run", "qmp.sock")
+CD = os.environ.get("NTVM_CD", "cd0")  # the drive `cd` changes (cd1 on the x86 machine)
 
 class QMP:
     def __init__(self):
@@ -74,9 +77,9 @@ def main():
             time.sleep(0.03)
     elif op == "cd":
         if sys.argv[2] == "eject":
-            q.hmp("eject -f cd0")
+            q.hmp("eject -f " + CD)
         else:
-            q.hmp("change cd0 " + os.path.abspath(sys.argv[2]))
+            q.hmp("change %s %s" % (CD, os.path.abspath(sys.argv[2])))
     elif op == "hmp":
         print(q.hmp(" ".join(sys.argv[2:])))
 

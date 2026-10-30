@@ -1,4 +1,5 @@
 #include "prefs.h"
+#include "plat.h"
 #include "rng.h"
 
 #include "win.h"
@@ -110,6 +111,8 @@ static void restrict_file(const char *path)
     SECURITY_DESCRIPTOR sd;
     char aclbuf[256];
     PACL acl = (PACL)aclbuf;
+    if (!plat_nt())
+        return; /* 9x keeps no permissions on any disk */
     if (!AllocateAndInitializeSid(&nt, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_ADMINS,
                                   0, 0, 0, 0, 0, 0, &admins) ||
         !AllocateAndInitializeSid(&nt, 1, SECURITY_LOCAL_SYSTEM_RID, 0, 0, 0, 0, 0, 0, 0, &system))

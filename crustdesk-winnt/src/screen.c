@@ -1,5 +1,6 @@
 #include "screen.h"
 #include "log.h"
+#include "plat.h"
 
 #include "win.h"
 #include <stdlib.h>
@@ -109,11 +110,14 @@ int screen_resized(const cdv_screen *s)
 
 int screen_follow(const char **name)
 {
-    HDESK in = OpenInputDesktop(0, FALSE, DESK_RIGHTS);
+    HDESK in;
     char nm[64];
     DWORD len;
     if (name)
         *name = cur_name[0] ? cur_name : "Default";
+    if (!plat_nt())
+        return 0; /* 9x has one desktop, the logon dialog on it */
+    in = OpenInputDesktop(0, FALSE, DESK_RIGHTS);
     if (!in)
         return 0;
     nm[0] = 0;

@@ -8,11 +8,15 @@
  *   PUT <path> <size>\n    then <size> bytes; replies "OK\n"
  *   GET <path>\n           replies "<size>\n" then the bytes ("-1\n" if none)
  *
+ * Each connection has a thread of its own, so a long build does not hold up
+ * the next request; a RUN whose client has gone is ended (its process
+ * killed) rather than left running.
+ *
  * No authentication: it is for a VM whose port is reachable only through
  * QEMU's user-mode NAT forward on the host's loopback.  Never install it on
  * a machine anyone else can reach.
  *
- * Build on NT:  cl ntexec.c wsock32.lib
+ * Build on NT:  cl /MT ntexec.c wsock32.lib
  */
 #include <windows.h>
 #include <winsock.h>
@@ -82,8 +86,12 @@ static void do_run(SOCKET s, const char *cmdline)
         CloseHandle(wr);
         wr = NULL;
         while (ReadFile(rd, buf, sizeof buf, &got, NULL) && got > 0)
-            if (sendall(s, buf, (int)got) < 0)
+            if (sendall(s, buf, (int)got) < 0) {
+                /* the client went away: so does what it ran (cmd; a child of
+                 * cmd's ends when its output pipe breaks) */
+                TerminateProcess(pi.hProcess, 255);
                 break;
+            }
         WaitForSingleObject(pi.hProcess, INFINITE);
         GetExitCodeProcess(pi.hProcess, &code);
         CloseHandle(pi.hProcess);
@@ -176,12 +184,31 @@ static void do_get(SOCKET s, const char *path)
     CloseHandle(f);
 }
 
+static DWORD WINAPI serve(LPVOID arg)
+{
+    SOCKET s = (SOCKET)arg;
+    char *line = (char *)malloc(4096);
+    if (line && recvline(s, line, 4096) > 0) {
+        if (!strncmp(line, "RUN ", 4))
+            do_run(s, line + 4);
+        else if (!strncmp(line, "SPAWN ", 6))
+            do_spawn(s, line + 6);
+        else if (!strncmp(line, "PUT ", 4))
+            do_put(s, line + 4);
+        else if (!strncmp(line, "GET ", 4))
+            do_get(s, line + 4);
+    }
+    free(line);
+    shutdown(s, 1);
+    closesocket(s);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     WSADATA wd;
     SOCKET ls, s;
     struct sockaddr_in sin;
-    static char line[4096];
     int one = 1, port = argc > 1 ? atoi(argv[1]) : 2370;
 
     if (WSAStartup(MAKEWORD(1, 1), &wd) != 0)
@@ -197,20 +224,15 @@ int main(int argc, char **argv)
     }
     printf("ntexec: listening on %d\n", port);
     for (;;) {
+        DWORD tid;
+        HANDLE t;
         s = accept(ls, NULL, NULL);
         if (s == INVALID_SOCKET)
             continue;
-        if (recvline(s, line, sizeof line) > 0) {
-            if (!strncmp(line, "RUN ", 4))
-                do_run(s, line + 4);
-            else if (!strncmp(line, "SPAWN ", 6))
-                do_spawn(s, line + 6);
-            else if (!strncmp(line, "PUT ", 4))
-                do_put(s, line + 4);
-            else if (!strncmp(line, "GET ", 4))
-                do_get(s, line + 4);
-        }
-        shutdown(s, 1);
-        closesocket(s);
+        t = CreateThread(NULL, 0, serve, (LPVOID)s, 0, &tid);
+        if (t)
+            CloseHandle(t);
+        else
+            closesocket(s);
     }
 }

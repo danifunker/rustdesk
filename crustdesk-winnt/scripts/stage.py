@@ -9,6 +9,7 @@ cannot cover is rewritten here, mechanically, on the way:
     unsigned long long / long long   ->  unsigned __int64 / __int64
     123ULL / 123LL                   ->  123ui64 / 123i64
     __declspec(noinline)             ->  (nothing; Visual C++ 7 brought it)
+    libsodium's x86 <intrin.h>       ->  only from Visual C++ 2005 (1400) on
 
     #define F(a, ...) / F(...)        ->  F(a) / F(x), every call cut to match
 
@@ -163,6 +164,10 @@ def put(src, rel):
             text = devariadic(text)
         if os.path.basename(src) == "anchors.c":
             text = anchors(text)
+        if src.replace(os.sep, "/").endswith("sodium/private/common.h"):
+            old = "#if defined(_MSC_VER) && \\\n    (defined(_M_X64)"
+            assert old in text, "libsodium common.h changed"
+            text = text.replace(old, "#if defined(_MSC_VER) && _MSC_VER >= 1400 && \\\n    (defined(_M_X64)")
         data = text.encode("latin-1")
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     try:
@@ -232,11 +237,11 @@ def main():
     m.append("# Written by scripts/stage.py; nmake on the NT machine.")
     m.append("CC = cl")
     m.append("INC = /Int /Icore /Inacl\\include /Inacl\\include\\sodium /Izstd /Ibssl\\inc")
-    m.append("CFLAGS = /nologo /c /O2 /W2 /FIcompat.h $(INC) /DCONFIGURED=1 /DSODIUM_STATIC /DWIN32_LEAN_AND_MEAN %s" % extra)
-    m.append("BSSLFLAGS = /nologo /c /O2 /w /FIcompat.h /Int /Ibssl\\inc /Ibssl\\src "
+    m.append("CFLAGS = /nologo /c /O2 /W2 /MT /FIcompat.h $(INC) /DCONFIGURED=1 /DSODIUM_STATIC /DWIN32_LEAN_AND_MEAN %s" % extra)
+    m.append("BSSLFLAGS = /nologo /c /O2 /w /MT /FIcompat.h /Int /Ibssl\\inc /Ibssl\\src "
              "/DBR_USE_URANDOM=0 /DBR_USE_GETENTROPY=0 /DBR_USE_UNIX_TIME=0 /DBR_RDRAND=0 "
              "/DBR_USE_WIN32_RAND=0 /DBR_USE_WIN32_TIME=0")
-    m.append("ZFLAGS = /nologo /c /O2 /w /U_MSC_VER /FIcompat.h /Int /DHUF_FORCE_DECOMPRESS_X1 "
+    m.append("ZFLAGS = /nologo /c /O2 /w /MT /U_MSC_VER /FIcompat.h /Int /DHUF_FORCE_DECOMPRESS_X1 "
              "/DZSTD_FORCE_DECOMPRESS_SEQUENCES_SHORT /DZSTD_NO_INLINE")
     m.append("LIBS = wsock32.lib user32.lib gdi32.lib advapi32.lib shell32.lib ole32.lib uuid.lib")
     m.append("")
@@ -246,26 +251,37 @@ def main():
         o = "obj\\nt_%s.obj" % n
         objs.append(o)
         flags = "$(CFLAGS)"
-        rules.append("%s: nt\\%s.c nt\\*.h\n\t$(CC) %s /Fo%s nt\\%s.c" % (o, n, flags, o, n))
+        rules.append("%s: nt\\%s.c nt\\*.h FLAGS\n\t$(CC) %s /Fo%s nt\\%s.c" % (o, n, flags, o, n))
     for n in CORE:
         o = "obj\\core_%s.obj" % n
         objs.append(o)
-        rules.append("%s: core\\%s.c core\\*.h\n\t$(CC) $(CFLAGS) /Fo%s core\\%s.c" % (o, n, o, n))
+        rules.append("%s: core\\%s.c core\\*.h FLAGS\n\t$(CC) $(CFLAGS) /Fo%s core\\%s.c" % (o, n, o, n))
     for f in nacl:
         o = "obj\\nacl_%s.obj" % os.path.basename(f)[:-2]
         objs.append(o)
-        rules.append("%s: %s\n\t$(CC) $(CFLAGS) /w /Fo%s %s" % (o, win(f), o, win(f)))
+        rules.append("%s: %s FLAGS\n\t$(CC) $(CFLAGS) /w /Fo%s %s" % (o, win(f), o, win(f)))
     objs.append("obj\\zstddeclib.obj")
-    rules.append("obj\\zstddeclib.obj: zstd\\zstddeclib.c\n\t$(CC) $(ZFLAGS) /Foobj\\zstddeclib.obj zstd\\zstddeclib.c")
+    rules.append("obj\\zstddeclib.obj: zstd\\zstddeclib.c FLAGS\n\t$(CC) $(ZFLAGS) /Foobj\\zstddeclib.obj zstd\\zstddeclib.c")
     for f in bssl:
         o = "obj\\bssl_%s.obj" % os.path.basename(f)[:-2]
         bobjs.append(o)
-        rules.append("%s: %s\n\t$(CC) $(BSSLFLAGS) /Fo%s %s" % (o, win(f), o, win(f)))
+        rules.append("%s: %s FLAGS\n\t$(CC) $(BSSLFLAGS) /Fo%s %s" % (o, win(f), o, win(f)))
     has_rc = os.path.exists(os.path.join(OUT, "nt", "cdv.rc"))
     if has_rc:
         objs.append("obj\\cdv.res")
         rules.append("obj\\cdv.res: nt\\cdv.rc nt\\*.h nt\\*.ico\n\trc /r /Int /foobj\\cdv.res nt\\cdv.rc")
 
+    # Every object depends on FLAGS, the compiler lines: nmake knows nothing
+    # of a changed makefile, and a changed flag must rebuild everything.
+    flagtext = "\r\n".join(l for l in m if "FLAGS =" in l) + "\r\n"
+    fp = os.path.join(OUT, "FLAGS")
+    try:
+        same = open(fp, "rb").read() == flagtext.encode()
+    except OSError:
+        same = False
+    if not same:
+        open(fp, "wb").write(flagtext.encode())
+        written.append("FLAGS")
     m.append("OBJS = " + " \\\n\t".join(objs))
     m.append("BOBJS = " + " \\\n\t".join(bobjs))
     m.append("")

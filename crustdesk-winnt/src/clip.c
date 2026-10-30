@@ -1,5 +1,6 @@
 #include "clip.h"
 #include "log.h"
+#include "plat.h"
 #include "text.h"
 
 #include "win.h"
@@ -56,14 +57,26 @@ static void set_clipboard(void)
     free(text);
     if (!w)
         return;
-    h = GlobalAlloc(GMEM_MOVEABLE | GMEM_DDESHARE, (wcslen(w) + 1) * sizeof(WCHAR));
+    if (plat_nt()) {
+        h = GlobalAlloc(GMEM_MOVEABLE | GMEM_DDESHARE, (wcslen(w) + 1) * sizeof(WCHAR));
+        if (h) {
+            memcpy(GlobalLock(h), w, (wcslen(w) + 1) * sizeof(WCHAR));
+            GlobalUnlock(h);
+        }
+    } else {
+        /* 95 and 98 keep text in the code page; what it cannot spell is '?' */
+        int n = WideCharToMultiByte(CP_ACP, 0, w, -1, NULL, 0, NULL, NULL);
+        h = n > 0 ? GlobalAlloc(GMEM_MOVEABLE | GMEM_DDESHARE, (DWORD)n) : NULL;
+        if (h) {
+            WideCharToMultiByte(CP_ACP, 0, w, -1, (char *)GlobalLock(h), n, NULL, NULL);
+            GlobalUnlock(h);
+        }
+    }
     if (h) {
-        memcpy(GlobalLock(h), w, (wcslen(w) + 1) * sizeof(WCHAR));
-        GlobalUnlock(h);
         if (OpenClipboard(wnd)) {
             setting = 1;
             EmptyClipboard();
-            if (!SetClipboardData(CF_UNICODETEXT, h))
+            if (!SetClipboardData(plat_nt() ? CF_UNICODETEXT : CF_TEXT, h))
                 GlobalFree(h);
             CloseClipboard();
             setting = 0;
@@ -78,12 +91,23 @@ static void read_clipboard(void)
 {
     HANDLE h;
     const WCHAR *w;
+    WCHAR *conv = NULL;
     char *u;
     size_t n;
-    if (!IsClipboardFormatAvailable(CF_UNICODETEXT) || !OpenClipboard(wnd))
+    UINT fmt = plat_nt() ? CF_UNICODETEXT : CF_TEXT;
+    if (!IsClipboardFormatAvailable(fmt) || !OpenClipboard(wnd))
         return;
-    h = GetClipboardData(CF_UNICODETEXT);
+    h = GetClipboardData(fmt);
     w = h ? (const WCHAR *)GlobalLock(h) : NULL;
+    if (w && fmt == CF_TEXT) {
+        /* the code page's text, as UTF-16 like NT's */
+        const char *a = (const char *)w;
+        int wn = MultiByteToWideChar(CP_ACP, 0, a, -1, NULL, 0);
+        conv = wn > 0 ? (WCHAR *)malloc((size_t)wn * sizeof(WCHAR)) : NULL;
+        if (conv)
+            MultiByteToWideChar(CP_ACP, 0, a, -1, conv, wn);
+        w = conv;
+    }
     if (w) {
         n = wcslen(w);
         u = (char *)malloc(n * 3 + 1);
@@ -99,8 +123,10 @@ static void read_clipboard(void)
             }
             free(u);
         }
-        GlobalUnlock(h);
     }
+    if (h)
+        GlobalUnlock(h);
+    free(conv);
     CloseClipboard();
 }
 
@@ -159,9 +185,8 @@ static DWORD WINAPI clip_thread(LPVOID started)
 void clip_start(void)
 {
     HANDLE ev = CreateEvent(NULL, TRUE, FALSE, NULL), t;
-    DWORD tid;
     InitializeCriticalSection(&lock);
-    t = CreateThread(NULL, 0, clip_thread, ev, 0, &tid);
+    t = plat_thread(clip_thread, ev);
     if (t) {
         WaitForSingleObject(ev, 10000);
         CloseHandle(t);

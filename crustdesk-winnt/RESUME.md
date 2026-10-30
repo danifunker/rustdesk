@@ -41,7 +41,24 @@ built there by Visual C++ 4 (`cl` 10.10), every frame decoded by libvpx
 | **the service as SYSTEM**: Ctrl-Alt-Del from the peer (`ctrl 100`) brings up Windows NT Security; the agent follows to the Winlogon desktop; Lock Workstation, the locked screen, Ctrl-Alt-Del, the Unlock dialog, typing the password, back to the desktop | works |
 | the console reporter's https (BearSSL by MSVC 4) against a Let's Encrypt site: verified handshake, an HTTP answer (405), inventory "PowerPC; 128 MB; Windows NT 4.0 (build 1381, Service Pack 2) PowerPC" | works (no real console tried) |
 
-**Not proven**: x86, MIPS and Alpha builds (not compiled: no NT machine or
+**x86 (second session, 2026-10-30)**, on QEMU's i440FX PC (Pentium, TCG)
+with NT 4.0 Workstation (no service pack), built there by Visual C++ 4.0
+for x86 (`cl` 10.00.5270): `-selftest` all pass; installed as a service
+(`-install`), registered with rs-ny, a session **by ID through the public
+relay**, typing (Legacy, Map with Shift, Alt-codes `ü é ñ`), clipboard both
+ways (Unicode), files (200 KB round trip, a Unicode folder), Ctrl-Alt-Del
+to Windows NT Security from the service. The PowerPC machine was then
+pointed at the user's own servers (its settings file only): registered with
+their ID server, **in their console's device list over https** (their
+Let's Encrypt chain verified), a session by ID through their relay.
+
+**Windows 95 and 98** (the x86 build only; same program): it *loads* there
+-- `scripts/check-imports.py` finds every import in 95 RTM's and 98 SE's
+DLLs (from the user's NAS) -- and the 9x branches are written (section 3),
+but **nothing has run on 9x yet**: no 9x machine (98 SE setup wants a
+product key; asked the user).
+
+**Not proven**: MIPS and Alpha builds (not compiled: no NT machine or
 compiler for them yet; nothing in the source is processor-specific, and
 `-selftest` exists to check them); real PowerPC hardware; NT 4.0 with other
 service packs; a real RustDesk console; a screen depth other than the 40P's
@@ -121,6 +138,14 @@ and GCC 14+ wants `CC="cc -Wno-error=implicit-function-declaration"` for
   on NTFS -- see section 6). The agent writes `C-Desk-Vint.sta` for the
   window (registered, refused, sessions). The window edits the file and
   restarts the service.
+- **Windows 95/98** (`plat_nt()` is 0): no service manager -- `-install`
+  writes HKLM `...\RunServices` (started at boot, before logon), the agent
+  calls `RegisterServiceProcess` (lives through a logoff), holds the mutex
+  "C-Desk-Vint agent" (running) and waits on the event "C-Desk-Vint stop".
+  Files through the A calls in the code page (`x_` wrappers in fs_win32.c),
+  clipboard as CF_TEXT, `VkKeyScanA`, `GetUserName`; no desktops to follow,
+  no Ctrl-Alt-Del to send (logged), no ACLs. NT-only calls are imported all
+  the same: 95 and 98 export them as failing stubs.
 - **Identity**: generated on first run like the others (9-digit ID, uuid,
   Ed25519 seed); entropy from `QueryPerformanceCounter` jitter, the clocks,
   memory, the pointer, and `CryptGenRandom` when CryptoAPI is there.
@@ -135,6 +160,25 @@ and GCC 14+ wants `CC="cc -Wno-error=implicit-function-declaration"` for
   each Alt-code digit; all three then came out right.
 - **MSVC 4 headers lack** `CP_UTF8` (NT 4.0 has the code page: `cliptool.c`
   defines it), `ICON_BIG`/`ICON_SMALL`; `ES_NUMBER` is there.
+- **Threads need `/MT`**: Visual C++ 4 links the single-threaded C runtime
+  by default, and the clipboard, lookup, console and Ctrl-Alt-Del threads
+  call malloc. Built with `/MT` and `_beginthreadex` (`plat_thread`) since
+  2026-10-30; the first PowerPC release (20261030-7dba170c8) has the bug.
+- **nmake rebuilds nothing when flags change**: every object depends on
+  `FLAGS` (the compiler lines, written by stage.py), the build ID is a
+  header.
+- **libsodium includes `<intrin.h>` for any x86 MSVC**; it came with Visual
+  C++ 2005. Staged with `_MSC_VER >= 1400` added.
+- **ntexec served one request at a time**, so an abandoned build blocked
+  everything; now a thread per connection, and a RUN whose client went away
+  is killed. (The PowerPC machine still runs the old one; rebuild it there.)
+- **NT 4.0 x86 under KVM** hung at a blank desktop at 100% CPU (QEMU
+  logging slirp send failures): the x86 machine runs on TCG. A full build
+  is ~15-20 minutes there.
+- **NT 4.0 turns automatic logon off** when the password is empty: the x86
+  machine's Administrator password is "password" too.
+- **The Makefile's own variables** must not be named `NTX` (the environment
+  variable ntx.py reads): `NTX=host:port make nt` overrode the command.
 - **The test image's password is "password"**, not blank as its README says
   (Winlogon's `DefaultPassword`); it logs on by itself.
 - **`kill NAME` in the Resource Kit** matches window titles too; use PIDs
@@ -162,7 +206,9 @@ Resource Kit (`kill`, `tlist`, `reg`, Perl).
 On the overlay: `C:\ntexec` (ntexec, cliptool), ntexec in All Users'
 Startup (it runs at the automatic logon), the build tree `C:\cdv\src`, and
 the agent installed as a service in `C:\Program Files\C-Desk-Vint` with ID
-782 582 429 and generic settings (build 20261030-7dba170c8). NT was shut
+782 582 429 (build 20261030-7dba170c8, since 2026-10-30 a /MT dev build). Its
+settings file now points at **the user's own ID server, key, relay and
+console** (personal settings, in that file only, as on the Indigo). NT was shut
 down cleanly at the end of the first session (the Resource Kit's `shutdown
 /L /Y /C /T:0`, then QMP `quit`). Throw `work.qcow2` away to start over.
 
@@ -170,22 +216,41 @@ down cleanly at the end of the first session (the Resource Kit's `shutdown
 `sendkey`; a CD for getting ntexec.c in -- that is how it got there the first
 time, typed at a command prompt). After that, `scripts/ntx.py`.
 
+The x86 machine: `scripts/qemu-nt4x86.sh` on
+`/run/media/dani/BigDisk/winnt-x86` (VNC 127.0.0.1:5942; ntexec on 2371, the
+agent on 21128): tenox's `nt4-vanilla.rar` (unpacked with Ubuntu's
+`unrar-nonfree`, fetched by `apt-get download` into `tools/`, since Ubuntu's
+7-Zip has no RAR), image read-only, overlay `work.qcow2`; Visual C++ 4.0 for
+x86 (Disc 1, from the user's NAS: `software/winworld-pc/extracted/visual-c/
+4x`) copied to C:\MSDEV, in the system environment; automatic logon;
+ntexec in Startup; the agent installed as a service (ID 284 688 195, generic
+settings). `/run/media/dani/BigDisk/win9x`: 98 SE's ISO and 95 RTM's and 98
+SE's system DLLs (`dll95/`, `dll98/`) for check-imports.py.
+
+The user's NAS (`smb://daninas.local/software`, mounted by GVFS) has the
+winworld collection: Visual C++ 4.0 RISC for MIPS and Alpha (4.0a), NT 4.0
+install ISOs, 95/98 media; `inventory.tsv` lists it, `extracted/` has ISOs.
+Tenox has an NT 4.0 MIPS QEMU image with Visual C++ 4.1
+(`winnt/VMs/qemu-mips/nt4mips-thisone-vc41.rar`).
+
 ## 6. What is left
 
-1. **Other processors.** x86: any NT 4.0 x86 with Visual C++ 4-6 (or a
-   newer Windows with an old compiler) -- `make nt ARCH=x86 NTX=...`. MIPS:
+1. **Windows 95/98 on a machine**: install one (98 SE setup needs a
+   product key from the user) and run the 9x branches; then the release
+   notes may say so.
+2. **Other processors.** x86 is done (above). MIPS:
    QEMU's `magnum` runs NT 4.0 MIPS; needs an install and Visual C++ for
    MIPS. Alpha: needs real hardware or an emulator that runs NT. Run
    `-selftest` on each.
-2. **The settings file on FAT** keeps no permissions, and the test machine's
+3. **The settings file on FAT** keeps no permissions, and the test machine's
    C: is FAT: the password and private key are readable by anyone who logs
    on. Moving those two into an ACL'd registry key would fix it on any disk;
    not done (the user's call).
-3. **Speed**: 1.3-3 fps under QEMU while things change, most of it reading
+4. **Speed**: 1.3-3 fps under QEMU while things change, most of it reading
    and comparing the screen; real hardware unmeasured. A mirror driver would
    give damage regions and motion; NT 4.0 had them (VNC's), but that is a
    kernel driver per processor.
-4. Chat, and the peer's "lock screen", are not offered.
-5. Release: build 20261030-7dba170c8 from `make dist`
+5. Chat, and the peer's "lock screen", are not offered.
+6. Release: build 20261030-7dba170c8 from `make dist`
    (`C-Desk-Vint-WinNT4-PPC-20261030-7dba170c8.zip`, `.exe`, `.SHA256SUMS`),
    copied to `~/vintage-state/crustdesk-winnt/`; not uploaded anywhere yet.

@@ -1,6 +1,7 @@
 #include "service.h"
 #include "agent.h"
 #include "log.h"
+#include "plat.h"
 #include "prefs.h"
 
 #include "win.h"
@@ -19,6 +20,165 @@ static void say(char *err, size_t cap, const char *what)
         msg[n - 1] = 0;
     if (err)
         snprintf(err, cap, "%s: %s (%lu)", what, msg[0] ? msg : "failed", e);
+}
+
+/* ---- Windows 95 and 98: no service manager ------------------------------------
+ *
+ * A program named under RunServices starts at boot, before anyone logs on,
+ * and one that calls RegisterServiceProcess lives through a logoff. "Running"
+ * is a named mutex the agent holds; "stop" is a named event it waits on. */
+
+#define RUNSERVICES "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunServices"
+#define MUTEX_9X "C-Desk-Vint agent"
+#define STOP_9X "C-Desk-Vint stop"
+
+static int running_9x(void)
+{
+    HANDLE m = OpenMutex(SYNCHRONIZE, FALSE, MUTEX_9X);
+    if (!m)
+        return 0;
+    CloseHandle(m);
+    return 1;
+}
+
+static int path_9x(char *out, size_t cap)
+{
+    HKEY k;
+    char buf[MAX_PATH + 32];
+    DWORD type, len = sizeof buf;
+    const char *p, *e;
+    if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, RUNSERVICES, 0, KEY_READ, &k) != ERROR_SUCCESS)
+        return 0;
+    if (RegQueryValueEx(k, SERVICE_NAME, NULL, &type, (LPBYTE)buf, &len) != ERROR_SUCCESS ||
+        type != REG_SZ) {
+        RegCloseKey(k);
+        return 0;
+    }
+    RegCloseKey(k);
+    buf[sizeof buf - 1] = 0;
+    p = buf;
+    if (*p == '"') {
+        p++;
+        e = strchr(p, '"');
+    } else {
+        e = strchr(p, ' ');
+    }
+    if (!e)
+        e = p + strlen(p);
+    if (out && (size_t)(e - p) < cap) {
+        memcpy(out, p, (size_t)(e - p));
+        out[e - p] = 0;
+    }
+    return 1;
+}
+
+static int wait_9x(int want, int ms)
+{
+    for (; ms > 0; ms -= 250) {
+        if (running_9x() == want)
+            return 1;
+        Sleep(250);
+    }
+    return running_9x() == want;
+}
+
+static int start_9x(char *err, size_t cap)
+{
+    char exe[MAX_PATH], cmd[MAX_PATH + 32];
+    STARTUPINFO si;
+    PROCESS_INFORMATION pi;
+    if (running_9x())
+        return 1;
+    if (!path_9x(exe, sizeof exe)) {
+        if (err)
+            snprintf(err, cap, "not installed");
+        return 0;
+    }
+    snprintf(cmd, sizeof cmd, "\"%s\" -service", exe);
+    memset(&si, 0, sizeof si);
+    si.cb = sizeof si;
+    if (!CreateProcess(NULL, cmd, NULL, NULL, FALSE, DETACHED_PROCESS, NULL, NULL, &si, &pi)) {
+        say(err, cap, "cannot start the agent");
+        return 0;
+    }
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    if (!wait_9x(1, 15000)) {
+        if (err)
+            snprintf(err, cap, "the agent did not start; see C-Desk-Vint.log");
+        return 0;
+    }
+    return 1;
+}
+
+static int stop_9x(char *err, size_t cap)
+{
+    HANDLE ev;
+    if (!running_9x())
+        return 1;
+    ev = OpenEvent(EVENT_MODIFY_STATE, FALSE, STOP_9X);
+    if (ev) {
+        SetEvent(ev);
+        CloseHandle(ev);
+    }
+    if (!wait_9x(0, 15000)) {
+        if (err)
+            snprintf(err, cap, "the agent did not stop");
+        return 0;
+    }
+    return 1;
+}
+
+static int install_9x(const char *exe, char *err, size_t cap)
+{
+    HKEY k;
+    char cmd[MAX_PATH + 32];
+    DWORD disp;
+    snprintf(cmd, sizeof cmd, "\"%s\" -service", exe);
+    if (RegCreateKeyEx(HKEY_LOCAL_MACHINE, RUNSERVICES, 0, NULL, 0, KEY_WRITE, NULL, &k, &disp) !=
+            ERROR_SUCCESS ||
+        RegSetValueEx(k, SERVICE_NAME, 0, REG_SZ, (const BYTE *)cmd, (DWORD)strlen(cmd) + 1) !=
+            ERROR_SUCCESS) {
+        say(err, cap, "cannot write RunServices");
+        return 0;
+    }
+    RegCloseKey(k);
+    return 1;
+}
+
+static int remove_9x(char *err, size_t cap)
+{
+    HKEY k;
+    stop_9x(NULL, 0);
+    if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, RUNSERVICES, 0, KEY_WRITE, &k) != ERROR_SUCCESS) {
+        say(err, cap, "cannot open RunServices");
+        return 0;
+    }
+    RegDeleteValue(k, SERVICE_NAME);
+    RegCloseKey(k);
+    return 1;
+}
+
+/* Running as the "service": hold the mutex, live through logoffs, stop
+ * when the event is set. */
+static int run_9x(int verbose)
+{
+    typedef DWORD(WINAPI * rsp_fn)(DWORD, DWORD);
+    rsp_fn rsp = (rsp_fn)GetProcAddress(GetModuleHandle("kernel32.dll"),
+                                        "RegisterServiceProcess");
+    HANDLE m, ev;
+    int r;
+    m = CreateMutex(NULL, TRUE, MUTEX_9X);
+    if (!m || GetLastError() == ERROR_ALREADY_EXISTS)
+        return 1; /* already running */
+    ev = CreateEvent(NULL, TRUE, FALSE, STOP_9X);
+    if (rsp)
+        rsp(0, 1); /* RSP_SIMPLE_SERVICE: a logoff does not end it */
+    r = agent_run(ev, 0, verbose);
+    CloseHandle(ev);
+    ReleaseMutex(m);
+    CloseHandle(m);
+    return r == 0;
 }
 
 static SC_HANDLE open_svc(DWORD access, SC_HANDLE *scm)
@@ -40,9 +200,12 @@ static SC_HANDLE open_svc(DWORD access, SC_HANDLE *scm)
 
 int service_state(void)
 {
-    SC_HANDLE scm, s = open_svc(SERVICE_QUERY_STATUS, &scm);
+    SC_HANDLE scm, s;
     SERVICE_STATUS st;
     int r = SVC_UNKNOWN;
+    if (!plat_nt())
+        return !path_9x(NULL, 0) ? SVC_ABSENT : running_9x() ? SERVICE_RUNNING : SERVICE_STOPPED;
+    s = open_svc(SERVICE_QUERY_STATUS, &scm);
     if (!s)
         return GetLastError() == ERROR_SERVICE_DOES_NOT_EXIST ? SVC_ABSENT : SVC_UNKNOWN;
     if (QueryServiceStatus(s, &st))
@@ -54,11 +217,14 @@ int service_state(void)
 
 int service_path(char *out, size_t cap)
 {
-    SC_HANDLE scm, s = open_svc(SERVICE_QUERY_CONFIG, &scm);
+    SC_HANDLE scm, s;
     char buf[4096];
     QUERY_SERVICE_CONFIG *qc = (QUERY_SERVICE_CONFIG *)buf;
     DWORD need;
     int ok = 0;
+    if (!plat_nt())
+        return path_9x(out, cap);
+    s = open_svc(SERVICE_QUERY_CONFIG, &scm);
     if (!s)
         return 0;
     if (QueryServiceConfig(s, qc, sizeof buf, &need)) {
@@ -84,8 +250,11 @@ int service_path(char *out, size_t cap)
 
 int service_install(const char *exe, char *err, size_t cap)
 {
-    SC_HANDLE scm = OpenSCManager(NULL, NULL, SC_MANAGER_ALL_ACCESS), s;
+    SC_HANDLE scm, s;
     char cmd[MAX_PATH + 32];
+    if (!plat_nt())
+        return install_9x(exe, err, cap);
+    scm = OpenSCManager(NULL, NULL, SC_MANAGER_ALL_ACCESS);
     if (!scm) {
         say(err, cap, "cannot reach the service manager (are you an Administrator?)");
         return 0;
@@ -131,8 +300,11 @@ static int wait_for(SC_HANDLE s, DWORD pending, DWORD want)
 
 int service_start(char *err, size_t cap)
 {
-    SC_HANDLE scm, s = open_svc(SERVICE_START | SERVICE_QUERY_STATUS, &scm);
+    SC_HANDLE scm, s;
     int ok;
+    if (!plat_nt())
+        return start_9x(err, cap);
+    s = open_svc(SERVICE_START | SERVICE_QUERY_STATUS, &scm);
     if (!s) {
         say(err, cap, "cannot open the service");
         return 0;
@@ -149,9 +321,12 @@ int service_start(char *err, size_t cap)
 
 int service_stop(char *err, size_t cap)
 {
-    SC_HANDLE scm, s = open_svc(SERVICE_STOP | SERVICE_QUERY_STATUS, &scm);
+    SC_HANDLE scm, s;
     SERVICE_STATUS st;
     int ok;
+    if (!plat_nt())
+        return stop_9x(err, cap);
+    s = open_svc(SERVICE_STOP | SERVICE_QUERY_STATUS, &scm);
     if (!s) {
         say(err, cap, "cannot open the service");
         return 0;
@@ -171,6 +346,8 @@ int service_remove(char *err, size_t cap)
 {
     SC_HANDLE scm, s;
     int ok;
+    if (!plat_nt())
+        return remove_9x(err, cap);
     service_stop(NULL, 0);
     s = open_svc(DELETE, &scm);
     if (!s) {
@@ -234,6 +411,8 @@ static VOID WINAPI service_main(DWORD argc, LPSTR *argv)
 int service_dispatch(int verbose)
 {
     SERVICE_TABLE_ENTRY t[2];
+    if (!plat_nt())
+        return run_9x(verbose);
     svc_verbose = verbose;
     t[0].lpServiceName = SERVICE_NAME;
     t[0].lpServiceProc = service_main;
