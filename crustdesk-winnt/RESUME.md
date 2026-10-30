@@ -251,6 +251,12 @@ Tenox has an NT 4.0 MIPS QEMU image with Visual C++ 4.1
    give damage regions and motion; NT 4.0 had them (VNC's), but that is a
    kernel driver per processor.
 5. Chat, and the peer's "lock screen", are not offered.
-6. Release: build 20261030-7dba170c8 from `make dist`
-   (`C-Desk-Vint-WinNT4-PPC-20261030-7dba170c8.zip`, `.exe`, `.SHA256SUMS`),
-   copied to `~/vintage-state/crustdesk-winnt/`; not uploaded anywhere yet.
+6. Released 2026-10-30 (the user asked): build **20261030-0df59d3a8**, x86 and
+   PowerPC (`C-Desk-Vint-WinNT4-{x86,PPC}-20261030-0df59d3a8.{exe,zip,
+   SHA256SUMS,MANIFEST.txt}`) in `r-deskway-1.5.0`, with rows in both of the
+   notes' tables and a "C-Desk-Vint for Windows NT 4.0" section at the end
+   (notes CRLF); copies in `~/vintage-state/crustdesk-winnt/`. Each was
+   installed on its QEMU machine as uploaded (hashes compared) and tested
+   there; the MANIFESTs list exactly what. The earlier PowerPC build
+   20261030-7dba170c8 (single-threaded runtime) was never published and is
+   gone.
