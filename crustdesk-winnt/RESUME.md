@@ -153,8 +153,8 @@ and GCC 14+ wants `CC="cc -Wno-error=implicit-function-declaration"` for
 `/run/media/dani/BigDisk/winnt-ppc` (`NTVM`): `dl/nt40powerpc-qemu.tar.lz`
 (tenox7, 156 MB, downloaded 2026-10-29 from
 `tenox.pdp-11.net/os/winnt/VMs/qemu-ppc/`), unpacked in `img/` with its own
-QEMU 11.1.1 (`github.com/tenox7/qemu`, branch powerpc; the source clone is
-in `qemu-src/`), the image's disk read-only, our changes in the overlay
+QEMU 11.1.1 (source: `github.com/tenox7/qemu`, branch powerpc; not kept --
+the image's binaries are all that is needed), the image's disk read-only, our changes in the overlay
 `work.qcow2` (+ `work-nvram.bin`). 128 MB, S3 Trio64 at 1280x1024, NE2000,
 NT 4.0 SP2, Visual C++ 4 (C:\MSDEV), the Platform SDK (C:\MSTOOLS), the
 Resource Kit (`kill`, `tlist`, `reg`, Perl).
@@ -162,7 +162,9 @@ Resource Kit (`kill`, `tlist`, `reg`, Perl).
 On the overlay: `C:\ntexec` (ntexec, cliptool), ntexec in All Users'
 Startup (it runs at the automatic logon), the build tree `C:\cdv\src`, and
 the agent installed as a service in `C:\Program Files\C-Desk-Vint` with ID
-782 582 429 and generic settings. Throw `work.qcow2` away to start over.
+782 582 429 and generic settings (build 20261030-7dba170c8). NT was shut
+down cleanly at the end of the first session (the Resource Kit's `shutdown
+/L /Y /C /T:0`, then QMP `quit`). Throw `work.qcow2` away to start over.
 
 `scripts/ntvm.py` drives the screen and keyboard over QMP (screenshots;
 `sendkey`; a CD for getting ntexec.c in -- that is how it got there the first
@@ -184,5 +186,6 @@ time, typed at a command prompt). After that, `scripts/ntx.py`.
    give damage regions and motion; NT 4.0 had them (VNC's), but that is a
    kernel driver per processor.
 4. Chat, and the peer's "lock screen", are not offered.
-5. Release: the files come from `make dist` (`C-Desk-Vint-WinNT4-PPC-<build>.zip`
-   and `.exe`, SHA256SUMS); not uploaded anywhere yet.
+5. Release: build 20261030-7dba170c8 from `make dist`
+   (`C-Desk-Vint-WinNT4-PPC-20261030-7dba170c8.zip`, `.exe`, `.SHA256SUMS`),
+   copied to `~/vintage-state/crustdesk-winnt/`; not uploaded anywhere yet.
