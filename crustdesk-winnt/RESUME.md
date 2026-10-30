@@ -61,8 +61,12 @@ the public relay with `scripts/session-test.sh` (typing, accents, the
 clipboard in the code page -- "☺" became "?" as designed --, files, a
 screenshot); `-stop`/`-start`; started at a cold boot before logon and
 served the logon prompt; a remote logon; still serving after a logoff.
-Known: at 640x480 the settings window is taller than the screen, and its
-title says "Windows NT". **Windows 95**: loads (check-imports.py against
+Build 20261030-feaa6be71 then fixed the settings window (two columns,
+206 dialog units: whole on 640x480; titled for the Windows it is on) and
+passed the same tests on all three machines. `-start`/`-stop` run with no
+console answer "done" in a message box that waits for OK -- such a helper
+holds the program file, so a file swap on 9x needs it dismissed (or
+`tools/nt/plist.c kill`). **Windows 95**: loads (check-imports.py against
 95 RTM's DLLs), never run.
 
 **Not proven**: MIPS and Alpha builds (not compiled: no NT machine or
@@ -255,8 +259,7 @@ Tenox has an NT 4.0 MIPS QEMU image with Visual C++ 4.1
 
 ## 6. What is left
 
-1. **The settings window on 9x**: fit 640x480 (it is ~490 px tall) and say
-   "Windows" rather than "Windows NT" there; Windows 95 on a machine.
+1. **Windows 95** on a machine.
 2. **Other processors.** x86 is done (above). MIPS:
    QEMU's `magnum` runs NT 4.0 MIPS; needs an install and Visual C++ for
    MIPS. Alpha: needs real hardware or an emulator that runs NT. Run
@@ -270,14 +273,15 @@ Tenox has an NT 4.0 MIPS QEMU image with Visual C++ 4.1
    give damage regions and motion; NT 4.0 had them (VNC's), but that is a
    kernel driver per processor.
 5. Chat, and the peer's "lock screen", are not offered.
-6. Released 2026-10-30 (the user asked): build **20261030-0df59d3a8**, x86 and
-   PowerPC (`C-Desk-Vint-WinNT4-{x86,PPC}-20261030-0df59d3a8.{exe,zip,
-   SHA256SUMS,MANIFEST.txt}`) in `r-deskway-1.5.0`, with rows in both of the
-   notes' tables and a "C-Desk-Vint for Windows NT 4.0" section at the end
-   (notes CRLF); copies in `~/vintage-state/crustdesk-winnt/`. Each was
-   installed on its QEMU machine as uploaded (hashes compared) and tested
-   there; the MANIFESTs list exactly what. The earlier PowerPC build
-   20261030-7dba170c8 (single-threaded runtime) was never published and is
-   gone. After the Windows 98 test the zips were remade with the read-me as
-   of 0d4657d30 (programs unchanged), the MANIFESTs, SHA256SUMS and notes
-   updated to say 98 works, and the title names Windows 98.
+6. Released (the user asked): build **20261030-feaa6be71**, x86 and PowerPC
+   (`C-Desk-Vint-WinNT4-{x86,PPC}-20261030-feaa6be71.{exe,zip,SHA256SUMS,
+   MANIFEST.txt}`) in `r-deskway-1.5.0`, replacing 20261030-0df59d3a8 (whose
+   assets were deleted; it differed only in the settings window), with rows
+   in both of the notes' tables and a "C-Desk-Vint for Windows NT 4.0 (x86
+   and PowerPC) and Windows 98" section (notes CRLF); copies in
+   `~/vintage-state/crustdesk-winnt/`. Each was installed on its machines as
+   uploaded (bytes compared) and tested there; the MANIFESTs list exactly
+   what, and which tests ran on the build before.
+7. The user's Windows 98 VM is backed up on the NAS as
+   `software/VM Images/Win98VM-20261030.zip` (the VMware files as they were,
+   the QEMU working disk with the agent and tools, a README).
