@@ -4,52 +4,54 @@
 
 IDI_CDV ICON "cdv.ico"
 
-IDD_MAIN DIALOG 0, 0, 262, 300
+IDD_MAIN DIALOG 0, 0, 400, 206
 STYLE DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX
 CAPTION "C-Desk-Vint"
 FONT 8, "MS Sans Serif"
 BEGIN
-    GROUPBOX        "This machine", -1, 7, 4, 248, 50
-    LTEXT           "ID:", -1, 15, 18, 40, 8
-    EDITTEXT        IDC_ID, 62, 16, 100, 12, ES_READONLY | NOT WS_TABSTOP
-    LTEXT           "Password:", -1, 15, 36, 40, 8
-    EDITTEXT        IDC_PASSWORD, 62, 34, 100, 12, ES_AUTOHSCROLL | ES_PASSWORD
-    PUSHBUTTON      "Show", IDC_SHOWPW, 166, 33, 38, 14
-    PUSHBUTTON      "New", IDC_NEWPW, 208, 33, 38, 14
+    /* Two columns, so it fits a 640x480 screen with room for the taskbar. */
+    GROUPBOX        "This machine", -1, 7, 4, 192, 50
+    LTEXT           "ID:", -1, 15, 18, 44, 8
+    EDITTEXT        IDC_ID, 62, 16, 76, 12, ES_READONLY | NOT WS_TABSTOP
+    LTEXT           "Password:", -1, 15, 36, 44, 8
+    EDITTEXT        IDC_PASSWORD, 62, 34, 76, 12, ES_AUTOHSCROLL | ES_PASSWORD
+    PUSHBUTTON      "Show", IDC_SHOWPW, 142, 33, 26, 14
+    PUSHBUTTON      "New", IDC_NEWPW, 171, 33, 22, 14
 
-    GROUPBOX        "Service", -1, 7, 58, 248, 44
-    LTEXT           "", IDC_SVCSTATE, 15, 70, 232, 8
-    PUSHBUTTON      "&Install", IDC_INSTALL, 15, 82, 54, 14
-    PUSHBUTTON      "&Start", IDC_START, 74, 82, 54, 14
-    PUSHBUTTON      "S&top", IDC_STOP, 133, 82, 54, 14
-    PUSHBUTTON      "&Remove", IDC_REMOVE, 192, 82, 54, 14
+    GROUPBOX        "Service", -1, 7, 58, 192, 44
+    LTEXT           "", IDC_SVCSTATE, 15, 70, 178, 8
+    PUSHBUTTON      "&Install", IDC_INSTALL, 15, 82, 42, 14
+    PUSHBUTTON      "&Start", IDC_START, 60, 82, 42, 14
+    PUSHBUTTON      "S&top", IDC_STOP, 105, 82, 42, 14
+    PUSHBUTTON      "&Remove", IDC_REMOVE, 150, 82, 43, 14
 
-    GROUPBOX        "Network", -1, 7, 106, 248, 104
-    LTEXT           "ID server:", -1, 15, 120, 60, 8
-    EDITTEXT        IDC_SERVER, 78, 118, 168, 12, ES_AUTOHSCROLL
-    LTEXT           "Key:", -1, 15, 136, 60, 8
-    EDITTEXT        IDC_KEY, 78, 134, 168, 12, ES_AUTOHSCROLL
-    LTEXT           "Relay server:", -1, 15, 152, 60, 8
-    EDITTEXT        IDC_RELAY, 78, 150, 168, 12, ES_AUTOHSCROLL
-    LTEXT           "Console (API):", -1, 15, 168, 60, 8
-    EDITTEXT        IDC_API, 78, 166, 168, 12, ES_AUTOHSCROLL
-    LTEXT           "Direct IP port:", -1, 15, 186, 60, 8
-    EDITTEXT        IDC_PORT, 78, 184, 40, 12, ES_NUMBER
-    CONTROL         "Answer LAN discovery", IDC_LAN, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 130, 185, 110, 10
-    LTEXT           "Port 0 turns direct access off. An empty ID server: no ID.", -1, 15, 198, 232, 8
+    GROUPBOX        "Sessions", -1, 7, 106, 192, 62
+    LTEXT           "File access:", -1, 15, 120, 54, 8
+    EDITTEXT        IDC_FILES, 72, 118, 70, 12, ES_AUTOHSCROLL
+    LTEXT           "/ = all drives, off = none, or a folder", -1, 15, 133, 178, 8
+    LTEXT           "Picture quality:", -1, 15, 150, 54, 8
+    EDITTEXT        IDC_QUALITY, 72, 148, 24, 12, ES_NUMBER
+    LTEXT           "0 best ... 127 smallest; 24", -1, 100, 150, 93, 8
 
-    GROUPBOX        "Sessions", -1, 7, 214, 248, 44
-    LTEXT           "File access:", -1, 15, 228, 60, 8
-    EDITTEXT        IDC_FILES, 78, 226, 70, 12, ES_AUTOHSCROLL
-    LTEXT           "/ = all drives, off = none", -1, 154, 228, 96, 8
-    LTEXT           "Picture quality:", -1, 15, 244, 60, 8
-    EDITTEXT        IDC_QUALITY, 78, 242, 30, 12, ES_NUMBER
-    LTEXT           "0 best ... 127 smallest; 24 is the default", -1, 114, 244, 136, 8
+    GROUPBOX        "Network", -1, 206, 4, 187, 164
+    LTEXT           "ID server:", -1, 214, 18, 52, 8
+    EDITTEXT        IDC_SERVER, 268, 16, 118, 12, ES_AUTOHSCROLL
+    LTEXT           "Key:", -1, 214, 36, 52, 8
+    EDITTEXT        IDC_KEY, 268, 34, 118, 12, ES_AUTOHSCROLL
+    LTEXT           "Relay server:", -1, 214, 54, 52, 8
+    EDITTEXT        IDC_RELAY, 268, 52, 118, 12, ES_AUTOHSCROLL
+    LTEXT           "Console (API):", -1, 214, 72, 52, 8
+    EDITTEXT        IDC_API, 268, 70, 118, 12, ES_AUTOHSCROLL
+    LTEXT           "Direct IP port:", -1, 214, 90, 52, 8
+    EDITTEXT        IDC_PORT, 268, 88, 36, 12, ES_NUMBER
+    CONTROL         "Answer LAN discovery", IDC_LAN, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 214, 108, 170, 10
+    LTEXT           "Port 0 turns direct access off.", -1, 214, 128, 172, 8
+    LTEXT           "An empty ID server: no ID, by address only.", -1, 214, 140, 172, 8
 
-    LTEXT           "", IDC_STATUS, 7, 262, 248, 16
-    PUSHBUTTON      "View &log", IDC_LOG, 7, 280, 54, 14
-    PUSHBUTTON      "&Apply", IDC_APPLY, 142, 280, 54, 14
-    DEFPUSHBUTTON   "Close", IDCANCEL, 201, 280, 54, 14
+    LTEXT           "", IDC_STATUS, 7, 172, 386, 10
+    PUSHBUTTON      "View &log", IDC_LOG, 7, 186, 54, 14
+    PUSHBUTTON      "&Apply", IDC_APPLY, 282, 186, 54, 14
+    DEFPUSHBUTTON   "Close", IDCANCEL, 339, 186, 54, 14
 END
 
 1 VERSIONINFO

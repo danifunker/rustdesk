@@ -343,6 +343,17 @@ static void apply(HWND d)
     refresh(d);
 }
 
+/* "Windows NT", "Windows 98"...: the title says which this is. */
+static const char *windows_name(void)
+{
+    OSVERSIONINFO v;
+    v.dwOSVersionInfoSize = sizeof v;
+    if (!GetVersionEx(&v) || v.dwPlatformId == VER_PLATFORM_WIN32_NT)
+        return "Windows NT";
+    return v.dwMinorVersion >= 90 ? "Windows Me" : v.dwMinorVersion >= 10 ? "Windows 98"
+                                                                           : "Windows 95";
+}
+
 static BOOL CALLBACK dlg_proc(HWND d, UINT m, WPARAM wp, LPARAM lp)
 {
     char err[300];
@@ -353,7 +364,7 @@ static BOOL CALLBACK dlg_proc(HWND d, UINT m, WPARAM wp, LPARAM lp)
         char title[128];
         SendMessage(d, WM_SETICON, ICON_BIG, (LPARAM)icon);
         SendMessage(d, WM_SETICON, ICON_SMALL, (LPARAM)icon);
-        snprintf(title, sizeof title, "C-Desk-Vint for Windows NT (%s)", CDV_BUILD);
+        snprintf(title, sizeof title, "C-Desk-Vint for %s (%s)", windows_name(), CDV_BUILD);
         SetWindowText(d, title);
         SendDlgItemMessage(d, IDC_PASSWORD, EM_SETPASSWORDCHAR, '*', 0);
         fill(d);
