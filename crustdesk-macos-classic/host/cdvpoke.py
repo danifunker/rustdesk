@@ -16,6 +16,7 @@ Steps:
     up [X Y]          left button up
     rdown / rup       the same for the right button
     key CODE          a Mac virtual keycode, pressed and released (Map mode)
+    ctrl CODE         a ControlKey, pressed and released (100: Ctrl-Alt-Del)
     keydown CODE / keyup CODE
     type TEXT         characters, Legacy mode (chr is a character)
     sleep SECONDS
@@ -129,8 +130,11 @@ class Peer:
     send_seq = recv_seq = 0
 
     def __init__(self, addr):
-        host, port = addr.rsplit(':', 1)
-        self.s = socket.create_connection((host, int(port)), timeout=10)
+        if isinstance(addr, socket.socket):  # already connected (rdvpoke.py)
+            self.s = addr
+        else:
+            host, port = addr.rsplit(':', 1)
+            self.s = socket.create_connection((host, int(port)), timeout=10)
         self.buf = b''
         self.frames = self.keyframes = self.bytes = 0
         self.save = None
@@ -380,24 +384,26 @@ class Peer:
             body += field(3, 0, zz(y))
         self.send(field(10, 2, body))
 
-    def key(self, code, down=None, press=False, mode=1):
+    def key(self, code, down=None, press=False, mode=1, control=False):
         body = b''
         if down:
             body += field(1, 0, 1)
         if press:
             body += field(2, 0, 1)
-        body += field(4, 0, code)
+        body += field(3 if control else 4, 0, code)
         if mode:
             body += field(9, 0, mode)
         self.send(field(15, 2, body))
 
 
-def main():
-    argv = sys.argv[1:]
+def main(argv=None, sock=None):
+    """`sock`: a connection made already, through an ID server's relay
+    (rdvpoke.py); argv then starts with the password."""
+    argv = sys.argv[1:] if argv is None else argv
     secure = '--secure' in argv
     file_mode = '--files' in argv
     argv = [a for a in argv if a not in ('--secure', '--files')]
-    p = Peer(argv[0])
+    p = Peer(sock if sock is not None else argv[0])
     p.file_mode = file_mode
     if secure:
         p.handshake()
@@ -452,6 +458,9 @@ def main():
             p.mouse((1 if op.endswith('down') else 2) | btn << 3, *xy())
         elif op == 'key':
             p.key(int(args[i]), press=True)
+            i += 1
+        elif op == 'ctrl':
+            p.key(int(args[i]), press=True, control=True)
             i += 1
         elif op in ('keydown', 'keyup'):
             p.key(int(args[i]), down=op == 'keydown')

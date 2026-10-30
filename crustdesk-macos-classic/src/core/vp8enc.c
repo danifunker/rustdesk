@@ -823,6 +823,8 @@ static uint8_t clamp_tap(int v) { return (uint8_t)(v < 0 ? 0 : v > 255 ? 255 : v
 static void sixtap8x8(const uint8_t *src, int stride, int xf, int yf, uint8_t *dst)
 {
     int tmp[13 * 8], i, j;
+    const uint8_t *s;
+    const short *fl;
     if (!xf || !yf) {
         /* One direction only: the other pass is the identity. */
         const short *fl = vp8_sixtap_filters[xf | yf];
@@ -835,8 +837,8 @@ static void sixtap8x8(const uint8_t *src, int stride, int xf, int yf, uint8_t *d
             }
         return;
     }
-    const uint8_t *s = src - 2 * stride;
-    const short *fl = vp8_sixtap_filters[xf];
+    s = src - 2 * stride;
+    fl = vp8_sixtap_filters[xf];
     for (j = 0; j < 13; j++, s += stride)
         for (i = 0; i < 8; i++)
             tmp[j * 8 + i] = xf ? clamp_tap(TAPS(s[i - 2], s[i - 1], s[i], s[i + 1], s[i + 2],
