@@ -6,8 +6,12 @@ A RustDesk agent for Windows NT 4.0: it lets a stock RustDesk client
 paste with it, and move files to and from it -- across the room by its
 address, or across the internet by its RustDesk ID.
 
-This build is for one processor; the file name says which (PPC: PowerPC).
-The same program is built for x86, MIPS and Alpha from the same source.
+This build is for one processor; the file name says which (PPC: PowerPC,
+x86: Intel). The same program is built for each from the same source.
+
+The x86 build is also meant to run on Windows 95 and 98 (as a program
+started at boot rather than a service; no logon screen or Ctrl+Alt+Del
+there). It loads on both, but has not yet been tested on either.
 
 
 What it needs
