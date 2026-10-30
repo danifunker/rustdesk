@@ -4,6 +4,8 @@
  *                         pipe through ntexec carries it unchanged)
  *   cliptool set HEX      put UTF-8 text, given as hex, on the clipboard
  *
+ * On Windows 95/98, whose clipboard keeps text in the code page, CF_TEXT.
+ *
  * Build on NT:  cl cliptool.c user32.lib
  */
 #include <windows.h>
@@ -23,14 +25,22 @@ int main(int argc, char **argv)
         const WCHAR *t;
         char *u;
         int n, i;
+        WCHAR *conv = NULL;
+        int nt = GetVersion() < 0x80000000;
         if (!OpenClipboard(w))
             return 1;
-        h = GetClipboardData(CF_UNICODETEXT);
+        h = GetClipboardData(nt ? CF_UNICODETEXT : CF_TEXT);
         t = h ? (const WCHAR *)GlobalLock(h) : NULL;
         if (!t) {
             CloseClipboard();
             printf("(no text)\n");
             return 1;
+        }
+        if (!nt) {
+            int wn = MultiByteToWideChar(CP_ACP, 0, (const char *)t, -1, NULL, 0);
+            conv = (WCHAR *)malloc(wn * sizeof(WCHAR));
+            MultiByteToWideChar(CP_ACP, 0, (const char *)t, -1, conv, wn);
+            t = conv;
         }
         n = WideCharToMultiByte(CP_UTF8, 0, t, -1, NULL, 0, NULL, NULL);
         u = (char *)malloc(n);
@@ -59,10 +69,20 @@ int main(int argc, char **argv)
         t = (WCHAR *)GlobalLock(g);
         MultiByteToWideChar(CP_UTF8, 0, u, -1, t, wn);
         GlobalUnlock(g);
+        if (GetVersion() >= 0x80000000) {
+            /* 9x: the code page's text */
+            int an = wn * 2; /* a DBCS code page takes at most two bytes a character */
+            HGLOBAL ga = GlobalAlloc(GMEM_MOVEABLE | GMEM_DDESHARE, an);
+            WideCharToMultiByte(CP_ACP, 0, (WCHAR *)GlobalLock(g), -1, (char *)GlobalLock(ga), an,
+                                NULL, NULL);
+            GlobalUnlock(ga);
+            GlobalUnlock(g);
+            g = ga;
+        }
         if (!OpenClipboard(w))
             return 1;
         EmptyClipboard();
-        SetClipboardData(CF_UNICODETEXT, g);
+        SetClipboardData(GetVersion() < 0x80000000 ? CF_UNICODETEXT : CF_TEXT, g);
         CloseClipboard();
         return 0;
     }

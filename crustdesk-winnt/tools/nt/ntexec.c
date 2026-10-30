@@ -2,7 +2,8 @@
  *
  * Listens on TCP 2370 and serves one request per connection:
  *
- *   RUN <cmdline>\n        runs `cmd /c <cmdline>`, sends its output, then
+ *   RUN <cmdline>\n        runs `%COMSPEC% /c <cmdline>` (cmd on NT, command.com
+ *                          on 9x), sends its output, then
  *                          "\n@@EXIT <code>\n"
  *   SPAWN <cmdline>\n      starts a process detached; replies "OK <pid>\n"
  *   PUT <path> <size>\n    then <size> bytes; replies "OK\n"
@@ -79,9 +80,14 @@ static void do_run(SOCKET s, const char *cmdline)
     si.hStdOutput = wr;
     si.hStdError = wr;
 
-    cl = (char *)malloc(strlen(cmdline) + 16);
-    strcpy(cl, "cmd /c ");
-    strcat(cl, cmdline);
+    {
+        /* the system's shell: cmd on NT, command.com on 9x */
+        const char *sh = getenv("COMSPEC");
+        if (!sh || !*sh)
+            sh = "cmd";
+        cl = (char *)malloc(strlen(sh) + strlen(cmdline) + 8);
+        sprintf(cl, "%s /c %s", sh, cmdline);
+    }
     if (CreateProcess(NULL, cl, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
         CloseHandle(wr);
         wr = NULL;
