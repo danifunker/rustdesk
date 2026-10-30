@@ -1,0 +1,1300 @@
+/* C-Desk-Vint for Windows NT: a RustDesk agent for NT 4.0 on x86, MIPS,
+ * Alpha and PowerPC.
+ *
+ * The protocol, the encryption and the VP8 encoder are the classic Mac
+ * agent's portable core (crustdesk-macos-classic/src/core), built with the
+ * Visual C++ that came with NT; this file is the NT side of it, the IRIX
+ * port's main loop (crustdesk-irix/src/main.c) with WinSock's select() in
+ * place of poll(): the ID server, the relay and the peer, and the screen
+ * read back between them.
+ *
+ * One desktop session at a time, beside a file manager. A frame is encoded
+ * a few macroblock rows at a time with the network serviced in between, so
+ * the peer's pointer and keys keep arriving while a large frame is made.
+ */
+#include "agent.h"
+#include "clip.h"
+#include "fs_win32.h"
+#include "input.h"
+#include "log.h"
+#include "prefs.h"
+#include "report.h"
+#include "screen.h"
+#include "unzstd.h"
+
+#include "files.h"
+#include "png.h"
+#include "rdv.h"
+#include "rng.h"
+#include "session.h"
+#include "vp8enc.h"
+#include "sodium/crypto_sign_ed25519.h"
+
+#include "win.h"
+#include <winsock.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+static uint32_t now_ms(void)
+{
+    return cdv_ms();
+}
+
+static void copy(char *dst, const char *src, size_t cap)
+{
+    strncpy(dst, src, cap - 1);
+    dst[cap - 1] = 0;
+}
+
+/* ---- sockets ------------------------------------------------------------- */
+
+static void nonblock(SOCKET fd)
+{
+    unsigned long one = 1;
+    ioctlsocket(fd, FIONBIO, &one);
+}
+
+static int resolve(const char *host, uint32_t *ip)
+{
+    struct hostent *h;
+    unsigned long a = inet_addr(host);
+    if (a != INADDR_NONE) {
+        *ip = (uint32_t)ntohl(a);
+        return 1;
+    }
+    h = gethostbyname(host);
+    if (!h || h->h_length != 4)
+        return 0;
+    *ip = (uint32_t)((uint8_t)h->h_addr_list[0][0] << 24 | (uint8_t)h->h_addr_list[0][1] << 16 |
+                     (uint8_t)h->h_addr_list[0][2] << 8 | (uint8_t)h->h_addr_list[0][3]);
+    return 1;
+}
+
+static void sa_set(struct sockaddr_in *sa, uint32_t ip, uint16_t port)
+{
+    memset(sa, 0, sizeof *sa);
+    sa->sin_family = AF_INET;
+    sa->sin_addr.s_addr = htonl(ip);
+    sa->sin_port = htons(port);
+}
+
+/* Connect with a deadline; blocking otherwise. INVALID_SOCKET on failure. */
+static SOCKET tcp_connect(uint32_t ip, uint16_t port, int ms)
+{
+    struct sockaddr_in sa;
+    fd_set wr, ex;
+    struct timeval tv;
+    unsigned long zero = 0;
+    int one = 1;
+    SOCKET fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd == INVALID_SOCKET)
+        return fd;
+    sa_set(&sa, ip, port);
+    nonblock(fd);
+    if (connect(fd, (struct sockaddr *)&sa, sizeof sa) != 0 &&
+        WSAGetLastError() != WSAEWOULDBLOCK) {
+        closesocket(fd);
+        return INVALID_SOCKET;
+    }
+    FD_ZERO(&wr);
+    FD_ZERO(&ex);
+    FD_SET(fd, &wr);
+    FD_SET(fd, &ex);
+    tv.tv_sec = ms / 1000;
+    tv.tv_usec = ms % 1000 * 1000;
+    if (select(0, NULL, &wr, &ex, &tv) <= 0 || FD_ISSET(fd, &ex)) {
+        closesocket(fd);
+        return INVALID_SOCKET;
+    }
+    ioctlsocket(fd, FIONBIO, &zero);
+    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (char *)&one, sizeof one);
+    return fd;
+}
+
+static SOCKET listen_on(uint16_t port, int udp)
+{
+    struct sockaddr_in sa;
+    SOCKET fd = socket(AF_INET, udp ? SOCK_DGRAM : SOCK_STREAM, 0);
+    int one = 1;
+    if (fd == INVALID_SOCKET)
+        return fd;
+    if (udp)
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (char *)&one, sizeof one);
+    sa_set(&sa, 0, port);
+    if (bind(fd, (struct sockaddr *)&sa, sizeof sa) != 0 || (!udp && listen(fd, 2) != 0)) {
+        closesocket(fd);
+        return INVALID_SOCKET;
+    }
+    if (udp)
+        setsockopt(fd, SOL_SOCKET, SO_BROADCAST, (char *)&one, sizeof one);
+    nonblock(fd);
+    return fd;
+}
+
+static int send_all(SOCKET fd, const uint8_t *b, size_t n)
+{
+    while (n) {
+        int w = send(fd, (const char *)b, (int)n, 0);
+        if (w <= 0)
+            return -1;
+        b += w;
+        n -= (size_t)w;
+    }
+    return 0;
+}
+
+/* ---- the sessions ------------------------------------------------------------- *
+ *
+ * Two slots. A connection takes a free one; at login it becomes the desktop
+ * (one at a time: it owns the screen, the encoder and the video buffer) or a
+ * file manager (a client opens one beside its desktop window). */
+
+static cdv_screen scr;
+static int scr_ok;
+static cdv_ident ident;
+static uint8_t sign_pk[32], sign_sk[64];
+static char hostname[64];
+static const char *desk_name = "Default";
+
+#define CTL_CAP (64 * 1024)
+#define VID_CAP (2 * 1024 * 1024)
+#define IN_CAP (192 * 1024)
+#define WORK_CAP (192 * 1024)
+#define NSLOTS 2
+
+enum { K_NONE, K_DESKTOP, K_FILES };
+
+typedef struct {
+    SOCKET fd;            /* INVALID_SOCKET: free */
+    cdv_session s;
+    cdv_hooks hooks;      /* .user is the slot */
+    uint8_t *ctl, *in;
+    int kind;
+    cdv_files *files;
+    uint8_t *work;
+    int files_started;
+    uint32_t started;
+    char how[16];
+} slot;
+static slot slots[NSLOTS];
+static slot *desk;        /* the slot showing the desktop, or NULL */
+
+/* The desktop's own state, whichever slot it is in. */
+static struct {
+    vp8e *enc;
+    int encoding, key;
+    uint32_t last_frame, last_cursor, last_report, last_change, last_clip;
+    uint32_t f_start, f_enc;  /* this frame: when it began, encoder time so far */
+    int f_mbs, f_detail, f_flat;
+    int cx, cy;
+    /* where the peer last put the pointer, and when (cursor_step) */
+    int in_x, in_y, in_seen;
+    uint32_t in_at;
+    int want_shot;
+    /* for the log */
+    unsigned frames, bytes, mbs;
+    uint32_t t_read, t_conv, t_enc;
+} S;
+
+static uint8_t *vidbuf, *encmem, *encraw;
+static const cdv_fs_ops *files_fs;  /* NULL: file transfer is off */
+static int status_dirty = 1;
+
+/* The frame budget: a frame codes what fits in about FRAME_BUDGET hundredths
+ * of a millisecond of this CPU; the rest stays dirty for the next, so a big
+ * change paints in over a few frames while the stream keeps moving. Flat
+ * macroblocks are cheap; what a detailed one costs is learnt as it goes. */
+#define FRAME_BUDGET 15000
+#define COST_FLAT 30
+static int cost_detail = 150;
+static uint8_t *enc_dirty;    /* the macroblocks of the frame being encoded */
+static uint8_t *dirty_age;    /* frames a macroblock has waited */
+static uint8_t *flat_y, *flat_u, *flat_v;
+static int enc_w, enc_h;      /* the screen size they were made for */
+static int frame_ms = 66;     /* at most ~15 a second unless the peer asks */
+
+/* With nothing changing, the screen is looked at less often. */
+#define IDLE_AFTER_MS 2000
+#define IDLE_LOOK_MS 200
+/* How long one look at the screen may read for before handing back: the
+ * rows around the pointer, then bands of the rest -- a quarter of a
+ * 1280x1024 screen in QEMU's PowerPC, where a whole one takes 90 ms to
+ * BitBlt. A change away from the pointer shows within a few frames. */
+#define LOOK_BUDGET_MS 25
+
+static int enc_buffers(int w, int h)
+{
+    size_t px;
+    int n;
+    if (w <= enc_w && h <= enc_h && encraw)
+        return 1;
+    w = (w + 15) & ~15;
+    h = (h + 15) & ~15;
+    px = (size_t)w * h;
+    n = w / 16 * (h / 16);
+    free(encraw);
+    free(enc_dirty);
+    free(dirty_age);
+    free(flat_y);
+    free(flat_u);
+    free(flat_v);
+    encraw = (uint8_t *)malloc(vp8e_mem_size(w, h) + 16);
+    enc_dirty = (uint8_t *)calloc((size_t)n, 1);
+    dirty_age = (uint8_t *)calloc((size_t)n, 1);
+    flat_y = (uint8_t *)malloc(px);
+    flat_u = (uint8_t *)malloc(px / 4);
+    flat_v = (uint8_t *)malloc(px / 4);
+    enc_w = enc_h = 0;
+    if (!encraw || !enc_dirty || !dirty_age || !flat_y || !flat_u || !flat_v)
+        return 0;
+    encmem = (uint8_t *)(((unsigned long)encraw + 15) & ~15ul);
+    enc_w = w;
+    enc_h = h;
+    return 1;
+}
+
+static void on_mouse(void *u, int mask, int x, int y)
+{
+    if ((slot *)u != desk)
+        return;
+    input_mouse(mask, x, y);
+    if ((mask & 7) < 3) { /* a move, a press or a release: x, y is where */
+        S.in_x = x;
+        S.in_y = y;
+        S.in_seen = 1;
+        S.in_at = now_ms();
+    }
+    S.last_change = now_ms(); /* the screen will answer: look often */
+}
+
+static void on_key(void *u, const cdv_key *k)
+{
+    if ((slot *)u != desk)
+        return;
+    input_key(k);
+    S.last_change = now_ms();
+}
+
+/* The peer's clipboard: compressed whenever that was smaller. */
+static void on_clipboard(void *u, const char *utf8, size_t n, int compressed)
+{
+    if ((slot *)u != desk)
+        return;
+    if (compressed) {
+        static char text[256 * 1024];
+        long len = cdv_unzstd(text, sizeof text, utf8, n);
+        if (len < 0) {
+            cdv_log("clipboard: could not decompress the peer's text");
+            return;
+        }
+        clip_from_peer(text, (size_t)len);
+    } else {
+        clip_from_peer(utf8, n);
+    }
+}
+
+static void on_log(void *u, const char *m)
+{
+    (void)u;
+    cdv_log("session: %s", m);
+}
+
+static void on_option(void *u, int quality, int fps)
+{
+    if ((slot *)u != desk)
+        return;
+    if (quality >= 0 && S.enc) {
+        vp8e_set_q(S.enc, quality);
+        cdv_log("peer set quality q=%d", quality);
+    }
+    if (fps > 0) {
+        frame_ms = 1000 / fps;
+        if (frame_ms < 20)
+            frame_ms = 20;
+        cdv_log("peer asked for %d fps", fps);
+    }
+}
+
+/* Restart, as the peer asked: SYSTEM may, once it says so. */
+static void on_restart(void *u)
+{
+    HANDLE tok;
+    TOKEN_PRIVILEGES tp;
+    (void)u;
+    cdv_log("the peer asked for a restart");
+    if (OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &tok)) {
+        LookupPrivilegeValue(NULL, SE_SHUTDOWN_NAME, &tp.Privileges[0].Luid);
+        tp.PrivilegeCount = 1;
+        tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+        AdjustTokenPrivileges(tok, FALSE, &tp, 0, NULL, NULL);
+        CloseHandle(tok);
+    }
+    if (!ExitWindowsEx(EWX_REBOOT | EWX_FORCE, 0))
+        cdv_log("restart refused (error %lu)", GetLastError());
+}
+
+static void on_screenshot(void *u)
+{
+    if ((slot *)u == desk)
+        S.want_shot = 1;
+}
+
+/* Who is logged in at the console: the owner of the shell's process (Program
+ * Manager's window is Explorer's desktop), else whoever last logged on. */
+static const char *console_user(void)
+{
+    static char name[64];
+    HWND shell = FindWindow("Progman", NULL);
+    DWORD pid = 0;
+    char dom[64], buf[256];
+    DWORD nl = sizeof name, dl = sizeof dom, got;
+    SID_NAME_USE use;
+    int found = 0;
+    strcpy(name, "SYSTEM");
+    if (shell)
+        GetWindowThreadProcessId(shell, &pid);
+    if (pid) {
+        HANDLE p = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, pid), tok;
+        if (p) {
+            if (OpenProcessToken(p, TOKEN_QUERY, &tok)) {
+                if (GetTokenInformation(tok, TokenUser, buf, sizeof buf, &got) &&
+                    LookupAccountSid(NULL, ((TOKEN_USER *)buf)->User.Sid, name, &nl, dom, &dl,
+                                     &use))
+                    found = 1;
+                CloseHandle(tok);
+            }
+            CloseHandle(p);
+        }
+    }
+    if (!found) {
+        HKEY k;
+        DWORD type, len = sizeof name;
+        strcpy(name, "SYSTEM");
+        if (RegOpenKeyEx(HKEY_LOCAL_MACHINE,
+                         "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon", 0, KEY_READ,
+                         &k) == ERROR_SUCCESS) {
+            if (RegQueryValueEx(k, "DefaultUserName", NULL, &type, (LPBYTE)name, &len) !=
+                    ERROR_SUCCESS || type != REG_SZ || !name[0])
+                strcpy(name, "SYSTEM");
+            RegCloseKey(k);
+        }
+    }
+    name[sizeof name - 1] = 0;
+    return name;
+}
+
+static int open_screen(void)
+{
+    if (!screen_open(&scr))
+        return 0;
+    input_init(scr.width, scr.height);
+    scr_ok = 1;
+    return 1;
+}
+
+static int on_login(void *u, int file_transfer)
+{
+    slot *sl = (slot *)u;
+    if (file_transfer) {
+        if (!files_fs) {
+            cdv_log("refusing a file-transfer session (files=off)");
+            return 0;
+        }
+        sl->kind = K_FILES;
+        sl->files_started = 0;
+        cdv_files_init(sl->files, &sl->s, files_fs, sl->work, WORK_CAP);
+        return 1;
+    }
+    if (desk && desk != sl) {
+        cdv_log("refusing a second desktop session");
+        return 0;
+    }
+    if ((!scr_ok || screen_resized(&scr)) && !open_screen()) {
+        cdv_log("refusing a desktop session: cannot read the screen");
+        return 0;
+    }
+    if (!enc_buffers(scr.width, scr.height)) {
+        cdv_log("refusing a desktop session: no memory for a %dx%d screen", scr.width, scr.height);
+        return 0;
+    }
+    ident.width = scr.width;
+    ident.height = scr.height;
+    sl->kind = K_DESKTOP;
+    desk = sl;
+    cdv_set_video(&sl->s, vidbuf, VID_CAP);
+    S.enc = vp8e_init(encmem, scr.width, scr.height, prefs.q);
+    S.encoding = 0;
+    S.last_frame = S.last_cursor = S.last_report = S.last_change = S.last_clip = now_ms();
+    S.in_seen = 0;
+    S.want_shot = 0;
+    S.frames = S.bytes = S.mbs = 0;
+    S.t_read = S.t_conv = S.t_enc = 0;
+    S.cx = S.cy = -1;
+    return 1;
+}
+
+static void on_file(void *u, int field, const uint8_t *d, size_t n)
+{
+    slot *sl = (slot *)u;
+    if (sl->kind == K_FILES)
+        cdv_files_message(sl->files, field, d, n);
+}
+
+static int slots_free(void)
+{
+    int i, n = 0;
+    for (i = 0; i < NSLOTS; i++)
+        n += slots[i].fd == INVALID_SOCKET;
+    return n;
+}
+
+static void session_begin(SOCKET fd, int secure, const char *how)
+{
+    int one = 1, i;
+    slot *sl = NULL;
+    for (i = 0; i < NSLOTS && !sl; i++)
+        if (slots[i].fd == INVALID_SOCKET)
+            sl = &slots[i];
+    if (!sl) {
+        cdv_log("%s connection refused: both sessions are in use", how);
+        closesocket(fd);
+        return;
+    }
+    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (char *)&one, sizeof one);
+    nonblock(fd);
+    sl->fd = fd;
+    sl->kind = K_NONE;
+    sl->started = now_ms();
+    copy(sl->how, how, sizeof sl->how);
+    memset(&sl->hooks, 0, sizeof sl->hooks);
+    sl->hooks.mouse = on_mouse;
+    sl->hooks.key = on_key;
+    sl->hooks.clipboard = on_clipboard;
+    sl->hooks.log = on_log;
+    sl->hooks.option = on_option;
+    sl->hooks.restart = on_restart;
+    sl->hooks.screenshot = on_screenshot;
+    sl->hooks.login = on_login;
+    sl->hooks.file = on_file;
+    sl->hooks.user = sl;
+    ident.username = console_user();
+    cdv_init2(&sl->s, sl->ctl, CTL_CAP, NULL, 0, sl->in, IN_CAP, &sl->hooks, &ident, now_ms());
+    cdv_start(&sl->s, now_ms(), secure);
+    cdv_log("%s connection; %s", how, secure ? "encrypted" : "direct");
+}
+
+static void session_end(slot *sl, const char *why)
+{
+    if (sl->fd == INVALID_SOCKET)
+        return;
+    closesocket(sl->fd);
+    sl->fd = INVALID_SOCKET;
+    if (sl == desk) {
+        if (S.encoding)
+            vp8e_abandon(S.enc);
+        S.encoding = 0;
+        input_release_all();
+        desk = NULL;
+    }
+    if (sl->kind == K_FILES)
+        cdv_files_close(sl->files);
+    cdv_log("%s session over: %s", sl->kind == K_FILES ? "file" : "desktop", why);
+    sl->kind = K_NONE;
+    status_dirty = 1;
+}
+
+static void desktop_started(slot *sl)
+{
+    uint32_t t0 = now_ms();
+    const char *name;
+    screen_follow(&name);
+    desk_name = name;
+    input_release_all();
+    screen_start(&scr);
+    clip_reset();
+    cdv_log("first look at the screen (%s desktop, %dx%d): %u ms", desk_name, scr.width,
+            scr.height, (unsigned)(now_ms() - t0));
+    S.key = 1;
+}
+
+/* Bytes in and out; 0 when the session has ended. */
+static int session_io(slot *sl, int readable)
+{
+    size_t n;
+    const uint8_t *o;
+    if (readable) {
+        static uint8_t buf[16384];
+        int r = recv(sl->fd, (char *)buf, sizeof buf, 0);
+        if (r == 0 || (r < 0 && WSAGetLastError() != WSAEWOULDBLOCK)) {
+            cdv_debug("recv: %d, error %d", r, r < 0 ? WSAGetLastError() : 0);
+            session_end(sl, r == 0 ? "the peer closed the connection" : "the connection broke");
+            return 0;
+        }
+        if (r > 0) {
+            int was_live = sl->s.state == CDV_LIVE;
+            rng_add(buf, r < 32 ? (size_t)r : 32);
+            if (cdv_feed(&sl->s, buf, (size_t)r) < 0 && !cdv_out_peek(&sl->s, &n)) {
+                session_end(sl, "protocol error");
+                return 0;
+            }
+            if (!was_live && sl->s.state == CDV_LIVE) {
+                cdv_log("logged in: %s (%s %s), %s", sl->s.peer_name, sl->s.peer_platform,
+                        sl->s.peer_version, sl->kind == K_FILES ? "file manager" : "desktop");
+                status_dirty = 1;
+                if (sl == desk) {
+                    desktop_started(sl);
+                } else if (sl->kind == K_FILES && !sl->files_started) {
+                    cdv_files_start(sl->files);
+                    sl->files_started = 1;
+                }
+            }
+        }
+    }
+    if (sl->kind == K_FILES && sl->s.state == CDV_LIVE)
+        cdv_files_pump(sl->files);
+    for (;;) {
+        int w;
+        o = cdv_out_peek(&sl->s, &n);
+        if (!n)
+            break;
+        w = send(sl->fd, (const char *)o, (int)n, 0);
+        if (w < 0) {
+            if (WSAGetLastError() == WSAEWOULDBLOCK)
+                break;
+            session_end(sl, "send failed");
+            return 0;
+        }
+        cdv_out_consume(&sl->s, (size_t)w);
+        if ((size_t)w < n)
+            break;
+    }
+    cdv_tick(&sl->s, now_ms());
+    if (sl->s.state == CDV_CLOSED && !cdv_out_peek(&sl->s, &n)) {
+        session_end(sl, "closed");
+        return 0;
+    }
+    if (sl->s.state != CDV_LIVE && now_ms() - sl->started > 15000) {
+        session_end(sl, "no login within 15 s");
+        return 0;
+    }
+    return 1;
+}
+
+/* Which dirty macroblocks this frame codes (enc_dirty), within the budget:
+ * those that have waited longest first, so a busy corner cannot starve the
+ * rest of the screen, then the rows nearest the pointer, where the person is
+ * looking. Cheap ones always go. */
+static void select_mbs(void)
+{
+    int n = scr.mbw * scr.mbh, i, budget = FRAME_BUDGET, prow, d, age, maxage = 0;
+    memset(enc_dirty, 0, (size_t)n);
+    S.f_mbs = S.f_detail = S.f_flat = 0;
+    for (i = 0; i < n; i++)
+        if (scr.dirty[i] && dirty_age[i] > maxage)
+            maxage = dirty_age[i];
+    prow = S.cy >= 0 ? S.cy / 16 : scr.mbh / 2;
+    for (age = maxage; age >= 0; age--)
+        for (d = 0; d < 2 * scr.mbh; d++) {
+            int row = d & 1 ? prow + (d + 1) / 2 : prow - d / 2, c;
+            if (row < 0 || row >= scr.mbh)
+                continue;
+            for (c = 0; c < scr.mbw; c++) {
+                int cost;
+                i = row * scr.mbw + c;
+                if (!scr.dirty[i] || dirty_age[i] != age)
+                    continue;
+                cost = scr.flat[i] ? COST_FLAT : cost_detail;
+                if (budget < cost && S.f_mbs > 0)
+                    return;
+                enc_dirty[i] = 1;
+                S.f_mbs++;
+                budget -= cost;
+                if (scr.flat[i])
+                    S.f_flat++;
+                else
+                    S.f_detail++;
+            }
+        }
+}
+
+/* How many macroblock rows to encode between looks at the network. */
+#define SLICE_ROWS 4
+
+static void frame_step(void)
+{
+    uint32_t t;
+    if (!desk || desk->s.state != CDV_LIVE)
+        return;
+    if (!S.encoding) {
+        size_t cap;
+        uint8_t *dst;
+        vp8e_src src;
+        uint32_t now = now_ms(), gap;
+        if (desk->s.vstate != VID_FREE)
+            return;
+        gap = now - S.last_change > IDLE_AFTER_MS && frame_ms < IDLE_LOOK_MS ? IDLE_LOOK_MS
+                                                                              : (uint32_t)frame_ms;
+        if (cdv_take_refresh(&desk->s))
+            S.key = 1;
+        if (!S.key && now - S.last_frame < gap)
+            return;
+        S.last_frame = now;
+        screen_collect(&scr, LOOK_BUDGET_MS);
+        S.t_read += scr.read_ms;
+        S.t_conv += scr.convert_ms;
+        if (scr.ndirty)
+            S.last_change = now;
+        if (S.key) {
+            /* The first picture, or the peer asked for one: a keyframe of
+             * the background colour alone (one macroblock coded, the rest
+             * the encoder's cache), then the real picture over the next
+             * frames, within the budget. */
+            uint8_t by, bu, bv;
+            screen_background(&scr, &by, &bu, &bv);
+            memset(flat_y, by, (size_t)scr.ystride * scr.mbh * 16);
+            memset(flat_u, bu, (size_t)scr.uvstride * scr.mbh * 8);
+            memset(flat_v, bv, (size_t)scr.uvstride * scr.mbh * 8);
+            screen_mark_all(&scr);
+            memset(dirty_age, 1, (size_t)(scr.mbw * scr.mbh));
+            src.y = flat_y;
+            src.u = flat_u;
+            src.v = flat_v;
+            memset(enc_dirty, 1, (size_t)(scr.mbw * scr.mbh));
+            S.f_mbs = S.f_detail = S.f_flat = 0;
+        } else {
+            if (!scr.ndirty)
+                return;
+            select_mbs();
+            src.y = scr.y;
+            src.u = scr.u;
+            src.v = scr.v;
+        }
+        dst = cdv_video_begin(&desk->s, &cap);
+        if (!dst)
+            return;
+        src.ystride = scr.ystride;
+        src.uvstride = scr.uvstride;
+        vp8e_set_hints(S.enc, NULL);
+        if (!vp8e_begin(S.enc, &src, S.key ? NULL : enc_dirty, S.key, dst, cap)) {
+            cdv_video_abort(&desk->s);
+            return;
+        }
+        S.encoding = 1;
+        S.mbs += (unsigned)S.f_mbs;
+        S.f_start = now;
+        S.f_enc = 0;
+        cdv_debug("frame: %d of %d dirty (%d detail, %d flat), %d rows read, read %u ms, "
+                  "convert %u ms", S.f_mbs, scr.ndirty, S.f_detail, S.f_flat, scr.rows_read,
+                  (unsigned)scr.read_ms, (unsigned)scr.convert_ms);
+    }
+    t = now_ms();
+    if (vp8e_rows(S.enc, SLICE_ROWS)) {
+        size_t len = vp8e_end(S.enc);
+        vp8e_stats st;
+        S.encoding = 0;
+        S.t_enc += now_ms() - t;
+        S.f_enc += now_ms() - t;
+        if (!len) {
+            cdv_video_abort(&desk->s);
+            S.key = 1;
+            cdv_log("frame did not fit; a keyframe next");
+            return;
+        }
+        vp8e_last_stats(S.enc, &st);
+        cdv_video_commit(&desk->s, len, st.key);
+        if (!st.key) {
+            int i, n = scr.mbw * scr.mbh;
+            screen_sent_some(&scr, enc_dirty);
+            for (i = 0; i < n; i++)
+                dirty_age[i] = scr.dirty[i] ? (uint8_t)(dirty_age[i] < 250 ? dirty_age[i] + 1 : 250)
+                                            : 0;
+            /* learn what a detailed macroblock costs here, now */
+            if (S.f_detail >= 16) {
+                int per = ((int)S.f_enc * 100 - S.f_flat * COST_FLAT) / S.f_detail;
+                if (per < 10)
+                    per = 10;
+                if (per > 2000)
+                    per = 2000;
+                cost_detail = (cost_detail * 3 + per) / 4;
+            }
+        }
+        S.key = 0;
+        S.frames++;
+        S.bytes += (unsigned)len;
+        cdv_debug("sent %s frame: %d mbs (%d intra, %d skipped) in %u bytes; encode %u ms of %u ms",
+                  st.key ? "key" : "inter", S.f_mbs, st.intra, st.skipped, (unsigned)len,
+                  (unsigned)S.f_enc, (unsigned)(now_ms() - S.f_start));
+    } else {
+        S.t_enc += now_ms() - t;
+        S.f_enc += now_ms() - t;
+    }
+}
+
+/* The screenshot the peer asked for, as a PNG in the video buffer (between
+ * frames, so it is free). */
+static void screenshot_step(void)
+{
+    static png_writer *pw;
+    size_t cap, len;
+    uint8_t *dst, *row;
+    int y;
+    if (!S.want_shot || S.encoding || desk->s.vstate != VID_FREE)
+        return;
+    S.want_shot = 0;
+    if (!pw)
+        pw = (png_writer *)malloc(png_writer_size());
+    row = (uint8_t *)malloc((size_t)scr.width * 3);
+    dst = cdv_big_begin(&desk->s, &cap);
+    if (!pw || !row || !dst) {
+        free(row);
+        if (dst)
+            cdv_screenshot_commit(&desk->s, 0, "out of memory");
+        return;
+    }
+    screen_grab_all(&scr);
+    png_begin(pw, dst, cap, scr.width, scr.height, NULL, 0);
+    for (y = 0; y < scr.height; y++) {
+        screen_rgb_row(&scr, y, row);
+        png_row(pw, row);
+    }
+    len = png_end(pw);
+    free(row);
+    cdv_screenshot_commit(&desk->s, len, len ? NULL : "the screenshot is too big");
+    cdv_log("screenshot: %u bytes", (unsigned)len);
+}
+
+static void session_report(void)
+{
+    uint32_t now = now_ms(), span = now - S.last_report;
+    if (!desk || span < 10000 || desk->s.state != CDV_LIVE)
+        return;
+    if (S.frames)
+        cdv_log("%u frames in %u.%u s (%u.%u fps), %u KB, %u macroblocks; ms read %u convert %u "
+                "encode %u",
+                S.frames, (unsigned)(span / 1000), (unsigned)(span % 1000 / 100),
+                (unsigned)(S.frames * 10000u / span / 10), (unsigned)(S.frames * 10000u / span % 10),
+                S.bytes / 1024, S.mbs, (unsigned)S.t_read, (unsigned)S.t_conv, (unsigned)S.t_enc);
+    S.frames = S.bytes = S.mbs = 0;
+    S.t_read = S.t_conv = S.t_enc = 0;
+    S.last_report = now;
+}
+
+static void cursor_step(void)
+{
+    static uint8_t rgba[64 * 64 * 4];
+    int x, y, w, h, hx, hy;
+    uint32_t id, now = now_ms();
+    if (!desk || desk->s.state != CDV_LIVE || now - S.last_cursor < 100)
+        return;
+    S.last_cursor = now;
+    if (screen_cursor_shape(&id, &hx, &hy, &w, &h, rgba))
+        cdv_send_cursor(&desk->s, id, hx, hy, w, h, rgba);
+    if (!screen_pointer(&x, &y) || (x == S.cx && y == S.cy))
+        return;
+    S.cx = x;
+    S.cy = y;
+    /* Only a move the peer did not make: a client takes every position as
+     * the remote side moving the pointer, hides its own and holds back its
+     * mouse for a moment (see the IRIX port). */
+    if (S.in_seen && ((int32_t)(now - S.in_at) < 300 || (x == S.in_x && y == S.in_y)))
+        return;
+    cdv_send_cursor_pos(&desk->s, x, y);
+}
+
+static void clip_step(void)
+{
+    static char text[256 * 1024];
+    long n;
+    uint32_t now = now_ms();
+    if (!desk || desk->s.state != CDV_LIVE || now - S.last_clip < 250)
+        return;
+    S.last_clip = now;
+    n = clip_take(text, sizeof text);
+    if (n >= 0)
+        cdv_send_clipboard(&desk->s, text, (size_t)n);
+}
+
+/* The input desktop changed (a logon, a lock, the logon screen) or the
+ * screen changed size: follow, and show it all again. */
+static uint32_t desk_check_at;
+
+static void desk_step(void)
+{
+    const char *name;
+    uint32_t now = now_ms();
+    if ((int32_t)(now - desk_check_at) < 0)
+        return;
+    desk_check_at = now + 250;
+    if (screen_follow(&name)) {
+        cdv_log("the input desktop is now %s", name);
+        desk_name = name;
+        status_dirty = 1;
+        if (desk && desk->s.state == CDV_LIVE) {
+            if (S.encoding) {
+                vp8e_abandon(S.enc);
+                cdv_video_abort(&desk->s);
+                S.encoding = 0;
+            }
+            screen_start(&scr);
+            S.key = 1;
+        }
+    }
+    if (desk && desk->s.state == CDV_LIVE && !S.encoding && screen_resized(&scr)) {
+        if (!open_screen() || !enc_buffers(scr.width, scr.height)) {
+            session_end(desk, "the screen changed size, and there is no memory for the new one");
+            scr_ok = 0;
+            return;
+        }
+        cdv_log("the screen is now %dx%d", scr.width, scr.height);
+        ident.width = scr.width;
+        ident.height = scr.height;
+        S.enc = vp8e_init(encmem, scr.width, scr.height, prefs.q);
+        cdv_send_display(&desk->s, scr.width, scr.height);
+        screen_start(&scr);
+        S.key = 1;
+    }
+}
+
+/* ---- the ID server ------------------------------------------------------- */
+
+static cdv_rdv rdv;
+static SOCKET udp_rdv = INVALID_SOCKET, udp_lan = INVALID_SOCKET, tcp_direct = INVALID_SOCKET;
+static uint32_t hbbs_ip, resolve_at;
+static uint16_t hbbs_port;
+static char hbbs_host[64];
+static int was_registered;
+
+static void rdv_setup(void)
+{
+    memset(&rdv, 0, sizeof rdv);
+    rdv_init(&rdv);
+    copy(rdv.id, prefs.id, sizeof rdv.id);
+    memcpy(rdv.uuid, prefs.uuid, 16);
+    memcpy(rdv.pk, sign_pk, 32);
+    copy(rdv.key, prefs.key, sizeof rdv.key);
+    copy(rdv.relay, prefs.relay, sizeof rdv.relay);
+    if (prefs.server[0])
+        rdv_split_host(prefs.server, hbbs_host, sizeof hbbs_host, &hbbs_port, RDV_PORT);
+}
+
+/* Looking the ID server up without waiting on it: gethostbyname can take
+ * tens of seconds when DNS is unreachable, and the main loop must not. A
+ * thread asks and leaves the answer here. */
+static HANDLE look_thread;
+static volatile LONG look_done;
+static volatile uint32_t look_ip;
+static char look_host[64];
+static uint32_t look_began;
+
+static DWORD WINAPI lookup_thread(LPVOID unused)
+{
+    uint32_t ip = 0;
+    (void)unused;
+    resolve(look_host, &ip);
+    look_ip = ip;
+    InterlockedExchange((LONG *)&look_done, 1);
+    return 0;
+}
+
+static void lookup_start(const char *host)
+{
+    DWORD tid;
+    copy(look_host, host, sizeof look_host);
+    look_done = 0;
+    look_ip = 0;
+    look_thread = CreateThread(NULL, 0, lookup_thread, NULL, 0, &tid);
+    look_began = now_ms();
+}
+
+/* -1 still asking, 0 no answer, 1 *ip is the address. */
+static int lookup_finished(uint32_t *ip)
+{
+    if (!look_done) {
+        if ((int32_t)(now_ms() - look_began) < 60000)
+            return -1;
+        /* abandon it: it will finish in its own time and touch only statics */
+        CloseHandle(look_thread);
+        look_thread = NULL;
+        return 0;
+    }
+    CloseHandle(look_thread);
+    look_thread = NULL;
+    if (!look_ip)
+        return 0;
+    *ip = look_ip;
+    return 1;
+}
+
+static void rdv_step(void)
+{
+    uint8_t buf[2048];
+    size_t n;
+    struct sockaddr_in sa;
+    uint32_t now = now_ms(), ip;
+    if (!prefs.server[0])
+        return;
+    if (look_thread) {
+        int r = lookup_finished(&ip);
+        if (r == 1 && ip != hbbs_ip) {
+            cdv_log("ID server %s is %u.%u.%u.%u", hbbs_host, ip >> 24, ip >> 16 & 255,
+                    ip >> 8 & 255, ip & 255);
+            hbbs_ip = ip;
+        } else if (r == 0 && !hbbs_ip) {
+            cdv_log("cannot resolve %s; trying again in 30 s", hbbs_host);
+        }
+    }
+    /* Not yet known, or no answer from it for a while (a server on a home
+     * line changes address): look it up (again). */
+    if (!look_thread && (int32_t)(now - resolve_at) >= 0 &&
+        (!hbbs_ip || (int32_t)(now - rdv.answered_at) > 90000)) {
+        resolve_at = now + (hbbs_ip ? 60000 : 30000);
+        if (inet_addr(hbbs_host) != INADDR_NONE)
+            resolve(hbbs_host, &hbbs_ip);
+        else
+            lookup_start(hbbs_host);
+    }
+    if (!hbbs_ip)
+        return;
+    if (udp_rdv == INVALID_SOCKET && (udp_rdv = listen_on(0, 1)) == INVALID_SOCKET)
+        return;
+    n = rdv_tick(&rdv, now, buf, sizeof buf);
+    if (n) {
+        sa_set(&sa, hbbs_ip, hbbs_port);
+        sendto(udp_rdv, (const char *)buf, (int)n, 0, (struct sockaddr *)&sa, sizeof sa);
+    }
+    /* registered goes stale once hbbs stops answering */
+    if (was_registered && (int32_t)(now - rdv.answered_at) > 60000) {
+        was_registered = 0;
+        status_dirty = 1;
+        cdv_log("the ID server has stopped answering");
+    }
+}
+
+/* Where to reach the peer through hbbr, told to hbbs, then joined. */
+static void rdv_relay(rdv_action *act)
+{
+    uint8_t buf[1024];
+    char rhost[128];
+    uint16_t rport;
+    uint32_t rip;
+    size_t n;
+    SOCKET t, fd;
+    cdv_log("relay request (%s) from %u.%u.%u.%u via %s", act->initiate ? "punch hole" : "relay",
+            act->peer_ip >> 24, act->peer_ip >> 16 & 255, act->peer_ip >> 8 & 255,
+            act->peer_ip & 255, act->relay);
+    if (!slots_free()) {
+        cdv_log("both sessions are in use; ignoring it");
+        return;
+    }
+    t = tcp_connect(hbbs_ip, hbbs_port, 5000);
+    if (t != INVALID_SOCKET) {
+        n = rdv_relay_response(&rdv, act, buf, sizeof buf);
+        send_all(t, buf, n);
+        closesocket(t);
+    }
+    rdv_split_host(act->relay, rhost, sizeof rhost, &rport, RELAY_PORT);
+    if (!resolve(rhost, &rip)) {
+        cdv_log("cannot resolve the relay %s", rhost);
+        return;
+    }
+    fd = tcp_connect(rip, rport, 8000);
+    if (fd == INVALID_SOCKET) {
+        cdv_log("cannot reach the relay %s", act->relay);
+        return;
+    }
+    n = rdv_request_relay(&rdv, act, buf, sizeof buf);
+    if (send_all(fd, buf, n) < 0) {
+        closesocket(fd);
+        return;
+    }
+    session_begin(fd, 1, "relayed");
+}
+
+/* The peer is on our network: listen, tell hbbs where, wait for it. */
+static void rdv_local(rdv_action *act)
+{
+    struct sockaddr_in la, me;
+    int ll = sizeof la, ml = sizeof me;
+    SOCKET l, t;
+    uint8_t buf[512];
+    size_t n;
+    fd_set rd;
+    struct timeval tv;
+    if (!slots_free())
+        return;
+    l = listen_on(0, 0);
+    if (l == INVALID_SOCKET)
+        return;
+    getsockname(l, (struct sockaddr *)&la, &ll);
+    t = tcp_connect(hbbs_ip, hbbs_port, 5000);
+    if (t == INVALID_SOCKET) {
+        closesocket(l);
+        return;
+    }
+    getsockname(t, (struct sockaddr *)&me, &ml);
+    n = rdv_local_addr(&rdv, act, (uint32_t)ntohl(me.sin_addr.s_addr), ntohs(la.sin_port), buf,
+                       sizeof buf);
+    send_all(t, buf, n);
+    closesocket(t);
+    cdv_log("told the ID server we are at port %u; waiting for the peer", ntohs(la.sin_port));
+    FD_ZERO(&rd);
+    FD_SET(l, &rd);
+    tv.tv_sec = 10;
+    tv.tv_usec = 0;
+    if (select(0, &rd, NULL, NULL, &tv) > 0) {
+        SOCKET fd = accept(l, NULL, NULL);
+        if (fd != INVALID_SOCKET)
+            session_begin(fd, 1, "local");
+    } else {
+        cdv_log("the peer never came");
+    }
+    closesocket(l);
+}
+
+static void rdv_input_step(void)
+{
+    uint8_t buf[2048], rep[512];
+    size_t replen;
+    rdv_action act;
+    struct sockaddr_in sa;
+    int r = recv(udp_rdv, (char *)buf, sizeof buf, 0), kind;
+    if (r <= 0)
+        return;
+    rng_add(buf, r < 16 ? (size_t)r : 16);
+    kind = rdv_input(&rdv, buf, (size_t)r, now_ms(), &act, rep, sizeof rep, &replen);
+    if (replen) {
+        sa_set(&sa, hbbs_ip, hbbs_port);
+        sendto(udp_rdv, (const char *)rep, (int)replen, 0, (struct sockaddr *)&sa, sizeof sa);
+    }
+    if (kind == RDV_REGISTERED) {
+        if (!was_registered)
+            cdv_log("registered: reachable as ID %s", prefs.id);
+        was_registered = 1;
+        status_dirty = 1;
+    } else if (kind == RDV_REFUSED) {
+        cdv_log("the ID server refused the registration (%d)", act.refuse_code);
+        status_dirty = 1;
+    } else if (kind == RDV_RELAY) {
+        rdv_relay(&act);
+    } else if (kind == RDV_LOCAL) {
+        rdv_local(&act);
+    }
+}
+
+static void lan_step(void)
+{
+    uint8_t buf[1024], out[1024];
+    struct sockaddr_in from;
+    int fl = sizeof from;
+    int r = recvfrom(udp_lan, (char *)buf, sizeof buf, 0, (struct sockaddr *)&from, &fl);
+    size_t n;
+    if (r <= 0)
+        return;
+    n = lan_answer(buf, (size_t)r, prefs.id, prefs.id, hostname, out, sizeof out);
+    if (n)
+        sendto(udp_lan, (const char *)out, (int)n, 0, (struct sockaddr *)&from, sizeof from);
+}
+
+/* ---- what the settings window shows --------------------------------------------- */
+
+static void status_step(void)
+{
+    char text[1024], line[256];
+    int i;
+    if (!status_dirty)
+        return;
+    status_dirty = 0;
+    snprintf(text, sizeof text,
+             "version=%s\r\nid=%s\r\nserver=%s\r\nregistered=%d\r\nrefused=%d\r\ndesktop=%s\r\n"
+             "direct=%d\r\n",
+             CDV_BUILD, prefs.id, prefs.server, was_registered, rdv.refused, desk_name,
+             tcp_direct != INVALID_SOCKET ? prefs.port : 0);
+    for (i = 0; i < NSLOTS; i++) {
+        slot *sl = &slots[i];
+        if (sl->fd == INVALID_SOCKET || sl->s.state != CDV_LIVE)
+            continue;
+        snprintf(line, sizeof line, "session=%s %s (%s)\r\n",
+                 sl->kind == K_FILES ? "files" : "desktop", sl->s.peer_name, sl->how);
+        strncat(text, line, sizeof text - strlen(text) - 1);
+    }
+    prefs_status_write(text);
+}
+
+/* ---- main ------------------------------------------------------------------ */
+
+int agent_run(HANDLE stop, int console, int verbose)
+{
+    WSADATA wd;
+    char logpath[MAX_PATH];
+    report_config rc;
+    int i, reporting = 0;
+    DWORD hl = sizeof hostname;
+
+    prefs_path(logpath, sizeof logpath, "C-Desk-Vint.log");
+    cdv_log_open(logpath, console, verbose);
+    cdv_log("%s starting", VERSION_STRING);
+    if (WSAStartup(MAKEWORD(1, 1), &wd) != 0) {
+        cdv_log("no WinSock");
+        return 1;
+    }
+    if (!prefs_load(1))
+        cdv_log("cannot save the settings in %s", prefs_dir());
+    prefs_gather_entropy();
+    crypto_sign_ed25519_seed_keypair(sign_pk, sign_sk, prefs.seed);
+    if (prefs.name[0])
+        copy(hostname, prefs.name, sizeof hostname);
+    else if (!GetComputerName(hostname, &hl) || !hostname[0])
+        copy(hostname, "Windows NT", sizeof hostname);
+
+    /* The interactive window station, whatever the service was given. */
+    {
+        HWINSTA ws = OpenWindowStation("WinSta0", FALSE, MAXIMUM_ALLOWED);
+        if (ws && !SetProcessWindowStation(ws))
+            cdv_log("cannot use the interactive window station (error %lu)", GetLastError());
+    }
+    screen_follow(&desk_name);
+    if (!open_screen())
+        cdv_log("cannot read the screen yet; trying again at the first session");
+    clip_start();
+
+    vidbuf = (uint8_t *)malloc(VID_CAP);
+    for (i = 0; i < NSLOTS; i++) {
+        slots[i].fd = INVALID_SOCKET;
+        slots[i].ctl = (uint8_t *)malloc(CTL_CAP);
+        slots[i].in = (uint8_t *)malloc(IN_CAP);
+        slots[i].work = (uint8_t *)malloc(WORK_CAP);
+        slots[i].files = (cdv_files *)malloc(cdv_files_size());
+        if (!slots[i].ctl || !slots[i].in || !slots[i].work || !slots[i].files)
+            vidbuf = NULL;
+    }
+    if (!vidbuf) {
+        cdv_log("out of memory");
+        return 1;
+    }
+    if (strcmp(prefs.files, "off"))
+        files_fs = fs_win32(prefs.files);
+
+    ident.id = prefs.id;
+    ident.sign_sk = sign_sk;
+    ident.password = prefs.password;
+    ident.salt = "cdeskvint";
+    ident.hostname = hostname;
+    ident.width = scr_ok ? scr.width : 640; /* set from the screen at each desktop login */
+    ident.height = scr_ok ? scr.height : 480;
+    ident.cursor_embedded = 0;
+    ident.platform = "Windows";
+    ident.username = "SYSTEM";
+
+    if (prefs.port) {
+        tcp_direct = listen_on((uint16_t)prefs.port, 0);
+        if (tcp_direct == INVALID_SOCKET)
+            cdv_log("cannot listen on port %d (is another copy running?)", prefs.port);
+    }
+    if (prefs.lan)
+        udp_lan = listen_on(LAN_PORT, 1);
+    rdv_setup();
+    if (tcp_direct != INVALID_SOCKET)
+        cdv_log("ID %s; direct access on port %d; ID server %s", prefs.id, prefs.port,
+                prefs.server[0] ? prefs.server : "(none)");
+    else
+        cdv_log("ID %s; direct access off; ID server %s", prefs.id,
+                prefs.server[0] ? prefs.server : "(none)");
+    if (prefs.api[0]) {
+        rc.url = prefs.api;
+        rc.id = prefs.id;
+        rc.uuid = prefs.uuid;
+        rc.secret = prefs.seed;
+        rc.hostname = hostname;
+        rc.username = console_user;
+        cdv_log("console: reporting to %s", prefs.api);
+        reporting = report_start(&rc);
+    }
+    resolve_at = desk_check_at = now_ms();
+
+    while (WaitForSingleObject(stop, 0) != WAIT_OBJECT_0) {
+        fd_set rd, wr;
+        struct timeval tv;
+        int timeout = 100, k, nfds = 0;
+        size_t n;
+
+        rdv_step();
+        desk_step();
+        status_step();
+        if (desk && desk->s.state == CDV_LIVE)
+            timeout = S.encoding ? 0 : 10;
+
+        FD_ZERO(&rd);
+        FD_ZERO(&wr);
+        if (tcp_direct != INVALID_SOCKET) {
+            FD_SET(tcp_direct, &rd);
+            nfds++;
+        }
+        if (udp_rdv != INVALID_SOCKET) {
+            FD_SET(udp_rdv, &rd);
+            nfds++;
+        }
+        if (udp_lan != INVALID_SOCKET) {
+            FD_SET(udp_lan, &rd);
+            nfds++;
+        }
+        for (k = 0; k < NSLOTS; k++) {
+            if (slots[k].fd == INVALID_SOCKET)
+                continue;
+            FD_SET(slots[k].fd, &rd);
+            if (cdv_out_peek(&slots[k].s, &n), n)
+                FD_SET(slots[k].fd, &wr);
+            /* a download keeps the file manager busy */
+            if (slots[k].kind == K_FILES && timeout > 10)
+                timeout = 10;
+            nfds++;
+        }
+        tv.tv_sec = 0;
+        tv.tv_usec = timeout * 1000;
+        if (!nfds) {
+            /* WinSock's select() refuses an empty set */
+            WaitForSingleObject(stop, (DWORD)timeout);
+            continue;
+        }
+        if (select(0, &rd, &wr, NULL, &tv) < 0) {
+            cdv_log("select failed (%d)", WSAGetLastError());
+            Sleep(1000);
+            continue;
+        }
+        if (tcp_direct != INVALID_SOCKET && FD_ISSET(tcp_direct, &rd)) {
+            SOCKET fd = accept(tcp_direct, NULL, NULL);
+            if (fd != INVALID_SOCKET)
+                session_begin(fd, 0, "direct");
+        }
+        if (udp_rdv != INVALID_SOCKET && FD_ISSET(udp_rdv, &rd))
+            rdv_input_step();
+        if (udp_lan != INVALID_SOCKET && FD_ISSET(udp_lan, &rd))
+            lan_step();
+        for (k = 0; k < NSLOTS; k++) {
+            slot *sl = &slots[k];
+            int readable;
+            if (sl->fd == INVALID_SOCKET)
+                continue;
+            readable = FD_ISSET(sl->fd, &rd) != 0;
+            if (!session_io(sl, readable))
+                continue;
+            if (sl == desk && sl->s.state == CDV_LIVE) {
+                clip_step();
+                screenshot_step();
+                frame_step();
+                cursor_step();
+                session_report();
+            }
+            if (sl->fd != INVALID_SOCKET)
+                session_io(sl, 0);
+        }
+    }
+    for (i = 0; i < NSLOTS; i++)
+        session_end(&slots[i], "the agent is stopping");
+    if (reporting)
+        report_stop();
+    prefs_status_write("stopped=1\r\n");
+    cdv_log("stopped");
+    WSACleanup();
+    return 0;
+}
