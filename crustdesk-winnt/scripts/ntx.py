@@ -79,7 +79,8 @@ def get(remote, local):
 
 def sync(local_dir, remote_dir, stamp=None):
     """Upload files under local_dir that changed since the last sync."""
-    stamp = stamp or os.path.join(local_dir, ".ntx-sync")
+    # one record per machine: the same tree goes to more than one
+    stamp = stamp or os.path.join(local_dir, ".ntx-sync-%s-%d" % (HOST, PORT))
     try:
         seen = json.load(open(stamp))
     except (OSError, ValueError):
