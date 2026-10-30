@@ -52,11 +52,18 @@ pointed at the user's own servers (its settings file only): registered with
 their ID server, **in their console's device list over https** (their
 Let's Encrypt chain verified), a session by ID through their relay.
 
-**Windows 95 and 98** (the x86 build only; same program): it *loads* there
--- `scripts/check-imports.py` finds every import in 95 RTM's and 98 SE's
-DLLs (from the user's NAS) -- and the 9x branches are written (section 3),
-but **nothing has run on 9x yet**: no 9x machine (98 SE setup wants a
-product key; asked the user).
+**Windows 98 SE** (2026-10-30, the released x86 .exe unchanged), on the
+user's own VMware Windows 98 install (`smb://danihtpc.local/temp/Win98VM`,
+a 98QuickInstall with Visual Studio 6, Borland C++ 5 and the 98 DDK)
+under QEMU (`scripts/qemu-win98.sh`): selftest; Install from the settings
+window (Program Files, RunServices, Start Menu); a session by ID through
+the public relay with `scripts/session-test.sh` (typing, accents, the
+clipboard in the code page -- "☺" became "?" as designed --, files, a
+screenshot); `-stop`/`-start`; started at a cold boot before logon and
+served the logon prompt; a remote logon; still serving after a logoff.
+Known: at 640x480 the settings window is taller than the screen, and its
+title says "Windows NT". **Windows 95**: loads (check-imports.py against
+95 RTM's DLLs), never run.
 
 **Not proven**: MIPS and Alpha builds (not compiled: no NT machine or
 compiler for them yet; nothing in the source is processor-specific, and
@@ -227,6 +234,19 @@ ntexec in Startup; the agent installed as a service (ID 284 688 195, generic
 settings). `/run/media/dani/BigDisk/win9x`: 98 SE's ISO and 95 RTM's and 98
 SE's system DLLs (`dll95/`, `dll98/`) for check-imports.py.
 
+The Windows 98 machine: `scripts/qemu-win98.sh` on
+`/run/media/dani/BigDisk/win98vm` (VNC 127.0.0.1:5943; ntexec on 2372, the
+agent on 21138): the user's `Windows 98.vmdk`, read-only, run from a raw
+copy `work.raw` (mtools can reach its files with the VM stopped: the
+partition is at byte 1048576). MSDOS.SYS there now shows the start-up menu
+and logs the boot. Its own restart stalls under QEMU: shut it down
+(`rundll32 shell32.dll,SHExitWindowsEx 1`) and start QEMU afresh. The new
+hardware wizards (QEMU's 440FX chipset, IDE, VGA) are cancelled every boot:
+installing their drivers made it hang at the splash screen; so the CD drive
+is not set up -- files go in on a floppy (`change floppy0 IMG raw` over QMP).
+ntexec and cliptool are in C:\NTEXEC, ntexec in StartUp; the agent is
+installed (ID 491 362 745, generic settings). Logon: user win98user, blank.
+
 The user's NAS (`smb://daninas.local/software`, mounted by GVFS) has the
 winworld collection: Visual C++ 4.0 RISC for MIPS and Alpha (4.0a), NT 4.0
 install ISOs, 95/98 media; `inventory.tsv` lists it, `extracted/` has ISOs.
@@ -235,9 +255,8 @@ Tenox has an NT 4.0 MIPS QEMU image with Visual C++ 4.1
 
 ## 6. What is left
 
-1. **Windows 95/98 on a machine**: install one (98 SE setup needs a
-   product key from the user) and run the 9x branches; then the release
-   notes may say so.
+1. **The settings window on 9x**: fit 640x480 (it is ~490 px tall) and say
+   "Windows" rather than "Windows NT" there; Windows 95 on a machine.
 2. **Other processors.** x86 is done (above). MIPS:
    QEMU's `magnum` runs NT 4.0 MIPS; needs an install and Visual C++ for
    MIPS. Alpha: needs real hardware or an emulator that runs NT. Run
@@ -259,4 +278,6 @@ Tenox has an NT 4.0 MIPS QEMU image with Visual C++ 4.1
    installed on its QEMU machine as uploaded (hashes compared) and tested
    there; the MANIFESTs list exactly what. The earlier PowerPC build
    20261030-7dba170c8 (single-threaded runtime) was never published and is
-   gone.
+   gone. After the Windows 98 test the zips were remade with the read-me as
+   of 0d4657d30 (programs unchanged), the MANIFESTs, SHA256SUMS and notes
+   updated to say 98 works, and the title names Windows 98.
