@@ -1,0 +1,19 @@
+[Desktop Entry]
+Name=R-DeskWay
+GenericName=Remote Desktop
+Comment=Unattended Wayland remote desktop (unofficial RustDesk fork)
+Exec=rustdesk %u
+Icon=rustdesk
+Terminal=false
+Type=Application
+StartupNotify=true
+Categories=Network;RemoteAccess;GTK;
+Keywords=internet;linux;remote-control;p2p;rdp;remote-desktop;vnc;wayland;
+Actions=new-window;
+StartupWMClass=rustdesk
+
+X-Desktop-File-Install-Version=0.23
+
+[Desktop Action new-window]
+Name=Open a New Window
+Exec=rustdesk %u
