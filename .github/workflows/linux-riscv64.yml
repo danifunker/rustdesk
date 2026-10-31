@@ -1,0 +1,94 @@
+# Fork-only: R-DeskWay for riscv64, with the Flutter UI, cross-built on x86_64.
+#
+# Flutter publishes no riscv64 engine, but meta-flutter/flutter-engine publishes Flutter 3.44.2's
+# (engine 77e2e947), and upstream already builds one target (Windows arm64) with Flutter 3.44 from
+# these sources plus apply_flutter_3.44_source_patches.sh and a 3.44 bridge. So this uses bridge.yml's
+# bridge-artifact-flutter-3.44 and branding/riscv64/build-flutter.sh, which is the whole build and
+# runs the same way locally (it was developed in an ubuntu:24.04 container). Output: the
+# r-deskway-<ver>-riscv64.deb and a generic tarball of the same files (make-tarball.sh).
+#
+# (build-headless.sh, the non-Flutter build this workflow started as, still works locally as a
+# fallback; build-flutter.sh reuses its deps and drmtap steps.)
+#
+# ARTIFACTS ONLY. Nothing is published: riscv64 files are attached to a release by hand, after they
+# have run on real riscv64 hardware. It runs on every push to unattended-wayland-ci, so a sync from
+# upstream rebuilds it too; linux-unattended-wayland.yml ignores pushes that touch only these
+# riscv64 files, so a change here alone never rebuilds or republishes the other packages.
+name: Linux riscv64 R-DeskWay
+
+on:
+  push:
+    branches: [unattended-wayland-ci]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: riscv64-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Same Rust as the other R-DeskWay builds (upstream flutter-build.yml's pin).
+  RUST_VERSION: "1.75"
+  FLUTTER_ROOT: /opt/flutter-3.44.2
+
+jobs:
+  generate-bridge:
+    uses: ./.github/workflows/bridge.yml
+
+  build:
+    needs: [generate-bridge]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - name: Free space
+        run: |
+          sudo rm -rf /opt/ghc /usr/local/lib/android /usr/share/dotnet /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: recursive
+
+      - name: Flutter 3.44 bridge
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bridge-artifact-flutter-3.44
+          path: ./
+
+      - name: Rust
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: riscv64gc-unknown-linux-gnu
+
+      - name: Cross toolchain, riscv64 libraries, libdrmtap
+        run: branding/riscv64/build-flutter.sh deps
+
+      - name: Flutter 3.44.2 and the riscv64 engine
+        run: branding/riscv64/build-flutter.sh sdk
+
+      - name: librustdesk.so (cross)
+        run: branding/riscv64/build-flutter.sh cargo
+
+      - name: Flutter build and deb
+        run: branding/riscv64/build-flutter.sh flutter
+
+      - name: Tarball and checksums
+        run: |
+          set -euo pipefail
+          deb=$(ls r-deskway-*-riscv64.deb)
+          branding/riscv64/make-tarball.sh "$deb" .
+          for f in r-deskway-*-riscv64.deb r-deskway-*-riscv64.tar.gz; do sha256sum "$f" > "$f.sha256"; done
+          cat ./*.sha256
+
+      - name: Upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: r-deskway-riscv64
+          path: |
+            r-deskway-*-riscv64.deb
+            r-deskway-*-riscv64.tar.gz
+            r-deskway-*-riscv64.*.sha256
+          if-no-files-found: error
