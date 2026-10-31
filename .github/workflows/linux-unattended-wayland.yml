@@ -15,9 +15,13 @@ name: Linux unattended-wayland (DRM) build
 
 # workflow_dispatch only registers once the file exists on the default branch, so while this lives on
 # its own branch the push trigger below is what runs it. A push builds and verifies every package and
-# keeps them as workflow ARTIFACTS ONLY: the one public release (r-deskway-1.5.0, which also carries
-# the vintage agents) is updated by hand from those artifacts, so no push can flip it back to a draft
-# or open a second release. Merge to master to get the "Run workflow" button with the inputs.
+# keeps them as workflow ARTIFACTS ONLY; nothing a push does can create or change a release.
+# RELEASING is done by hand from a green run's artifacts, with tools/release.py in the wiki repo
+# (git@github.com:danifunker/rustdesk.wiki.git), which creates r-deskway-<version> (marked Latest)
+# and regenerates the wiki's Downloads page:
+#   tools/release.py publish r-deskway-<ver> --title "R-DeskWay <ver>" --notes-file NOTES \
+#       --target <built sha> r-deskway-<ver>*
+# Merge to master to get the "Run workflow" button with the inputs.
 on:
   push:
     branches: [unattended-wayland-ci]
