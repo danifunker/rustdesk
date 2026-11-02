@@ -40,11 +40,20 @@ if [ -z "$(ls -A $WORK/nt35/msvc)" ]; then
     docker run --rm -e ACCEPT_MSVC_LICENSE=yes -v "$WORK/nt35/msvc":/opt/msvc tenox7/msvc-arm32 msvc-setup
 fi
 
-# the port's versions of NT files, from their edit scripts (build-update.sh does it first)
+# the port's versions of NT files, from their edit scripts (build-update.sh does it first).
+# Those over NT 3.5's or XP SP1's files are left out: the trees are not here, and what they
+# make (the TCP/IP tools, the admin apps, RAS's DES, the hives, ARC's DOS shell, ntdbg.h of
+# the debugger) is nothing the agent links.
 say "ntdiff apply"
+: > $R/obj/cdv-ntdiff.lst; : > $OUTDIR/ntdiff-skipped.txt
+( cd $R && find . -name '*.ntdiff' -not -path './.git/*' | sort ) | while read -r f; do
+    if head -1 "$R/$f" | grep -qE '\.\./(nt35|XPSP1)/'; then echo "${f#./}" >> $OUTDIR/ntdiff-skipped.txt
+    else echo "/work/RASPI/${f#./}" >> $R/obj/cdv-ntdiff.lst; fi
+done
+say "  $(wc -l < $R/obj/cdv-ntdiff.lst) scripts, $(wc -l < $OUTDIR/ntdiff-skipped.txt) skipped (ntdiff-skipped.txt)"
 docker run --rm -v "$NT40":/work -v "$WORK/nt35":/nt35:ro -v "$WORK/XPSP1":/XPSP1:ro \
     -v "$NT40/private":/work/private:ro -v "$NT40/public":/work/public:ro \
-    --entrypoint perl tenox7/msvc-arm32 /work/RASPI/tools/ntdiff.pl apply /work /work/RASPI
+    --entrypoint sh tenox7/msvc-arm32 -c 'xargs perl /work/RASPI/tools/ntdiff.pl apply /work < /work/RASPI/obj/cdv-ntdiff.lst'
 
 # NT's build tools, the header pass, and the import libraries of kernel32, user32, advapi32
 have $R/obj/host/RC.EXE $U/kernel32.lib $U/user32.lib $U/advapi32.lib || { say "tools"; bash $R/tools/make-tools.sh; }
