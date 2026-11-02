@@ -51,6 +51,13 @@ say "ntdiff apply"
     else echo "/work/RASPI/${f#./}" >> $R/obj/cdv-ntdiff.lst; fi
 done
 say "  $(wc -l < $R/obj/cdv-ntdiff.lst) scripts, $(wc -l < $OUTDIR/ntdiff-skipped.txt) skipped (ntdiff-skipped.txt)"
+# Every step applies them all again as it starts (msvc.sh, make-tools.sh): in this
+# checkout of PINT, those apply the list instead.
+for f in build/msvc.sh tools/make-tools.sh; do
+    grep -qxF 'perl /work/RASPI/tools/ntdiff.pl apply /work /work/RASPI' $R/$f ||
+        grep -qF 'cdv-ntdiff.lst' $R/$f || { echo "pint-build: $f no longer applies the scripts as expected"; exit 1; }
+    sed -i.orig 's#^perl /work/RASPI/tools/ntdiff.pl apply /work /work/RASPI$#xargs perl /work/RASPI/tools/ntdiff.pl apply /work < /work/RASPI/obj/cdv-ntdiff.lst#' $R/$f
+done
 docker run --rm -v "$NT40":/work -v "$WORK/nt35":/nt35:ro -v "$WORK/XPSP1":/XPSP1:ro \
     -v "$NT40/private":/work/private:ro -v "$NT40/public":/work/public:ro \
     --entrypoint sh tenox7/msvc-arm32 -c 'xargs perl /work/RASPI/tools/ntdiff.pl apply /work < /work/RASPI/obj/cdv-ntdiff.lst'
