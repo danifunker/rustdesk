@@ -69,6 +69,22 @@ holds the program file, so a file swap on 9x needs it dismissed (or
 `tools/nt/plist.c kill`). **Windows 95**: loads (check-imports.py against
 95 RTM's DLLs), never run.
 
+**ARM: PINT, NT 4.0 on the Raspberry Pi** (2026-11-02, build
+20261102-9e35e4ebe). No compiler ran on NT for ARM, so this build is made by
+PINT's own build on a GitHub ARM runner (`winnt-pint-agent-build.yaml`,
+`scripts/pint-build.sh`, `scripts/stage-pint.py`: the agent as a PINT app,
+Visual C++ 4.2's libcmt and the import libraries built from the NT 4.0 tree;
+~15 minutes from nothing). Every import checked against the card's DLLs
+(`check-imports.py`). On a PINT card (pint40-2026-11-02b) in QEMU raspi2b
+(`scripts/qemu-pint.sh`), four processors: `ntexec.exe` of the same build
+served `ntx.py`; `-selftest` all pass; `-install` as a service, registered
+with rs-ny; **a session by ID through the public relay** (ovh-east2):
+typing into Notepad, Legacy and Map mode with Shift ("NT4"), a 1920x1080
+screenshot. PINT's 58 edit scripts over NT 3.5 and XP SP1 files are left
+out (those trees are not fetched; nothing the agent links). Not yet: the
+clipboard, files, Ctrl-Alt-Del, the settings window, a real Pi;
+`cliptool.c` is not built for ARM.
+
 **Not proven**: MIPS and Alpha builds (not compiled: no NT machine or
 compiler for them yet; nothing in the source is processor-specific, and
 `-selftest` exists to check them); real PowerPC hardware; NT 4.0 with other
