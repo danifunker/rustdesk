@@ -231,12 +231,21 @@ static int programs_dir(char *out, DWORD cap)
                       "Programs", out, cap);
 }
 
+/* The shell link's class and interfaces, here rather than from uuid.lib:
+   PINT (NT 4.0 for ARM) builds no uuid.lib without its MIDL pass. */
+static const GUID cdv_CLSID_ShellLink =
+    { 0x00021401, 0, 0, { 0xC0, 0, 0, 0, 0, 0, 0, 0x46 } };
+static const GUID cdv_IID_IShellLinkA =
+    { 0x000214EE, 0, 0, { 0xC0, 0, 0, 0, 0, 0, 0, 0x46 } };
+static const GUID cdv_IID_IPersistFile =
+    { 0x0000010B, 0, 0, { 0xC0, 0, 0, 0, 0, 0, 0, 0x46 } };
+
 /* A shortcut to the settings window in everyone's Start Menu. */
 static void make_shortcut(const char *exe)
 {
     char dir[MAX_PATH], lnk[MAX_PATH];
     WCHAR wlnk[MAX_PATH];
-    IShellLink *sl;
+    IShellLink *sl;  /* IShellLinkA: the program is not UNICODE */
     IPersistFile *pf;
     if (!programs_dir(dir, sizeof dir))
         return;
@@ -244,12 +253,12 @@ static void make_shortcut(const char *exe)
     MultiByteToWideChar(CP_ACP, 0, lnk, -1, wlnk, MAX_PATH);
     if (FAILED(CoInitialize(NULL)))
         return;
-    if (SUCCEEDED(CoCreateInstance(&CLSID_ShellLink, NULL, CLSCTX_INPROC_SERVER, &IID_IShellLink,
+    if (SUCCEEDED(CoCreateInstance(&cdv_CLSID_ShellLink, NULL, CLSCTX_INPROC_SERVER, &cdv_IID_IShellLinkA,
                                    (void **)&sl))) {
         sl->lpVtbl->SetPath(sl, exe);
         sl->lpVtbl->SetDescription(sl, "C-Desk-Vint settings");
         sl->lpVtbl->SetIconLocation(sl, exe, 0);
-        if (SUCCEEDED(sl->lpVtbl->QueryInterface(sl, &IID_IPersistFile, (void **)&pf))) {
+        if (SUCCEEDED(sl->lpVtbl->QueryInterface(sl, &cdv_IID_IPersistFile, (void **)&pf))) {
             pf->lpVtbl->Save(pf, wlnk, TRUE);
             pf->lpVtbl->Release(pf);
         }

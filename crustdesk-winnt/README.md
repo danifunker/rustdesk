@@ -58,6 +58,18 @@ QEMU forward), `ARCH` names the output (`ppc`, `mips`, `alpha`, `x86`).
 
 By hand: copy `build/stage` to the NT machine, `nmake` in it.
 
+**ARM (PINT, NT 4.0 on the Raspberry Pi 2/3/4, github.com/tenox7/PINT)** is
+the exception: no compiler ever ran on NT for ARM, so PINT's own build makes
+it, in Docker (`tenox7/msvc-arm32`, Microsoft C for ARM), as one of PINT's
+apps, linked with NT 4.0's C run-time and import libraries built from the
+NT 4.0 tree. `scripts/stage-pint.py` flattens `build/stage` into that app
+(`build/pint/cdv`: its SOURCES components), `scripts/pint-build.sh` builds
+only the parts of PINT the agent links and then the agent (`make pint
+PINTWORK=dir`; its header says how the trees are laid out). The workflow
+`.github/workflows/winnt-pint-agent-build.yaml` does all of it on a GitHub
+runner, fetching both trees at pinned commits. It also builds `ntexec.exe`
+for ARM, so `ntx.py` can drive a PINT machine for `-selftest`.
+
 ## Testing
 
 `make -C ../crustdesk-macos-classic/host test` tests the shared core;

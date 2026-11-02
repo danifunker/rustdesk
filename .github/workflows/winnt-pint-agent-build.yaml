@@ -1,0 +1,159 @@
+# Build C-Desk-Vint for PINT -- Windows NT 4.0 for ARM on the Raspberry Pi 2,
+# 3 and 4 (github.com/tenox7/PINT) -- on a HOSTED runner, on every push to
+# vintage-agents that touches it.
+#
+# No compiler ever ran on NT for ARM, so unlike the x86 and PowerPC builds
+# (made on the NT machine by its Visual C++) this one is made by PINT's own
+# build: Microsoft C for ARM in tenox7/msvc-arm32, NT 4.0's C run-time and
+# import libraries built from the NT 4.0 source tree, the agent built as one
+# of PINT's apps. Everything is fetched here, at pinned commits, every run;
+# neither tree is ever part of this repository. The agent links Visual C++
+# 4.2's libcmt made from that tree, as every program of PINT does.
+#
+# A BUILD, NOT A RELEASE: the product is this run's artifact (the .exe, the
+# release zip, ntexec.exe for driving a test machine, SHA256SUMS). Releasing
+# stays a person's job, after a green run's .exe has run -selftest and a
+# session on PINT (QEMU raspi2b or a real Pi).
+#
+# THIN YAML: the build is crustdesk-winnt/scripts/pint-build.sh (make pint),
+# which a person runs the same way with Docker; the release files are make
+# dist. What lives here is the fetching, the caches and the artifact.
+#
+# CACHES: Microsoft C (msvc-setup, by image digest) and PINT's obj/ (its build
+# tools, the C run-time, the import libraries: by the three pins). pint-build.sh
+# skips each part whose output is there, and the caches are saved even when a
+# run fails, so a failing run's next one starts where it stopped.
+#
+# PINS, bumped by hand after a build with the new one has run on PINT:
+#   MSVC_IMAGE   tenox7/msvc-arm32 by digest (Microsoft C 14.44 under Wine)
+#   PINT_REF     tenox7/PINT, branch 1381 (2026-11-02)
+#   NT_SRC_REF   the NT 4.0 tree (Mooliecool/windows, nt-4.0/)
+
+name: Windows NT agent for PINT, ARM (build)
+
+on:
+  push:
+    branches:
+      - vintage-agents
+    paths:
+      - "crustdesk-winnt/**"
+      # the portable core and its third-party code
+      - "crustdesk-macos-classic/src/core/**"
+      - "crustdesk-macos-classic/third_party/**"
+      - ".github/workflows/winnt-pint-agent-build.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: winnt-pint-agent-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
+
+env:
+  MSVC_IMAGE: tenox7/msvc-arm32@sha256:17b0926cfca65b5c37fceb1749da6ded0f7066952cf3fd7ac7e38cacd85540cc
+  PINT_REF: 173bf28f1df0eabfcf0533ee83b7769aa96bf774
+  NT_SRC_REPO: https://github.com/Mooliecool/windows.git
+  NT_SRC_REF: 9e211d0cd5cacbd62c9c6ac764a6731985d60e26
+
+jobs:
+  build:
+    # the image's arm64 side, as PINT is built on Apple silicon; its build tools run
+    # on 32-bit ARM Wine, which these CPUs cannot run natively: QEMU's binfmt below
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Where, and the build's ID
+        # one ID for make pint and make dist, which checks the .exe carries it
+        run: |
+          echo "WORK=$RUNNER_TEMP/pint-work" >> "$GITHUB_ENV"
+          echo "BUILD_ID=$(date -u +%Y%m%d)-$(git rev-parse --short=9 HEAD)" >> "$GITHUB_ENV"
+
+      - name: QEMU for 32-bit ARM
+        uses: docker/setup-qemu-action@v4
+        with:
+          platforms: arm
+
+      - name: The build image
+        run: |
+          docker pull "$MSVC_IMAGE"
+          # PINT's scripts name the tag
+          docker tag "$MSVC_IMAGE" tenox7/msvc-arm32:latest
+
+      - name: The NT 4.0 tree and PINT
+        run: |
+          mkdir -p "$WORK/nt40"
+          git init -q "$WORK/src" && cd "$WORK/src"
+          git remote add origin "$NT_SRC_REPO"
+          git sparse-checkout set nt-4.0
+          git fetch -q --depth 1 --filter=blob:none origin "$NT_SRC_REF"
+          git checkout -q FETCH_HEAD
+          mv nt-4.0/private nt-4.0/public "$WORK/nt40/"
+          git init -q "$WORK/nt40/RASPI" && cd "$WORK/nt40/RASPI"
+          git remote add origin https://github.com/tenox7/PINT.git
+          git fetch -q --depth 1 origin "$PINT_REF"
+          git checkout -q FETCH_HEAD
+          df -h "$WORK"
+
+      - name: Restore Microsoft C
+        id: msvc
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.WORK }}/nt35/msvc
+          key: msvc-arm32-${{ env.MSVC_IMAGE }}
+
+      - name: Restore PINT's obj
+        id: obj
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.WORK }}/nt40/RASPI/obj
+          key: pint-obj-${{ env.PINT_REF }}-${{ env.NT_SRC_REF }}-${{ env.MSVC_IMAGE }}-${{ github.run_id }}
+          restore-keys: pint-obj-${{ env.PINT_REF }}-${{ env.NT_SRC_REF }}-${{ env.MSVC_IMAGE }}-
+
+      - name: Build (scripts/pint-build.sh)
+        working-directory: crustdesk-winnt
+        run: make pint PINTWORK="$WORK"
+
+      - name: Save Microsoft C
+        if: always() && steps.msvc.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.WORK }}/nt35/msvc
+          key: msvc-arm32-${{ env.MSVC_IMAGE }}
+
+      - name: Save PINT's obj
+        if: always()
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.WORK }}/nt40/RASPI/obj
+          key: pint-obj-${{ env.PINT_REF }}-${{ env.NT_SRC_REF }}-${{ env.MSVC_IMAGE }}-${{ github.run_id }}
+
+      - name: The release files, nothing personal in them
+        working-directory: crustdesk-winnt
+        env:
+          CDV_PRIVATE_STRINGS: ${{ secrets.CDV_PRIVATE_STRINGS }}
+        run: |
+          make dist ARCH=arm
+          cp build/arm/ntexec.exe build/
+          { echo "C-Desk-Vint for Windows NT 4.0 on ARM (PINT)"
+            echo "build   $BUILD_ID"
+            echo "commit  $GITHUB_SHA"
+            echo "PINT    $PINT_REF"
+            echo "NT 4.0  $NT_SRC_REF"
+            echo "image   $MSVC_IMAGE"
+            echo "run     $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          } > build/BUILD-INFO.txt
+
+      - name: Upload the product
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: c-desk-vint-winnt-arm
+          path: |
+            crustdesk-winnt/build/C-Desk-Vint-WinNT4-ARM-*
+            crustdesk-winnt/build/ntexec.exe
+            crustdesk-winnt/build/BUILD-INFO.txt
+            crustdesk-winnt/build/arm/
+          if-no-files-found: warn

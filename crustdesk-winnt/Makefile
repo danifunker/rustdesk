@@ -14,11 +14,15 @@
 #   make selftest-nt     run -selftest on the NT machine
 #   make dist            the release zip for ARCH
 #   make icon            res/cdv.ico from tools/make-icon.py
+#   make pint            the ARM build for PINT (NT 4.0 on the Raspberry Pi), made by PINT's
+#                        build in Docker, not on the machine: scripts/pint-build.sh, in
+#                        PINTWORK (the NT 4.0 tree and PINT, see there) -> build/arm
 ARCH     ?= ppc
 NTDIR    ?= c:\cdv\src
 NTINST   ?= C:\Program Files\C-Desk-Vint
 BUILD_ID ?= $(shell date -u +%Y%m%d)-$(shell git rev-parse --short=9 HEAD 2>/dev/null || echo dev)
 NTXPY    := python3 scripts/ntx.py
+PINTWORK ?= ../../pint-work
 
 MAC  := ../crustdesk-macos-classic
 CORE := $(MAC)/src/core
@@ -39,6 +43,9 @@ install-nt: nt
 	$(NTXPY) run 'copy $(NTDIR)\C-Desk-Vint.exe "$(NTINST)"'
 	$(NTXPY) run '"$(NTINST)\C-Desk-Vint.exe" -start'
 
+pint:
+	BUILD_ID=$(BUILD_ID) bash scripts/pint-build.sh '$(PINTWORK)' build/arm
+
 selftest-nt:
 	$(NTXPY) run '$(NTDIR)\C-Desk-Vint.exe -selftest'
 
@@ -54,7 +61,7 @@ selftest-host: build/selftest-host
 
 # The release: the program alone (NT 4.0 has no unzip) and a zip with the
 # read-me, named for the processor, both checked for anything personal.
-ARCHNAME := $(if $(filter ppc,$(ARCH)),PPC,$(if $(filter mips,$(ARCH)),MIPS,$(if $(filter alpha,$(ARCH)),Alpha,x86)))
+ARCHNAME := $(if $(filter ppc,$(ARCH)),PPC,$(if $(filter mips,$(ARCH)),MIPS,$(if $(filter alpha,$(ARCH)),Alpha,$(if $(filter arm,$(ARCH)),ARM,x86))))
 DISTNAME := C-Desk-Vint-WinNT4-$(ARCHNAME)-$(BUILD_ID)
 dist: build/$(ARCH)/C-Desk-Vint.exe
 	@grep -qa 'C-Desk-Vint for Windows NT' $< || { echo "$< is not the agent"; exit 1; }
@@ -74,4 +81,4 @@ icon:
 clean:
 	rm -rf build
 
-.PHONY: stage nt install-nt selftest-nt selftest-host dist icon clean
+.PHONY: stage nt pint install-nt selftest-nt selftest-host dist icon clean

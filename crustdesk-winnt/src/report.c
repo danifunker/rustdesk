@@ -71,6 +71,10 @@ void report_describe(char *cpu, size_t ncpu, char *mem, size_t nmem, char *os, s
     case PROCESSOR_ARCHITECTURE_MIPS: arch = "MIPS"; break;
     case PROCESSOR_ARCHITECTURE_ALPHA: arch = "Alpha"; break;
     case PROCESSOR_ARCHITECTURE_PPC: arch = "PowerPC"; break;
+#ifdef PROCESSOR_ARCHITECTURE_ARM
+    /* PINT's headers: NT 4.0 for ARM on the Raspberry Pi */
+    case PROCESSOR_ARCHITECTURE_ARM: arch = "ARM"; break;
+#endif
     default: arch = "unknown"; break;
     }
     if (!reg_string(HKEY_LOCAL_MACHINE, cpukey, "Identifier", ident, sizeof ident))
