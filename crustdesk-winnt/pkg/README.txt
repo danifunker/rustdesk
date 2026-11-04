@@ -7,7 +7,9 @@ paste with it, and move files to and from it -- across the room by its
 address, or across the internet by its RustDesk ID.
 
 This build is for one processor; the file name says which (PPC: PowerPC,
-x86: Intel). The same program is built for each from the same source.
+x86: Intel, ARM: PINT, Windows NT 4.0 on the Raspberry Pi 2, 3 and 4 --
+github.com/tenox7/PINT). The same program is built for each from the same
+source.
 
 The x86 build runs on Windows 98 (and should on 95) too: there it is a
 program started at boot rather than a service, it shows the logon prompt
@@ -19,8 +21,8 @@ no Ctrl+Alt+Del to send on 9x. Tested on Windows 98 SE; not on 95.
 What it needs
 -------------
 
-- Windows NT 4.0 (Workstation or Server), or on x86 Windows 98, with
-  TCP/IP.
+- Windows NT 4.0 (Workstation or Server), or on x86 Windows 98, or PINT
+  on a Raspberry Pi, with TCP/IP.
 - An Administrator to install it.
 - Any display NT drives, at any depth: 256 colours, 16-bit or 24-bit.
 
