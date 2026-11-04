@@ -85,6 +85,13 @@ out (those trees are not fetched; nothing the agent links). Not yet: the
 clipboard, files, Ctrl-Alt-Del, the settings window, a real Pi;
 `cliptool.c` is not built for ARM.
 
+**Released** 2026-11-04 as `vintage-winnt-arm-20261104-948ae0216` (its own
+series: the wiki's tools/release.py has a row for it), build
+20261104-948ae0216 from the workflow's run 41820870360: that .exe, put in
+place of the service on the same PINT machine, passed -selftest and the
+session by ID through the public relay again. The release files are the
+run's artifact plus a MANIFEST.txt written by hand.
+
 **Not proven**: MIPS and Alpha builds (not compiled: no NT machine or
 compiler for them yet; nothing in the source is processor-specific, and
 `-selftest` exists to check them); real PowerPC hardware; NT 4.0 with other
