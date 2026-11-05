@@ -7,8 +7,8 @@ paste with it, and move files to and from it -- across the room by its
 address, or across the internet by its RustDesk ID.
 
 This build is for one processor; the file name says which (PPC: PowerPC,
-x86: Intel, ARM: PINT, Windows NT 4.0 on the Raspberry Pi 2, 3 and 4 --
-github.com/tenox7/PINT). The same program is built for each from the same
+x86: Intel, Alpha: DEC Alpha, ARM: PINT, Windows NT 4.0 on the Raspberry
+Pi 2, 3 and 4 -- github.com/tenox7/PINT). The same program is built for each from the same
 source.
 
 The x86 build runs on Windows 98 (and should on 95) too: there it is a
@@ -35,7 +35,8 @@ run it. The settings window opens; press Install. It copies itself to
 Program Files\C-Desk-Vint, installs the "C-Desk-Vint remote desktop"
 service (it starts with Windows, before anyone logs on), starts it, puts
 C-Desk-Vint in everyone's Start Menu, and opens the installed copy's
-settings window.
+settings window. It also starts the C-Desk-Vint tray (below), and sets
+it to start whenever someone logs on.
 
 The window shows this machine's ID and password: that is what a RustDesk
 client connects with. Once the status line says "Ready: registered with
@@ -60,8 +61,9 @@ agent restarts with it.
   Direct IP port  where a client can connect by this machine's address
                   (21118, as RustDesk's own). 0 turns it off.
   Answer LAN discovery  lets clients on this network list the machine.
-  File access     what the client's file manager may see: / for every
-                  drive, a folder (D:\Shared) for just that, off for none.
+  File access     what the client's file manager may see: / for all
+                  drives, files and folders; off for none; or one folder
+                  (D:\Shared) for just that -- only one.
   Picture quality 0 (best) to 127 (smallest); 24 is the default. A client
                   can change it during a session.
 
@@ -79,7 +81,32 @@ What a client can do
   folders, rename and delete.
 - Take a screenshot, restart the machine.
 
+- Chat with whoever is at the machine (the tray, below, shows it).
+- On Windows 2000 and later: "Insert lock" locks the screen, and "Block
+  user input" stops the machine's own keyboard and mouse until it is
+  turned off (or Ctrl+Alt+Del is pressed there). Windows NT 4.0 cannot do
+  either; 98 can block input. Neither has been tried on Windows 2000 yet.
+
 One desktop session at a time, with a file manager beside it.
+
+
+The tray
+--------
+
+On Windows NT, an icon by the clock for whoever is logged on (it starts at
+logon; C-Desk-Vint -tray starts it by hand). Its tip says who is connected.
+Right-click it for:
+
+  Chat...                     the chat window. It opens by itself when the
+                              person connected writes; type below and press
+                              Enter to answer.
+  Disconnect remote sessions  end every remote session now.
+  Settings...                 the settings window.
+  Exit tray                   until the next logon.
+
+Without the tray nobody can read chat here; a client that writes is told
+so. Only the user logged on at the machine's own screen may use the tray.
+Not on Windows 98 yet.
 
 
 From the command line
@@ -87,6 +114,7 @@ From the command line
 
   C-Desk-Vint -i          print the ID and password
   C-Desk-Vint -install    install and start the service (from where it is)
+  C-Desk-Vint -tray       the tray (normally started at logon)
   C-Desk-Vint -remove     stop and remove the service
   C-Desk-Vint -start      start the service; -stop to stop it
   C-Desk-Vint -run [-v]   run the agent in a console window instead (testing)

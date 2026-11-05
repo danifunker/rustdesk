@@ -95,6 +95,11 @@ typedef struct {
      * raw -- see files.h. Valid only during the call. */
     void (*file)(void *user, int field, const uint8_t *data, size_t n);
     void *user;
+    /* Optional. The peer's "Block user input": 1 to block this machine's own
+     * keyboard and mouse, 0 to let them go (OptionMessage.block_input). Last,
+     * after user, so the agents that fill this struct in order need not
+     * change. */
+    void (*block_input)(void *user, int on);
 } cdv_hooks;
 
 typedef struct {
@@ -113,6 +118,10 @@ typedef struct {
      * none sent. A client's file manager refuses a peer that sends none
      * ("No active console user logged on"). */
     const char *username;
+    /* PeerInfo.sas_enabled: the agent can send Ctrl-Alt-Del (key control
+     * 100). A client offers "Insert Ctrl + Alt + Del" only for a peer that
+     * says so (or one whose platform is "Linux"). */
+    int sas_enabled;
 } cdv_ident;
 
 enum { CDV_WAIT_PK, CDV_WAIT_LOGIN, CDV_LIVE, CDV_CLOSED };

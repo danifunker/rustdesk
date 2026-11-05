@@ -269,6 +269,8 @@ static void send_peer_info(cdv_session *s)
         pbw_bool(&w, 7, id->cursor_embedded);
         pbw_end(&w);
     }
+    if (id->sas_enabled)
+        pbw_bool(&w, 6, 1);
     pbw_string(&w, 7, REPORTED_VERSION);
     pbw_end(&w);
     pbw_end(&w);
@@ -763,14 +765,20 @@ static void mouse_event(cdv_session *s, const uint8_t *b, size_t n)
 }
 
 /* OptionMessage: image_quality (2 Low, 3 Balanced, 4 Best), a custom
- * quality in percent, and frames a second. */
+ * quality in percent, frames a second, and block_input. */
 static void option(cdv_session *s, const uint8_t *b, size_t n)
 {
     pbr r;
-    int quality = -1, fps = 0;
+    int quality = -1, fps = 0, block = -1;
     pbr_init(&r, b, n);
     while (pbr_next(&r)) {
-        if (r.field == 1 && r.wire == PB_VARINT) {
+        if (r.field == 5 && r.wire == PB_VARINT) {
+            /* block_input: a BoolOption, 2 Yes, 1 No, 0 not set */
+            if (r.v == 2)
+                block = 1;
+            else if (r.v == 1)
+                block = 0;
+        } else if (r.field == 1 && r.wire == PB_VARINT) {
             if (r.v == 2)
                 quality = 40;
             else if (r.v == 3)
@@ -788,6 +796,8 @@ static void option(cdv_session *s, const uint8_t *b, size_t n)
     }
     if ((quality >= 0 || fps) && s->hooks->option)
         s->hooks->option(s->hooks->user, quality, fps);
+    if (block >= 0 && s->hooks->block_input)
+        s->hooks->block_input(s->hooks->user, block);
 }
 
 static void misc(cdv_session *s, const uint8_t *b, size_t n)

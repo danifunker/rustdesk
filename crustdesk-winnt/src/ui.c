@@ -316,6 +316,7 @@ static int do_install(HWND d)
     make_shortcut(exe);
     if (!service_start(err, sizeof err))
         error_box(d, "Installed, but the service did not start.", err);
+    service_tray_now(exe);
     if (moved) {
         STARTUPINFO si;
         PROCESS_INFORMATION pi;

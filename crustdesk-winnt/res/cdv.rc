@@ -28,7 +28,9 @@ BEGIN
     GROUPBOX        "Sessions", -1, 7, 106, 192, 62
     LTEXT           "File access:", -1, 15, 120, 54, 8
     EDITTEXT        IDC_FILES, 72, 118, 70, 12, ES_AUTOHSCROLL
-    LTEXT           "/ = all drives, off = none, or a folder", -1, 15, 133, 178, 8
+    /* two lines, between the box above (ends at 130) and quality (148) */
+    LTEXT           "/ = all drives, files and folders\noff = none, or one folder (D:\\Shared)",
+                    -1, 15, 131, 178, 16
     LTEXT           "Picture quality:", -1, 15, 150, 54, 8
     EDITTEXT        IDC_QUALITY, 72, 148, 24, 12, ES_NUMBER
     LTEXT           "0 best ... 127 smallest; 24", -1, 100, 150, 93, 8

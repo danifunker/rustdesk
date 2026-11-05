@@ -2,6 +2,8 @@
  *
  *   C-Desk-Vint              the settings window (and installing)
  *   C-Desk-Vint -service     what the service manager runs
+ *   C-Desk-Vint -tray        the icon by the clock and chat, as the user
+ *                            logged on (started at logon on NT)
  *   C-Desk-Vint -run [-v]    the agent in a console window, for testing
  *   C-Desk-Vint -install     install and start the service (this program)
  *   C-Desk-Vint -remove      stop and remove it
@@ -13,6 +15,7 @@
 #include "prefs.h"
 #include "selftest.h"
 #include "service.h"
+#include "tray.h"
 #include "ui.h"
 
 #include "win.h"
@@ -59,6 +62,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     (void)show;
     if (has(cmd, "-service"))
         return service_dispatch(verbose) ? 0 : 1;
+    if (has(cmd, "-tray"))
+        return tray_run(inst);
     if (has(cmd, "-run")) {
         int r;
         if (GetStdHandle(STD_OUTPUT_HANDLE) == NULL ||
@@ -92,6 +97,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
             out(buf);
             return 1;
         }
+        service_tray_now(exe);
         out("installed and started\r\n");
         return 0;
     }

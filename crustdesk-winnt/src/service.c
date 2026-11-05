@@ -181,6 +181,49 @@ static int run_9x(int verbose)
     return r == 0;
 }
 
+/* ---- the tray program, started at every logon (NT) ----------------------------- */
+
+#define RUN_KEY "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run"
+#define TRAY_VALUE "C-Desk-Vint tray"
+
+static void tray_autostart(const char *exe)
+{
+    HKEY k;
+    char cmd[MAX_PATH + 32];
+    DWORD disp;
+    snprintf(cmd, sizeof cmd, "\"%s\" -tray", exe);
+    if (RegCreateKeyEx(HKEY_LOCAL_MACHINE, RUN_KEY, 0, NULL, 0, KEY_WRITE, NULL, &k, &disp) ==
+        ERROR_SUCCESS) {
+        RegSetValueEx(k, TRAY_VALUE, 0, REG_SZ, (const BYTE *)cmd, (DWORD)strlen(cmd) + 1);
+        RegCloseKey(k);
+    }
+}
+
+static void tray_autostart_remove(void)
+{
+    HKEY k;
+    if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, RUN_KEY, 0, KEY_WRITE, &k) == ERROR_SUCCESS) {
+        RegDeleteValue(k, TRAY_VALUE);
+        RegCloseKey(k);
+    }
+}
+
+void service_tray_now(const char *exe)
+{
+    char cmd[MAX_PATH + 32];
+    STARTUPINFO si;
+    PROCESS_INFORMATION pi;
+    if (!plat_nt())
+        return;
+    snprintf(cmd, sizeof cmd, "\"%s\" -tray", exe);
+    memset(&si, 0, sizeof si);
+    si.cb = sizeof si;
+    if (CreateProcess(NULL, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+    }
+}
+
 static SC_HANDLE open_svc(DWORD access, SC_HANDLE *scm)
 {
     SC_HANDLE s;
@@ -276,8 +319,10 @@ int service_install(const char *exe, char *err, size_t cap)
     } else if (!s) {
         say(err, cap, "cannot install the service");
     }
-    if (s)
+    if (s) {
         CloseServiceHandle(s);
+        tray_autostart(exe);
+    }
     CloseServiceHandle(scm);
     return s != NULL;
 }
@@ -357,6 +402,8 @@ int service_remove(char *err, size_t cap)
     ok = DeleteService(s) != 0;
     if (!ok)
         say(err, cap, "cannot remove the service");
+    else
+        tray_autostart_remove();
     CloseServiceHandle(s);
     CloseServiceHandle(scm);
     return ok;

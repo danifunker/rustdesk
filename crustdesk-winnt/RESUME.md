@@ -108,8 +108,59 @@ it yet; nothing in the source is processor-specific, and `-selftest` exists
 to check it); real PowerPC hardware; NT 4.0 with other
 service packs; a real RustDesk console; a screen depth other than the 40P's
 (GDI converts any depth into the 32-bit DIB, so it should not matter);
-`restart` from a peer; chat (not implemented: a service has nowhere to show
-it).
+`restart` from a peer.
+
+**Since the Alpha release** (2026-11-05). Built by Visual C++ 6.0 on the
+Alpha as test build 20261105-848360c16-tray (sha256 6225efad...; a copy in
+build/alpha/, not released); the user reports **the tray, its chat window
+and Ctrl+Alt+Del working** there. Not reported yet: Disconnect from the
+tray, the two-line File access hint, Windows 2000's lock and block input.
+
+- *Ctrl+Alt+Del in the client's menu.* A client offers "Insert Ctrl + Alt +
+  Del" only for a peer whose PeerInfo has `sas_enabled` (field 6) or whose
+  platform is "Linux"; the core never sent it, so no client showed it --
+  the earlier tests sent the key from the scripted client. Now
+  `cdv_ident.sas_enabled`, set by the NT service (not -run, not 9x).
+- *The tray and chat* (`-tray`, tray.c; link.c). The service is SYSTEM, so
+  chat is shown by a program of the logged-on user's, started from
+  HKLM\...\Run (written by service_install, removed by service_remove;
+  Install also starts it at once). They talk over the named pipe
+  `\\.\pipe\C-Desk-Vint`, message mode: a type byte, then UTF-8 (link.h).
+  The pipe's DACL lets Everyone read and write it but only SYSTEM make
+  instances (so no program can pose as the agent while it runs); after the
+  tray's hello the agent impersonates it and lets it in only if its SID is
+  the owner of Progman's process -- the console user (refreshed every 2 s).
+  A refused tray is told why and waits a minute before trying again. Chat
+  from the peer with no tray: the peer is told once a session. The tray:
+  Chat (opens by itself on a message), Disconnect remote sessions,
+  Settings, Exit; it exits when the service is removed. NT only: 9x cannot
+  serve a named pipe. The pipe and security calls, CancelIo (not in 95) and
+  the W window calls are looked up at run time, so the x86 program still
+  loads on 95 and 98 -- run check-imports.py on the x86 build to be sure.
+- *Windows 2000 features, by run-time lookup* (no build flags: one program
+  per processor; 2000 shipped only for x86, though Alpha has betas):
+  "Insert lock" (control key 101) calls LockWorkStation, through the tray
+  when it runs (the call wants the user's desktop), else from the agent;
+  "Block user input" (OptionMessage.block_input, field 5, a new core hook
+  -- the last member of cdv_hooks, so the agents that fill it in order are
+  unchanged) calls BlockInput from the main loop's thread; a session's end
+  unblocks. NT 4.0 has neither (a log line says so); 98 has BlockInput.
+  **None of it tried on Windows 2000 yet.**
+
+Checked here before sending to the Alpha: every NT source parses as C89
+(clang, `-Werror=declaration-after-statement`) and has no undeclared calls
+(C99 pass) against MinGW-w64's headers, with windows.h first and MinGW's
+stdint.h in place of the shim; MinGW's headers do not hide post-NT 4.0
+calls, so those were checked by hand (only through GetProcAddress). The
+core's test_core passes; selftest-host passes. stage.py's NT rules now
+depend on core\*.h too (a changed core struct rebuilds the NT objects).
+
+Next (the user's plan): the terminal, run by the tray as the logged-on
+user (not SYSTEM), with a tray item to restart it; RustDesk's persistent
+terminal sessions (Terminal.service_id, TerminalOpened.replay_terminal_
+output) fit "always running, see earlier output". Then TCP tunneling
+(LoginRequest.port_forward, field 8). Upstream's protocol for both:
+rustdesk/rustdesk libs/base/protos/message.proto.
 
 ## 2. The build: Visual C++ 4 on the machine, sources staged here
 
@@ -305,7 +356,8 @@ Tenox has an NT 4.0 MIPS QEMU image with Visual C++ 4.1
    and comparing the screen; real hardware unmeasured. A mirror driver would
    give damage regions and motion; NT 4.0 had them (VNC's), but that is a
    kernel driver per processor.
-5. Chat, and the peer's "lock screen", are not offered.
+5. Chat and the tray: working on the Alpha (above); not on 9x. Lock and
+   block input: Windows 2000 only, not tried.
 6. Released (the user asked): build **20261030-feaa6be71**, x86 and PowerPC
    (`C-Desk-Vint-WinNT4-{x86,PPC}-20261030-feaa6be71.{exe,zip,SHA256SUMS,
    MANIFEST.txt}`) in `r-deskway-1.5.0`, replacing 20261030-0df59d3a8 (whose

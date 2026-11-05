@@ -21,6 +21,8 @@ the peer, the screen read back between them.
 | `src/clip.c` | the clipboard, in a thread with a viewer window of its own |
 | `src/fs_win32.c` | `cdv_fs_ops` over the W calls: drives at "/", `C:\paths` |
 | `src/report.c` | the console reporter, a thread |
+| `src/tray.c` | `-tray`: the icon by the clock and the chat window, as the logged-on user |
+| `src/link.c`, `src/link.h` | the agent's end of the named pipe to the tray: only the console user's tray is let in |
 | `src/service.c` | the service: install, start, stop, `ServiceMain` |
 | `src/ui.c`, `res/` | the settings window, the icon, the version |
 | `src/prefs.c` | `C-Desk-Vint.cfg` and `.sta`, shared by agent and window |

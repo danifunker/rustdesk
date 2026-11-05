@@ -258,7 +258,8 @@ def main():
         o = "obj\\nt_%s.obj" % n
         objs.append(o)
         flags = "$(CFLAGS)"
-        rules.append("%s: nt\\%s.c nt\\*.h FLAGS\n\t$(CC) %s /Fo%s nt\\%s.c" % (o, n, flags, o, n))
+        # the NT side includes the core's headers too (session.h's structs)
+        rules.append("%s: nt\\%s.c nt\\*.h core\\*.h FLAGS\n\t$(CC) %s /Fo%s nt\\%s.c" % (o, n, flags, o, n))
     for n in CORE:
         o = "obj\\core_%s.obj" % n
         objs.append(o)

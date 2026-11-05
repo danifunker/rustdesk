@@ -16,6 +16,7 @@
 #include "clip.h"
 #include "fs_win32.h"
 #include "input.h"
+#include "link.h"
 #include "log.h"
 #include "plat.h"
 #include "prefs.h"
@@ -177,6 +178,7 @@ typedef struct {
     int files_started;
     uint32_t started;
     char how[16];
+    int chat_told;        /* the peer has been told nobody reads chat here */
 } slot;
 static slot slots[NSLOTS];
 static slot *desk;        /* the slot showing the desktop, or NULL */
@@ -269,10 +271,17 @@ static void on_mouse(void *u, int mask, int x, int y)
     S.last_change = now_ms(); /* the screen will answer: look often */
 }
 
+static void lock_screen(void);
+
 static void on_key(void *u, const cdv_key *k)
 {
     if ((slot *)u != desk)
         return;
+    if (k->kind == KEY_CONTROL && k->value == 101) { /* LockScreen */
+        if (k->down || k->press)
+            lock_screen();
+        return;
+    }
     input_key(k);
     S.last_change = now_ms();
 }
@@ -335,21 +344,137 @@ static void on_restart(void *u)
         cdv_log("restart refused (error %lu)", GetLastError());
 }
 
+/* ---- chat, lock and block input: the tray program (tray.c) shows chat ---- */
+
+static int input_blocked;
+
+/* A chat line from the peer: to the tray, which shows it to whoever is at
+ * the console. Without a tray the peer is told so, once a session. */
+static void on_chat(void *u, const char *utf8, size_t n)
+{
+    slot *sl = (slot *)u;
+    static char m[LINK_MAX];
+    size_t k;
+    if (link_connected()) {
+        k = (size_t)snprintf(m, sizeof m, "%s\n", sl->s.peer_name[0] ? sl->s.peer_name : "Peer");
+        if (n > sizeof m - k)
+            n = sizeof m - k;
+        memcpy(m + k, utf8, n);
+        link_send(LINK_PEER_CHAT, m, k + n);
+        return;
+    }
+    cdv_log("chat from the peer, and no tray to show it");
+    if (!sl->chat_told) {
+        static const char none[] =
+            "(C-Desk-Vint) Nobody can read this: the C-Desk-Vint tray is not running here "
+            "(it starts when someone logs on to Windows NT).";
+        sl->chat_told = 1;
+        cdv_send_chat(&sl->s, none, sizeof none - 1);
+    }
+}
+
+/* The peer's Block user input. BlockInput is Windows 98's and 2000's, not
+ * NT 4.0's; it has to be called by a thread on the input desktop, which the
+ * main loop is (screen_follow). Ctrl-Alt-Del at the machine undoes it. */
+static void set_block(int on)
+{
+    typedef BOOL(WINAPI * block_fn)(BOOL);
+    static block_fn f;
+    static int looked;
+    if (!looked) {
+        f = (block_fn)GetProcAddress(GetModuleHandle("user32.dll"), "BlockInput");
+        looked = 1;
+    }
+    if (on == input_blocked)
+        return;
+    if (!f) {
+        if (on)
+            cdv_log("the peer asked to block this machine's keyboard and mouse; this Windows "
+                    "cannot (Windows 98 and 2000 can)");
+        return;
+    }
+    if (f(on ? TRUE : FALSE)) {
+        input_blocked = on;
+        cdv_log("this machine's keyboard and mouse are %s", on ? "blocked" : "free again");
+    } else {
+        cdv_log("cannot %sblock input (error %lu)", on ? "" : "un", GetLastError());
+    }
+}
+
+static void on_block_input(void *u, int on)
+{
+    if ((slot *)u == desk)
+        set_block(on);
+}
+
+/* The peer's Insert lock: LockWorkStation, Windows 2000's. The tray does it
+ * if it is running -- it is the user's program on their desktop, which the
+ * call wants; else the agent tries itself. NT 4.0 has no way to. */
+static void lock_screen(void)
+{
+    typedef BOOL(WINAPI * lock_fn)(void);
+    lock_fn f = (lock_fn)GetProcAddress(GetModuleHandle("user32.dll"), "LockWorkStation");
+    if (!f) {
+        cdv_log("the peer asked to lock the screen; this Windows cannot (2000 and later can)");
+        return;
+    }
+    if (link_connected()) {
+        cdv_log("the peer asked to lock the screen; the tray locks it");
+        link_send(LINK_LOCK, NULL, 0);
+    } else if (!f()) {
+        cdv_log("cannot lock the screen (error %lu)", GetLastError());
+    }
+}
+
 static void on_screenshot(void *u)
 {
     if ((slot *)u == desk)
         S.want_shot = 1;
 }
 
-/* Who is logged in at the console: the owner of the shell's process (Program
- * Manager's window is Explorer's desktop), else whoever last logged on. */
+/* The account the shell (Explorer: Program Manager's window is its desktop)
+ * runs as -- the person at the console -- as TOKEN_USER in buf; 0 if there
+ * is no shell (nobody logged on, or not on NT). The tray link lets in only
+ * a program of theirs. */
+static int shell_owner(char *buf, DWORD cap)
+{
+    HWND shell;
+    DWORD pid = 0, got;
+    int ok = 0;
+    if (!plat_nt() || (shell = FindWindow("Progman", NULL)) == NULL)
+        return 0;
+    GetWindowThreadProcessId(shell, &pid);
+    if (pid) {
+        HANDLE p = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, pid), tok;
+        if (p) {
+            if (OpenProcessToken(p, TOKEN_QUERY, &tok)) {
+                ok = GetTokenInformation(tok, TokenUser, buf, cap, &got) != 0;
+                CloseHandle(tok);
+            }
+            CloseHandle(p);
+        }
+    }
+    return ok;
+}
+
+static void console_sid_step(void)
+{
+    static uint32_t next;
+    char buf[256];
+    uint32_t now = now_ms();
+    if ((int32_t)(now - next) < 0)
+        return;
+    next = now + 2000;
+    link_set_console_sid(shell_owner(buf, sizeof buf) ? ((TOKEN_USER *)buf)->User.Sid : NULL);
+}
+
+/* Who is logged in at the console: the shell's owner, else whoever last
+ * logged on. */
 static const char *console_user(void)
 {
     static char name[64];
-    HWND shell = FindWindow("Progman", NULL);
-    DWORD pid = 0;
     char dom[64], buf[256];
-    DWORD nl = sizeof name, dl = sizeof dom, got;
+    DWORD nl = sizeof name, dl = sizeof dom;
     SID_NAME_USE use;
     int found = 0;
     if (!plat_nt()) {
@@ -360,21 +485,9 @@ static const char *console_user(void)
         return name;
     }
     strcpy(name, "SYSTEM");
-    if (shell)
-        GetWindowThreadProcessId(shell, &pid);
-    if (pid) {
-        HANDLE p = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, pid), tok;
-        if (p) {
-            if (OpenProcessToken(p, TOKEN_QUERY, &tok)) {
-                if (GetTokenInformation(tok, TokenUser, buf, sizeof buf, &got) &&
-                    LookupAccountSid(NULL, ((TOKEN_USER *)buf)->User.Sid, name, &nl, dom, &dl,
-                                     &use))
-                    found = 1;
-                CloseHandle(tok);
-            }
-            CloseHandle(p);
-        }
-    }
+    if (shell_owner(buf, sizeof buf) &&
+        LookupAccountSid(NULL, ((TOKEN_USER *)buf)->User.Sid, name, &nl, dom, &dl, &use))
+        found = 1;
     if (!found) {
         HKEY k;
         DWORD type, len = sizeof name;
@@ -485,7 +598,10 @@ static void session_begin(SOCKET fd, int secure, const char *how)
     sl->hooks.screenshot = on_screenshot;
     sl->hooks.login = on_login;
     sl->hooks.file = on_file;
+    sl->hooks.chat = on_chat;
+    sl->hooks.block_input = on_block_input;
     sl->hooks.user = sl;
+    sl->chat_told = 0;
     ident.username = console_user();
     cdv_init2(&sl->s, sl->ctl, CTL_CAP, NULL, 0, sl->in, IN_CAP, &sl->hooks, &ident, now_ms());
     cdv_start(&sl->s, now_ms(), secure);
@@ -503,6 +619,7 @@ static void session_end(slot *sl, const char *why)
             vp8e_abandon(S.enc);
         S.encoding = 0;
         input_release_all();
+        set_block(0);
         desk = NULL;
     }
     if (sl->kind == K_FILES)
@@ -1126,6 +1243,31 @@ static void status_step(void)
         strncat(text, line, sizeof text - strlen(text) - 1);
     }
     prefs_status_write(text);
+    link_send(LINK_STATUS, text, strlen(text));
+}
+
+/* What the tray sent: chat for the peer, Disconnect. */
+static void link_step(void)
+{
+    static char m[LINK_MAX];
+    int type, i;
+    long n;
+    while ((n = link_take(&type, m, sizeof m)) >= 0) {
+        if (type == LINK_JOINED) {
+            status_dirty = 1; /* it wants to know who is connected */
+        } else if (type == LINK_CHAT) {
+            if (desk && desk->s.state == CDV_LIVE) {
+                cdv_send_chat(&desk->s, m, (size_t)n);
+            } else {
+                static const char none[] = "Not sent: nobody is connected.";
+                link_send(LINK_NOTE, none, sizeof none - 1);
+            }
+        } else if (type == LINK_DISCONNECT) {
+            cdv_log("the user at the console ended the remote sessions");
+            for (i = 0; i < NSLOTS; i++)
+                session_end(&slots[i], "ended from the console");
+        }
+    }
 }
 
 /* ---- main ------------------------------------------------------------------ */
@@ -1192,6 +1334,9 @@ int agent_run(HANDLE stop, int console, int verbose)
     ident.cursor_embedded = 0;
     ident.platform = "Windows";
     ident.username = "SYSTEM";
+    /* Ctrl-Alt-Del reaches Winlogon only from SYSTEM, which the NT service
+     * is (input_sas); 9x has none to send, and -run is an Administrator */
+    ident.sas_enabled = plat_nt() && !console;
 
     if (prefs.port) {
         tcp_direct = listen_on((uint16_t)prefs.port, 0);
@@ -1218,6 +1363,8 @@ int agent_run(HANDLE stop, int console, int verbose)
         reporting = report_start(&rc);
     }
     resolve_at = desk_check_at = now_ms();
+    if (plat_nt() && !link_start())
+        cdv_log("no tray link: chat goes nowhere");
 
     while (WaitForSingleObject(stop, 0) != WAIT_OBJECT_0) {
         fd_set rd, wr;
@@ -1227,6 +1374,8 @@ int agent_run(HANDLE stop, int console, int verbose)
 
         rdv_step();
         desk_step();
+        console_sid_step();
+        link_step();
         status_step();
         if (desk && desk->s.state == CDV_LIVE)
             timeout = S.encoding ? 0 : 10;
@@ -1300,6 +1449,7 @@ int agent_run(HANDLE stop, int console, int verbose)
         session_end(&slots[i], "the agent is stopping");
     if (reporting)
         report_stop();
+    link_stop();
     prefs_status_write("stopped=1\r\n");
     cdv_log("stopped");
     WSACleanup();
