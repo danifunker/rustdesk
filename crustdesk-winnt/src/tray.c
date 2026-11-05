@@ -9,7 +9,10 @@
  *
  * NT only (the agent serves the pipe on NT alone), but this file is in the
  * x86 program that loads on 95 and 98 too: the Unicode window calls are
- * looked up at run time, and so is CancelIo, which 95 lacks. */
+ * looked up at run time, and so is CancelIo, which 95 lacks. So is
+ * Shell_NotifyIcon: nothing else in the program imports shell32, and PINT's
+ * build has no import library for it; without it there is no icon, and the
+ * chat window still opens when the peer writes. */
 #include "tray.h"
 #include "link.h"
 #include "plat.h"
@@ -46,7 +49,9 @@ typedef struct {
 typedef LRESULT(WINAPI *SendMessageW_t)(HWND, UINT, WPARAM, LPARAM);
 typedef int(WINAPI *GetWindowTextW_t)(HWND, LPWSTR, int);
 typedef BOOL(WINAPI *CancelIo_t)(HANDLE);
+typedef BOOL(WINAPI *Shell_NotifyIconA_t)(DWORD, NOTIFYICONDATA *);
 static SendMessageW_t pSendMessageW;
+static Shell_NotifyIconA_t pShell_NotifyIcon;
 static GetWindowTextW_t pGetWindowTextW;
 static CancelIo_t pCancelIo;
 
@@ -300,6 +305,8 @@ static void chat_show(int flash)
 static void icon_set(DWORD what)
 {
     NOTIFYICONDATA nd;
+    if (!pShell_NotifyIcon)
+        return;
     memset(&nd, 0, sizeof nd);
     nd.cbSize = sizeof nd;
     nd.hWnd = main_wnd;
@@ -313,7 +320,7 @@ static void icon_set(DWORD what)
         snprintf(nd.szTip, sizeof nd.szTip, "C-Desk-Vint: %s connected", peer_names);
     else
         strcpy(nd.szTip, "C-Desk-Vint: nobody connected");
-    Shell_NotifyIcon(what, &nd);
+    pShell_NotifyIcon(what, &nd);
 }
 
 /* The agent's status lines: "session=desktop NAME (how)" for each session. */
@@ -491,6 +498,11 @@ int tray_run(HINSTANCE hinst)
     pSendMessageW = (SendMessageW_t)GetProcAddress(u, "SendMessageW");
     pGetWindowTextW = (GetWindowTextW_t)GetProcAddress(u, "GetWindowTextW");
     pCancelIo = (CancelIo_t)GetProcAddress(GetModuleHandle("kernel32.dll"), "CancelIo");
+    {
+        HMODULE sh = LoadLibrary("shell32.dll");
+        if (sh)
+            pShell_NotifyIcon = (Shell_NotifyIconA_t)GetProcAddress(sh, "Shell_NotifyIconA");
+    }
     /* the small one by the clock */
     icon = (HICON)LoadImage(hinst, MAKEINTRESOURCE(IDI_CDV), IMAGE_ICON,
                             GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0);
