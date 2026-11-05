@@ -92,9 +92,20 @@ place of the service on the same PINT machine, passed -selftest and the
 session by ID through the public relay again. The release files are the
 run's artifact plus a MANIFEST.txt written by hand.
 
-**Not proven**: MIPS and Alpha builds (not compiled: no NT machine or
-compiler for them yet; nothing in the source is processor-specific, and
-`-selftest` exists to check them); real PowerPC hardware; NT 4.0 with other
+**Alpha** (2026-11-05, build 20261105-e32184f8b): the staged tree built
+unchanged by Visual C++ 6.0 on NT 4.0 for Alpha (`nmake` in `build\stage`;
+the only change it needed was CRLF in the staged sources, for NT's editors).
+Tested by the user on NT 4.0 for Alpha: a full session by ID through their
+own RustDesk server, copy and paste, file transfer, a screenshot. Not tried:
+Ctrl+Alt+Del from the client, `-selftest`. Sessions felt slow; not measured.
+**Released** 2026-11-05 as `vintage-winnt-alpha-20261105-e32184f8b` (its own
+release, like ARM; the user asked that the notes say only "NT 4.0 for Alpha,
+tested", not how). Release files: `make dist ARCH=alpha` plus a MANIFEST.txt
+written by hand. The wiki's Downloads page has no row for it yet.
+
+**Not proven**: the MIPS build (not compiled: no NT machine or compiler for
+it yet; nothing in the source is processor-specific, and `-selftest` exists
+to check it); real PowerPC hardware; NT 4.0 with other
 service packs; a real RustDesk console; a screen depth other than the 40P's
 (GDI converts any depth into the 32-bit DIB, so it should not matter);
 `restart` from a peer; chat (not implemented: a service has nowhere to show
@@ -283,10 +294,9 @@ Tenox has an NT 4.0 MIPS QEMU image with Visual C++ 4.1
 ## 6. What is left
 
 1. **Windows 95** on a machine.
-2. **Other processors.** x86 is done (above). MIPS:
+2. **Other processors.** x86, ARM and Alpha are done (above). MIPS:
    QEMU's `magnum` runs NT 4.0 MIPS; needs an install and Visual C++ for
-   MIPS. Alpha: needs real hardware or an emulator that runs NT. Run
-   `-selftest` on each.
+   MIPS. Run `-selftest` there, and on the Alpha (not yet run).
 3. **The settings file on FAT** keeps no permissions, and the test machine's
    C: is FAT: the password and private key are readable by anyone who logs
    on. Moving those two into an ACL'd registry key would fix it on any disk;

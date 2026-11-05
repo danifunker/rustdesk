@@ -33,9 +33,9 @@ the peer, the screen read back between them.
 
 ## Building
 
-The compiler is the Visual C++ that ran on NT for each processor (4.x is
-what the test machine has: `cl` 10.10 for PowerPC; 2.x, 5.0 and 6.0 have the
-same C front end). It knows C89 and nothing of C99, so the sources are
+The compiler is the Visual C++ that ran on NT for each processor (4.x on
+the PowerPC test machine: `cl` 10.10; 6.0 built the Alpha release unchanged;
+2.x and 5.0 have the same C front end). It knows C89 and nothing of C99, so the sources are
 *staged*: `scripts/stage.py` copies the core, libsodium-min, BearSSL, the
 zstd decoder and `src/` into `build/stage`, rewrites what a header cannot
 cover (`long long` to `__int64`, `ULL` suffixes, C99 variadic macros in zstd,
