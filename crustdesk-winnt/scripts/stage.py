@@ -158,6 +158,10 @@ written = []
 def put(src, rel):
     dst = os.path.join(OUT, rel)
     data = open(src, "rb").read()
+    text_file = src.endswith((".c", ".h", ".rc"))
+    if text_file:
+        # the rewrites below match LF; the sources may be checked out CRLF
+        data = data.replace(b"\r\n", b"\n")
     if src.endswith((".c", ".h")):
         text = c89(data.decode("latin-1"))
         if "__VA_ARGS__" in text:
@@ -169,6 +173,9 @@ def put(src, rel):
             assert old in text, "libsodium common.h changed"
             text = text.replace(old, "#if defined(_MSC_VER) && _MSC_VER >= 1400 && \\\n    (defined(_M_X64)")
         data = text.encode("latin-1")
+    if text_file:
+        # CRLF, as NT's editors expect, so the tree copies there as it is
+        data = data.replace(b"\n", b"\r\n")
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     try:
         if open(dst, "rb").read() == data:
@@ -224,13 +231,13 @@ def main():
     # a header, not a /D: nmake rebuilds what includes it when it changes,
     # and knows nothing of a changed makefile
     bid = os.path.join(OUT, "nt", "buildid.h")
-    text = '#define CDV_BUILD "%s"\n' % build_id
+    text = ('#define CDV_BUILD "%s"\r\n' % build_id).encode()
     try:
-        same = open(bid).read() == text
+        same = open(bid, "rb").read() == text
     except OSError:
         same = False
     if not same:
-        open(bid, "w").write(text)
+        open(bid, "wb").write(text)
         written.append("nt/buildid.h")
     extra = os.environ.get("EXTRA_CFLAGS", "")
     m = []

@@ -1,1 +1,10 @@
 * text=auto
+
+# The Windows NT agent's C sources, resources and read-me: CRLF in the working
+# tree, so they copy to an NT machine as they are (the repository keeps LF).
+# Its Makefile, .py and .sh stay LF for make, Python and sh.
+crustdesk-winnt/**/*.c text eol=crlf
+crustdesk-winnt/**/*.h text eol=crlf
+crustdesk-winnt/**/*.rc text eol=crlf
+crustdesk-winnt/**/*.txt text eol=crlf
+crustdesk-winnt/**/*.ico binary

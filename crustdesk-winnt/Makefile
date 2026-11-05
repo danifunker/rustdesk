@@ -69,7 +69,7 @@ dist: build/$(ARCH)/C-Desk-Vint.exe
 	sh scripts/check-generic.sh $<
 	rm -rf build/dist && mkdir -p build/dist/C-Desk-Vint
 	cp $< build/dist/C-Desk-Vint/C-Desk-Vint.exe
-	sed 's/$$/\r/' pkg/README.txt > build/dist/C-Desk-Vint/README.txt
+	sed 's/\r$$//; s/$$/\r/' pkg/README.txt > build/dist/C-Desk-Vint/README.txt
 	cd build/dist && zip -q -X -r ../$(DISTNAME).zip C-Desk-Vint
 	cp $< build/$(DISTNAME).exe
 	cd build && sha256sum $(DISTNAME).zip $(DISTNAME).exe > $(DISTNAME).SHA256SUMS
