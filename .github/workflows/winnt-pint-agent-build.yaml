@@ -63,7 +63,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 330
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Where, and the build's ID
         # one ID for make pint and make dist, which checks the .exe carries it
@@ -148,7 +148,7 @@ jobs:
 
       - name: Upload the product
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: c-desk-vint-winnt-arm
           path: |

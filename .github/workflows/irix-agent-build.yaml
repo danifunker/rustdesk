@@ -133,7 +133,7 @@ jobs:
   preflight:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Is there a boot image?
         run: scripts/fetch-image.sh --check-only
 
@@ -146,7 +146,7 @@ jobs:
       IRIX_TOOLCHAIN: ${{ github.workspace }}/rustdesk-irix65-agent/build/toolchain
       IRIX_SYSROOT: ${{ github.workspace }}/rustdesk-irix65-agent/build/irix-sysroot
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # clang/llvm 18 are Ubuntu 24.04's own, the version every build of this
       # agent has used. libasound2t64: the prebuilt iris links ALSA.
@@ -177,7 +177,7 @@ jobs:
         run: echo "key=$(scripts/toolchain.sh --key --image-key "$(scripts/fetch-image.sh --cache-key)")" >> "$GITHUB_OUTPUT"
 
       - name: Toolchain cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: rustdesk-irix65-agent/build/toolchain
           key: irix-toolchain-${{ steps.tckey.outputs.key }}
@@ -201,7 +201,7 @@ jobs:
       # (irixscsitb once shipped releases with no .tardist by uploading only
       # the binaries.)
       - name: Upload the product
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: r-deskvint-irix-n32
           path: rustdesk-irix65-agent/dist/
@@ -210,7 +210,7 @@ jobs:
       # What every question about a failed run turns out to need.
       - name: Upload logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: logs
           path: |
