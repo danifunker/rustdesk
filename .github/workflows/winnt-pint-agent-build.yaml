@@ -123,6 +123,11 @@ jobs:
           path: ${{ env.WORK }}/nt35/msvc
           key: msvc-arm32-${{ env.MSVC_IMAGE }}
 
+      # the Docker steps leave root's files there that tar, as the runner, cannot read
+      - name: Let the cache read PINT's obj
+        if: always()
+        run: sudo chmod -R a+rX "$WORK/nt40/RASPI/obj"
+
       - name: Save PINT's obj
         if: always()
         uses: actions/cache/save@v6
