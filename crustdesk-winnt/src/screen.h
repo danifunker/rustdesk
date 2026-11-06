@@ -54,6 +54,9 @@ void screen_collect(cdv_screen *s, uint32_t budget_ms);
 /* The peer pressed a key or a button: its console will want watching. */
 void screen_note_input(void);
 
+/* Marked squares are waiting for their second read: keep looking. */
+int screen_settling(void);
+
 /* Is a band of the screen still to be read in this pass? */
 int screen_pending(const cdv_screen *s);
 

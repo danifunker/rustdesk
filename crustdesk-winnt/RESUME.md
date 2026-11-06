@@ -418,6 +418,11 @@ Tenox has an NT 4.0 MIPS QEMU image with Visual C++ 4.1
    for now); a console in front is read 300 ms apart only for 3 s after the
    peer's input, else every 2 s (it was 60% of the machine in a session).
    With no session the agent is at 0% cpu.
+   Stale areas while things changed: the hooks mark a square when a program
+   is told to draw, before it has, so a fast read saw the old picture and
+   nothing looked again until the round. Every marked square is now read a
+   second time ECHO_MS (300) after the marks stop. Diagnosis from the code;
+   the user's verdict after it: still slowish, maybe as good as it gets.
    **The PowerPC's network dies** after an hour or two up (ping 3-5 s, then
    nothing) with the CPU idle and the agent at 0%: the user knows it as a
    core bug. Shut NT down, reboot the MiSTer, load the core again.

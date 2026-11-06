@@ -322,8 +322,16 @@ void screen_start(cdv_screen *s)
  * a double-click must not have a long read between its two clicks. */
 #define SPAN_ROWS 4
 
+/* The hooks mark a square when a program is told to draw there, before it
+ * has: a read then can find the old picture, and nothing would look at that
+ * square again until the round came by, seconds later. So every marked
+ * square is read a second time, ECHO_MS after the marks stop. */
+#define ECHO_MS 300
+
 static uint8_t *want; /* mbw*mbh: still to read, kept from look to look */
-static int want_n, want_left, scan_row;
+static uint8_t *fresh, *echo; /* marked in this look; to read once they settle */
+static int want_n, want_left, scan_row, echo_left;
+static uint32_t echo_at;
 static uint32_t round_at, console_at, consoles_at, input_at;
 static POINT last_pt;
 static int all_consoles;  /* this look reads the consoles behind too */
@@ -389,13 +397,33 @@ static int collect_hinted(cdv_screen *s, HDC sdc, uint32_t budget_ms, uint32_t *
     POINT pt;
     if (want_n != n) {
         free(want);
+        free(fresh);
+        free(echo);
         want = (uint8_t *)calloc((size_t)n, 1);
-        want_n = want ? n : 0;
+        fresh = (uint8_t *)calloc((size_t)n, 1);
+        echo = (uint8_t *)calloc((size_t)n, 1);
+        want_n = want && fresh && echo ? n : 0;
         scan_row = 0;
-        if (!want)
+        echo_left = 0;
+        if (!want_n)
             return 0;
     }
-    hooks_take(want, s->mbw, s->mbh);
+    if (hooks_take(fresh, s->mbw, s->mbh)) {
+        for (i = 0; i < n; i++)
+            if (fresh[i]) {
+                want[i] = echo[i] = 1;
+                fresh[i] = 0;
+            }
+        echo_left = 1;
+        echo_at = cdv_ms();
+    } else if (echo_left && cdv_ms() - echo_at >= ECHO_MS) {
+        for (i = 0; i < n; i++)
+            if (echo[i]) {
+                want[i] = 1;
+                echo[i] = 0;
+            }
+        echo_left = 0;
+    }
     if (GetCursorPos(&pt) && (pt.x != last_pt.x || pt.y != last_pt.y)) {
         want_rect(s, pt.x - 64, pt.y - 32, pt.x + 64, pt.y + 48);
         last_pt = pt;
@@ -536,6 +564,11 @@ void screen_rgb_row(const cdv_screen *s, int y, uint8_t *out)
 void screen_note_input(void)
 {
     input_at = cdv_ms();
+}
+
+int screen_settling(void)
+{
+    return hooks_active() && echo_left;
 }
 
 int screen_pending(const cdv_screen *s)

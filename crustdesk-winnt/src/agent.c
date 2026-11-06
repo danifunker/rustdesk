@@ -914,7 +914,7 @@ static void frame_step(void)
         S.rects += (unsigned)scr.rects_read;
         S.px += (unsigned long)scr.px_read;
         /* a change, or marks the look had no time for: look again soon */
-        if (scr.ndirty || screen_pending(&scr))
+        if (scr.ndirty || screen_pending(&scr) || screen_settling())
             S.last_change = now;
         if (!screen_pending(&scr)) {
             S.gather_at = 0;

@@ -69,6 +69,9 @@ dist: build/$(ARCH)/C-Desk-Vint.exe
 	sh scripts/check-generic.sh $<
 	rm -rf build/dist && mkdir -p build/dist/C-Desk-Vint
 	cp $< build/dist/C-Desk-Vint/C-Desk-Vint.exe
+	# PINT's build leaves the screen hooks' DLL beside the program; the nmake
+	# build carries it inside
+	[ ! -f build/$(ARCH)/cdvhook.dll ] || cp build/$(ARCH)/cdvhook.dll build/dist/C-Desk-Vint/
 	sed 's/\r$$//; s/$$/\r/' pkg/README.txt > build/dist/C-Desk-Vint/README.txt
 	cd build/dist && zip -q -X -r ../$(DISTNAME).zip C-Desk-Vint
 	cp $< build/$(DISTNAME).exe
