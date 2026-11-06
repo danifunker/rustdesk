@@ -8,6 +8,11 @@
  *   C-Desk-Vint -install     install and start the service (this program)
  *   C-Desk-Vint -remove      stop and remove it
  *   C-Desk-Vint -start | -stop
+ *   C-Desk-Vint -hook on|off read only what changed (the screen hooks,
+ *                            cdvhook.dll) or the whole screen; restarts the
+ *                            service to apply it
+ *   C-Desk-Vint -logdir DIR  write C-Desk-Vint.log in DIR (-logdir alone: beside
+ *                            the program); restarts the service to apply it
  *   C-Desk-Vint -i           this machine's ID and password
  *   C-Desk-Vint -selftest    check the compiler got the core right
  */
@@ -76,6 +81,70 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     }
     if (has(cmd, "-selftest"))
         return selftest(out);
+    if (has(cmd, "-logdir")) {
+        const char *p = strstr(cmd, "-logdir") + 7;
+        char dir[200];
+        size_t n;
+        DWORD a;
+        while (*p == ' ')
+            p++;
+        n = strlen(p);
+        while (n && (p[n - 1] == ' ' || p[n - 1] == '"'))
+            n--;
+        if (*p == '"') {
+            p++;
+            if (n)
+                n--;
+        }
+        if (n >= sizeof dir) {
+            out("that folder name is too long\r\n");
+            return 1;
+        }
+        memcpy(dir, p, n);
+        dir[n] = 0;
+        a = dir[0] ? GetFileAttributes(dir) : 0;
+        if (dir[0] && (a == 0xffffffff || !(a & FILE_ATTRIBUTE_DIRECTORY))) {
+            out("no such folder\r\n");
+            return 1;
+        }
+        prefs_load(1);
+        strcpy(prefs.logdir, dir);
+        if (!prefs_save()) {
+            out("cannot write the settings (are you an Administrator?)\r\n");
+            return 1;
+        }
+        if (service_state() == SERVICE_RUNNING &&
+            (!service_stop(err, sizeof err) || !service_start(err, sizeof err))) {
+            snprintf(buf, sizeof buf, "saved; the agent did not restart: %s\r\n", err);
+            out(buf);
+            return 1;
+        }
+        snprintf(buf, sizeof buf, "the log is now in %s\r\n",
+                 dir[0] ? dir : "the program's folder");
+        out(buf);
+        return 0;
+    }
+    if (has(cmd, "-hook")) {
+        int on = has(cmd, "on");
+        if (!on && !has(cmd, "off")) {
+            out("-hook on, or -hook off\r\n");
+            return 1;
+        }
+        prefs_load(1);
+        prefs.hook = on;
+        if (!prefs_save()) {
+            out("cannot write the settings (are you an Administrator?)\r\n");
+            return 1;
+        }
+        if (service_state() == SERVICE_RUNNING &&
+            (!service_stop(err, sizeof err) || !service_start(err, sizeof err))) {
+            snprintf(buf, sizeof buf, "saved; the agent did not restart: %s\r\n", err);
+            out(buf);
+            return 1;
+        }
+        out(on ? "screen hooks on\r\n" : "screen hooks off\r\n");
+        return 0;
+    }
     if (has(cmd, "-i")) {
         char id[32];
         if (!prefs_load(1)) {

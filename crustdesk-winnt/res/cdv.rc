@@ -4,7 +4,13 @@
 
 IDI_CDV ICON "cdv.ico"
 
-IDD_MAIN DIALOG 0, 0, 400, 206
+/* The screen hooks' DLL, written beside the program when it runs (hooks.c).
+ * The stage's nmake builds it first and says so; PINT's build does not. */
+#ifdef CDV_HOOK_DLL
+IDR_HOOKDLL RCDATA "cdvhook.dll"
+#endif
+
+IDD_MAIN DIALOG 0, 0, 400, 224
 STYLE DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX
 CAPTION "C-Desk-Vint"
 FONT 8, "MS Sans Serif"
@@ -49,11 +55,17 @@ BEGIN
     CONTROL         "Answer LAN discovery", IDC_LAN, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 214, 108, 170, 10
     LTEXT           "Port 0 turns direct access off.", -1, 214, 128, 172, 8
     LTEXT           "An empty ID server: no ID, by address only.", -1, 214, 140, 172, 8
+    CONTROL         "Read only what changed (screen hooks)", IDC_HOOK, "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 214, 153, 170, 10
 
-    LTEXT           "", IDC_STATUS, 7, 172, 386, 10
-    PUSHBUTTON      "View &log", IDC_LOG, 7, 186, 54, 14
-    PUSHBUTTON      "&Apply", IDC_APPLY, 282, 186, 54, 14
-    DEFPUSHBUTTON   "Close", IDCANCEL, 339, 186, 54, 14
+    LTEXT           "Log folder:", -1, 7, 174, 50, 8
+    EDITTEXT        IDC_LOGDIR, 60, 172, 200, 12, ES_AUTOHSCROLL
+    LTEXT           "empty: beside the program", -1, 266, 174, 127, 8
+
+    LTEXT           "", IDC_STATUS, 7, 190, 386, 10
+    PUSHBUTTON      "View &log", IDC_LOG, 7, 204, 54, 14
+    PUSHBUTTON      "&Apply", IDC_APPLY, 282, 204, 54, 14
+    DEFPUSHBUTTON   "Close", IDCANCEL, 339, 204, 54, 14
 END
 
 1 VERSIONINFO

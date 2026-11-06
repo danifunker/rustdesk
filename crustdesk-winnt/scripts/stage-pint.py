@@ -18,6 +18,9 @@ directories under it, each a SOURCES file:
     cdv/bssl     BearSSL                  LIBRARY cdvbssl
     cdv/zstd     the zstd decoder         LIBRARY cdvzstd
     cdv/exe      the agent: src/, core    PROGRAM cdv (CDV.EXE: C-Desk-Vint.exe)
+    cdv/hook     hook/cdvhook.c           DYNLINK cdvhook (the screen hooks' DLL, shipped
+                                          beside the program: PINT's build does not
+                                          put it inside, as the stage's nmake does)
     cdv/ntexec   tools/nt/ntexec.c        PROGRAM ntexec (scripts/ntx.py's server)
 
     stage-pint.py [OUT]     (default build/pint; OUT/cdv goes to PINT's apps/cdv)
@@ -99,9 +102,15 @@ def main():
                   "\t..\\zstd\\obj\\*\\cdvzstd.lib \\\n"
                   "\t$(BASEDIR)\\public\\sdk\\lib\\*\\wsock32.lib \\\n"
                   "\t$(BASEDIR)\\public\\sdk\\lib\\*\\ole32.lib\n")
+    sources("hook", "DYNLINK", "cdvhook", ["cdvhook.c"],
+            # no entry in NT's coffbase.txt: a base of its own (it relocates)
+            extra="UMTYPE=windows\nDLLENTRY=_DllMainCRTStartup\nDLLBASE=0x68000000\n\n"
+                  "TARGETLIBS=$(BASEDIR)\\public\\sdk\\lib\\*\\user32.lib \\\n"
+                  "\t$(BASEDIR)\\public\\sdk\\lib\\*\\kernel32.lib\n")
+    shutil.copy(os.path.join(STAGE, "hook", "cdvhook.def"), os.path.join(CDV, "hook", "cdvhook.def"))
     sources("ntexec", "PROGRAM", "ntexec", ["ntexec.c"],
             extra="UMTYPE=console\n\nTARGETLIBS=$(BASEDIR)\\public\\sdk\\lib\\*\\wsock32.lib\n")
-    print("staged %s: %d files, components sodium bssl zstd exe ntexec" % (CDV, len(seen)))
+    print("staged %s: %d files, components sodium bssl zstd exe hook ntexec" % (CDV, len(seen)))
 
 
 if __name__ == "__main__":

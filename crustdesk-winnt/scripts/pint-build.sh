@@ -89,6 +89,14 @@ rm -rf $R/apps/cdv && cp -R $HERE/build/pint/cdv $R/apps/cdv
 for c in sodium bssl zstd; do say "lib cdv/$c"; ROOT=/work/RASPI/apps bash $B/make-lib.sh cdv/$c; done
 say "exe cdv"; ROOT=/work/RASPI/apps bash $B/make-exe.sh cdv/exe cdv
 say "exe ntexec"; ROOT=/work/RASPI/apps bash $B/make-exe.sh cdv/ntexec ntexec
+# the screen hooks' DLL, shipped beside the program; the agent reads the whole
+# screen without it, so a failure here does not stop the build
+say "dll cdvhook"
+if ROOT=/work/RASPI/apps bash $B/make-dll.sh cdv/hook && [ -f $R/obj/CDVHOOK.DLL ]; then
+    cp $R/obj/CDVHOOK.DLL $OUTDIR/cdvhook.dll
+else
+    say "  cdvhook.dll did not build: the ARM agent reads the whole screen"
+fi
 
 cp $R/obj/CDV.EXE $OUTDIR/C-Desk-Vint.exe
 cp $R/obj/NTEXEC.EXE $OUTDIR/ntexec.exe

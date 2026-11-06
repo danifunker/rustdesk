@@ -41,6 +41,8 @@ typedef struct {
     char files[256];      /* what the file manager sees as its root: "/" all drives, "off" none */
     char api[128];        /* a console's URL, for its device list; none by default */
     int lan;              /* answer LAN discovery */
+    int hook;             /* read only what changed, with the screen hooks (hooks.h) */
+    char logdir[200];     /* where C-Desk-Vint.log goes; "" beside the program */
 } cdv_prefs;
 
 extern cdv_prefs prefs;
@@ -49,6 +51,9 @@ extern cdv_prefs prefs;
 const char *prefs_dir(void);
 /* path = prefs_dir() + name */
 void prefs_path(char *out, size_t cap, const char *name);
+/* The log: in prefs.logdir if that is a folder that is there, else beside
+ * the program. */
+void prefs_log_path(char *out, size_t cap);
 
 /* Defaults, then the file. With `create`, a first run makes an ID, a
  * password and keys, and writes them; returns 0 if they could not be saved. */

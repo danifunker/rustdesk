@@ -23,6 +23,8 @@ Layout of build/stage:
     bssl/   third_party/bearssl (inc/, src/)
     zstd/   third_party/zstd-decoder
     nt/     this port's src/, plus shim/stdint.h
+    hook/   cdvhook.c and .def: the screen hooks' DLL (src/hook.h), built
+            first and carried inside C-Desk-Vint.exe (cdv.rc, CDV_HOOK_DLL)
     makefile  for nmake, written here
 
     stage.py [OUT]
@@ -158,7 +160,7 @@ written = []
 def put(src, rel):
     dst = os.path.join(OUT, rel)
     data = open(src, "rb").read()
-    text_file = src.endswith((".c", ".h", ".rc"))
+    text_file = src.endswith((".c", ".h", ".rc", ".def"))
     if text_file:
         # the rewrites below match LF; the sources may be checked out CRLF
         data = data.replace(b"\r\n", b"\n")
@@ -222,6 +224,8 @@ def main():
             if n.endswith(".c"):
                 nt.append(n[:-2])
     put(os.path.join(HERE, "shim", "stdint.h"), "nt/stdint.h")
+    for n in ("cdvhook.c", "cdvhook.def"):
+        put(os.path.join(HERE, "hook", n), "hook/" + n)
     res = os.path.join(HERE, "res")
     if os.path.isdir(res):
         for n in sorted(os.listdir(res)):
@@ -275,9 +279,16 @@ def main():
         bobjs.append(o)
         rules.append("%s: %s FLAGS\n\t$(CC) $(BSSLFLAGS) /Fo%s %s" % (o, win(f), o, win(f)))
     has_rc = os.path.exists(os.path.join(OUT, "nt", "cdv.rc"))
+    # The screen hooks' DLL: its own C run-time (/MT; it lives in other
+    # programs), built before the resources, which carry it.
+    rules.append("obj\\cdvhook.obj: hook\\cdvhook.c nt\\hook.h nt\\win.h FLAGS\n"
+                 "\t$(CC) /nologo /c /O2 /W2 /MT /Int /Foobj\\cdvhook.obj hook\\cdvhook.c")
+    rules.append("cdvhook.dll: obj\\cdvhook.obj hook\\cdvhook.def\n"
+                 "\tlink /nologo /dll /def:hook\\cdvhook.def /out:$@ obj\\cdvhook.obj user32.lib kernel32.lib")
     if has_rc:
         objs.append("obj\\cdv.res")
-        rules.append("obj\\cdv.res: nt\\cdv.rc nt\\*.h nt\\*.ico\n\trc /r /Int /foobj\\cdv.res nt\\cdv.rc")
+        rules.append("obj\\cdv.res: nt\\cdv.rc nt\\*.h nt\\*.ico cdvhook.dll\n"
+                     "\trc /r /I. /Int /DCDV_HOOK_DLL /foobj\\cdv.res nt\\cdv.rc")
 
     # Every object depends on FLAGS, the compiler lines: nmake knows nothing
     # of a changed makefile, and a changed flag must rebuild everything.

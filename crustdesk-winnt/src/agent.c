@@ -15,6 +15,7 @@
 #include "agent.h"
 #include "clip.h"
 #include "fs_win32.h"
+#include "hooks.h"
 #include "input.h"
 #include "link.h"
 #include "log.h"
@@ -41,6 +42,52 @@
 static uint32_t now_ms(void)
 {
     return cdv_ms();
+}
+
+#ifdef VP8E_PROFILE
+/* The encoder's profiler (vp8enc.c, built with VP8E_PROFILE): its clock, in
+ * microseconds, from the performance counter (every NT has one). */
+uint32_t vp8e_clock(void)
+{
+    static double per_us;
+    LARGE_INTEGER c;
+    if (per_us == 0.0) {
+        LARGE_INTEGER f;
+        per_us = QueryPerformanceFrequency(&f) && f.QuadPart ? (double)f.QuadPart / 1e6 : -1.0;
+    }
+    if (per_us < 0.0 || !QueryPerformanceCounter(&c))
+        return 0;
+    return (uint32_t)((double)c.QuadPart / per_us);
+}
+#endif
+
+/* This process's share of the processor since the last call, in percent; -1
+ * where that cannot be told (GetProcessTimes is NT's). */
+static int cpu_percent(void)
+{
+    typedef BOOL(WINAPI * times_fn)(HANDLE, FILETIME *, FILETIME *, FILETIME *, FILETIME *);
+    static times_fn f;
+    static int looked;
+    static double last_cpu;
+    static uint32_t last_at;
+    FILETIME a, b, k, u;
+    double cpu;
+    uint32_t now = cdv_ms(), span;
+    int pct;
+    if (!looked) {
+        f = (times_fn)GetProcAddress(GetModuleHandle("kernel32.dll"), "GetProcessTimes");
+        looked = 1;
+    }
+    if (!f || !f(GetCurrentProcess(), &a, &b, &k, &u))
+        return -1;
+    /* 100 ns units, to milliseconds */
+    cpu = ((double)k.dwHighDateTime * 4294967296.0 + (double)k.dwLowDateTime +
+           (double)u.dwHighDateTime * 4294967296.0 + (double)u.dwLowDateTime) / 10000.0;
+    span = now - last_at;
+    pct = last_at && span ? (int)((cpu - last_cpu) * 100.0 / (double)span) : -1;
+    last_cpu = cpu;
+    last_at = now;
+    return pct;
 }
 
 static void copy(char *dst, const char *src, size_t cap)
@@ -194,10 +241,16 @@ static struct {
     /* where the peer last put the pointer, and when (cursor_step) */
     int in_x, in_y, in_seen;
     uint32_t in_at;
+    uint32_t btn_at;          /* the peer's last button press or release */
+    uint32_t gather_at;       /* when reads began to be left over; 0 none */
+    uint32_t pass_max;        /* the longest pass of the main loop, for the log */
+    uint32_t busy_ms;         /* what the last look and frame cost (the duty cap) */
     int want_shot;
     /* for the log */
     unsigned frames, bytes, mbs;
     uint32_t t_read, t_conv, t_enc;
+    unsigned looks, rects;  /* looks at the screen; rectangles read (hooks) */
+    unsigned long px;       /* pixels read (hooks) */
 } S;
 
 static uint8_t *vidbuf, *encmem, *encraw;
@@ -205,10 +258,12 @@ static const cdv_fs_ops *files_fs;  /* NULL: file transfer is off */
 static int status_dirty = 1;
 
 /* The frame budget: a frame codes what fits in about FRAME_BUDGET hundredths
- * of a millisecond of this CPU; the rest stays dirty for the next, so a big
- * change paints in over a few frames while the stream keeps moving. Flat
+ * of a millisecond of this CPU; the rest stays dirty for the next. Large
+ * enough that a dialog or a window arrives whole, not in blocks: the network
+ * is looked at every SLICE_MS while a frame is coded, so a long frame does
+ * not hold up the peer's input; only a change bigger than this paints in. Flat
  * macroblocks are cheap; what a detailed one costs is learnt as it goes. */
-#define FRAME_BUDGET 15000
+#define FRAME_BUDGET 60000
 #define COST_FLAT 30
 static int cost_detail = 150;
 static uint8_t *enc_dirty;    /* the macroblocks of the frame being encoded */
@@ -217,9 +272,16 @@ static uint8_t *flat_y, *flat_u, *flat_v;
 static int enc_w, enc_h;      /* the screen size they were made for */
 static int frame_ms = 66;     /* at most ~15 a second unless the peer asks */
 
-/* With nothing changing, the screen is looked at less often. */
+/* With nothing changing, the screen is looked at less often: a look reads
+ * from the display card, and where that is slow (the Alpha: about 120 ms a
+ * look, 60% of the machine at five looks a second with nothing on screen
+ * changing) it is the machine's time, not just the session's. Anything the
+ * peer does -- a key, the mouse -- brings it straight back to full speed;
+ * a change nobody made shows within QUIET_LOOK_MS. */
 #define IDLE_AFTER_MS 2000
 #define IDLE_LOOK_MS 200
+#define QUIET_AFTER_MS 5000
+#define QUIET_LOOK_MS 1000
 /* How long one look at the screen may read for before handing back: the
  * rows around the pointer, then bands of the rest -- a quarter of a
  * 1280x1024 screen in QEMU's PowerPC, where a whole one takes 90 ms to
@@ -262,6 +324,16 @@ static void on_mouse(void *u, int mask, int x, int y)
     if ((slot *)u != desk)
         return;
     input_mouse(mask, x, y);
+    if ((mask & 7) == 1 || (mask & 7) == 2) {
+        /* every button, for finding out what a double-click looks like here */
+        POINT at;
+        GetCursorPos(&at);
+        cdv_log("click: %s button %d, peer %d,%d, pointer %d,%d, %u ms after the last",
+                (mask & 7) == 1 ? "down" : "up", mask >> 3, x, y, (int)at.x, (int)at.y,
+                (unsigned)(now_ms() - S.btn_at));
+        S.btn_at = now_ms(); /* a click: a second may follow (CLICK_HOLD_MS) */
+        screen_note_input();
+    }
     if ((mask & 7) < 3) { /* a move, a press or a release: x, y is where */
         S.in_x = x;
         S.in_y = y;
@@ -283,6 +355,7 @@ static void on_key(void *u, const cdv_key *k)
         return;
     }
     input_key(k);
+    screen_note_input();
     S.last_change = now_ms();
 }
 
@@ -347,6 +420,32 @@ static void on_restart(void *u)
 /* ---- chat, lock and block input: the tray program (tray.c) shows chat ---- */
 
 static int input_blocked;
+
+/* The double-click time, widened for a desktop session. Two clicks made at
+ * the peer reach Windows late and unevenly -- the network, this agent -- and
+ * measured on the PowerPC the time left is about 0.4 s even at the machine.
+ * Not saved: it lasts until restored here, or the next logon. */
+#define SESSION_DBLCLK_MS 900
+static UINT saved_dblclk;
+
+static void widen_dblclk(void)
+{
+    UINT now = GetDoubleClickTime();
+    cdv_log("double-click time here is %u ms", now);
+    if (now >= SESSION_DBLCLK_MS)
+        return;
+    if (SetDoubleClickTime(SESSION_DBLCLK_MS))
+        saved_dblclk = now;
+    else
+        cdv_log("cannot change the double-click time (error %lu)", GetLastError());
+}
+
+static void restore_dblclk(void)
+{
+    if (saved_dblclk)
+        SetDoubleClickTime(saved_dblclk);
+    saved_dblclk = 0;
+}
 
 /* A chat line from the peer: to the tray, which shows it to whoever is at
  * the console. Without a tray the peer is told so, once a session. */
@@ -543,6 +642,9 @@ static int on_login(void *u, int file_transfer)
     ident.height = scr.height;
     sl->kind = K_DESKTOP;
     desk = sl;
+    /* only while someone is looking: nothing is hooked between sessions */
+    hooks_start(scr.width, scr.height);
+    widen_dblclk();
     cdv_set_video(&sl->s, vidbuf, VID_CAP);
     S.enc = vp8e_init(encmem, scr.width, scr.height, prefs.q);
     S.encoding = 0;
@@ -551,6 +653,8 @@ static int on_login(void *u, int file_transfer)
     S.want_shot = 0;
     S.frames = S.bytes = S.mbs = 0;
     S.t_read = S.t_conv = S.t_enc = 0;
+    S.looks = S.rects = 0;
+    S.px = 0;
     S.cx = S.cy = -1;
     return 1;
 }
@@ -620,6 +724,8 @@ static void session_end(slot *sl, const char *why)
         S.encoding = 0;
         input_release_all();
         set_block(0);
+        hooks_stop();
+        restore_dblclk();
         desk = NULL;
     }
     if (sl->kind == K_FILES)
@@ -627,6 +733,18 @@ static void session_end(slot *sl, const char *why)
     cdv_log("%s session over: %s", sl->kind == K_FILES ? "file" : "desktop", why);
     sl->kind = K_NONE;
     status_dirty = 1;
+}
+
+/* Bits a pixel on the display card: what a look at the screen copies. */
+static int screen_depth(void)
+{
+    HDC dc = GetDC(NULL);
+    int bpp = 0;
+    if (dc) {
+        bpp = GetDeviceCaps(dc, BITSPIXEL) * GetDeviceCaps(dc, PLANES);
+        ReleaseDC(NULL, dc);
+    }
+    return bpp;
 }
 
 static void desktop_started(slot *sl)
@@ -638,8 +756,8 @@ static void desktop_started(slot *sl)
     input_release_all();
     screen_start(&scr);
     clip_reset();
-    cdv_log("first look at the screen (%s desktop, %dx%d): %u ms", desk_name, scr.width,
-            scr.height, (unsigned)(now_ms() - t0));
+    cdv_log("first look at the screen (%s desktop, %dx%d, %d-bit): %u ms", desk_name, scr.width,
+            scr.height, screen_depth(), (unsigned)(now_ms() - t0));
     S.key = 1;
 }
 
@@ -743,8 +861,21 @@ static void select_mbs(void)
         }
 }
 
-/* How many macroblock rows to encode between looks at the network. */
-#define SLICE_ROWS 4
+/* How long the encoder may hold the main loop before the network is looked
+ * at again; it codes a macroblock row at a time (a full-width row is 50 on an
+ * 800-pixel screen: 130 ms on the Alpha), so that is a floor, not a limit. */
+#define SLICE_MS 15
+
+/* After the peer presses or releases a button, no new look or frame starts
+ * for this long: a click usually changes the screen, and the work of sending
+ * that must not sit between it and the second click of a double-click
+ * (Windows takes two clicks more than 500 ms apart for two single ones). */
+#define CLICK_HOLD_MS 300
+
+/* A look reads for a limited time and keeps the rest (screen.c). A frame
+ * waits up to this long for those reads to finish, so a change is coded
+ * whole and not as the blocks that happened to be read first. */
+#define GATHER_MS 500
 
 static void frame_step(void)
 {
@@ -758,8 +889,18 @@ static void frame_step(void)
         uint32_t now = now_ms(), gap;
         if (desk->s.vstate != VID_FREE)
             return;
-        gap = now - S.last_change > IDLE_AFTER_MS && frame_ms < IDLE_LOOK_MS ? IDLE_LOOK_MS
-                                                                              : (uint32_t)frame_ms;
+        if (now - S.btn_at < CLICK_HOLD_MS)
+            return;
+        gap = (uint32_t)frame_ms;
+        if (now - S.last_change > QUIET_AFTER_MS && gap < QUIET_LOOK_MS)
+            gap = QUIET_LOOK_MS;
+        else if (now - S.last_change > IDLE_AFTER_MS && gap < IDLE_LOOK_MS)
+            gap = IDLE_LOOK_MS;
+        /* at most half the processor: the time between the starts of two
+         * looks is at least twice what the last look and frame took, and
+         * the rest is for the programs on this machine and its mouse */
+        if (gap < 2 * S.busy_ms)
+            gap = 2 * S.busy_ms;
         if (cdv_take_refresh(&desk->s))
             S.key = 1;
         if (!S.key && now - S.last_frame < gap)
@@ -768,8 +909,24 @@ static void frame_step(void)
         screen_collect(&scr, LOOK_BUDGET_MS);
         S.t_read += scr.read_ms;
         S.t_conv += scr.convert_ms;
-        if (scr.ndirty)
+        S.busy_ms = scr.read_ms + scr.convert_ms;
+        S.looks++;
+        S.rects += (unsigned)scr.rects_read;
+        S.px += (unsigned long)scr.px_read;
+        /* a change, or marks the look had no time for: look again soon */
+        if (scr.ndirty || screen_pending(&scr))
             S.last_change = now;
+        if (!screen_pending(&scr)) {
+            S.gather_at = 0;
+        } else if (!S.key) {
+            if (!S.gather_at)
+                S.gather_at = now;
+            if (now - S.gather_at < GATHER_MS) {
+                S.last_frame = now - gap; /* read on, at once */
+                return;
+            }
+            S.gather_at = 0;
+        }
         if (S.key) {
             /* The first picture, or the peer asked for one: a keyframe of
              * the background colour alone (one macroblock coded, the rest
@@ -814,7 +971,17 @@ static void frame_step(void)
                   (unsigned)scr.read_ms, (unsigned)scr.convert_ms);
     }
     t = now_ms();
-    if (vp8e_rows(S.enc, SLICE_ROWS)) {
+    {
+        int done;
+        while (!(done = vp8e_rows(S.enc, 1)) && now_ms() - t < SLICE_MS)
+            ;
+        if (!done) {
+            S.t_enc += now_ms() - t;
+            S.f_enc += now_ms() - t;
+            return;
+        }
+    }
+    {
         size_t len = vp8e_end(S.enc);
         vp8e_stats st;
         S.encoding = 0;
@@ -826,6 +993,7 @@ static void frame_step(void)
             cdv_log("frame did not fit; a keyframe next");
             return;
         }
+        S.busy_ms += S.f_enc;
         vp8e_last_stats(S.enc, &st);
         cdv_video_commit(&desk->s, len, st.key);
         if (!st.key) {
@@ -850,9 +1018,6 @@ static void frame_step(void)
         cdv_debug("sent %s frame: %d mbs (%d intra, %d skipped) in %u bytes; encode %u ms of %u ms",
                   st.key ? "key" : "inter", S.f_mbs, st.intra, st.skipped, (unsigned)len,
                   (unsigned)S.f_enc, (unsigned)(now_ms() - S.f_start));
-    } else {
-        S.t_enc += now_ms() - t;
-        S.f_enc += now_ms() - t;
     }
 }
 
@@ -896,12 +1061,25 @@ static void session_report(void)
         return;
     if (S.frames)
         cdv_log("%u frames in %u.%u s (%u.%u fps), %u KB, %u macroblocks; ms read %u convert %u "
-                "encode %u",
+                "encode %u; %u looks, %u rects, %lu kpx; longest pass %u ms; cpu %d%%",
                 S.frames, (unsigned)(span / 1000), (unsigned)(span % 1000 / 100),
                 (unsigned)(S.frames * 10000u / span / 10), (unsigned)(S.frames * 10000u / span % 10),
-                S.bytes / 1024, S.mbs, (unsigned)S.t_read, (unsigned)S.t_conv, (unsigned)S.t_enc);
+                S.bytes / 1024, S.mbs, (unsigned)S.t_read, (unsigned)S.t_conv, (unsigned)S.t_enc,
+                S.looks, S.rects, S.px / 1000, (unsigned)S.pass_max, cpu_percent());
+#ifdef VP8E_PROFILE
+    if (S.frames && S.enc) {
+        uint32_t p[5];
+        vp8e_profile(S.enc, p);
+        cdv_log("  encode, ms: mode search %u, transform %u, reconstruct %u, exactness %u, "
+                "tokens %u", (unsigned)(p[0] / 1000), (unsigned)(p[1] / 1000),
+                (unsigned)(p[2] / 1000), (unsigned)(p[3] / 1000), (unsigned)(p[4] / 1000));
+    }
+#endif
     S.frames = S.bytes = S.mbs = 0;
     S.t_read = S.t_conv = S.t_enc = 0;
+    S.looks = S.rects = 0;
+    S.px = 0;
+    S.pass_max = 0;
     S.last_report = now;
 }
 
@@ -972,6 +1150,7 @@ static void desk_step(void)
             return;
         }
         cdv_log("the screen is now %dx%d", scr.width, scr.height);
+        hooks_set_screen(scr.width, scr.height);
         ident.width = scr.width;
         ident.height = scr.height;
         S.enc = vp8e_init(encmem, scr.width, scr.height, prefs.q);
@@ -1277,17 +1456,22 @@ int agent_run(HANDLE stop, int console, int verbose)
     WSADATA wd;
     char logpath[MAX_PATH];
     report_config rc;
-    int i, reporting = 0;
+    int i, reporting = 0, loaded;
+    uint32_t pass_at = 0, idle_report_at = 0;
     DWORD hl = sizeof hostname;
 
-    prefs_path(logpath, sizeof logpath, "C-Desk-Vint.log");
+    /* the settings first: they say where the log goes */
+    loaded = prefs_load(1);
+    prefs_log_path(logpath, sizeof logpath);
     cdv_log_open(logpath, console, verbose);
     cdv_log("%s starting", VERSION_STRING);
+    if (prefs.logdir[0] && _strnicmp(logpath, prefs.logdir, strlen(prefs.logdir)))
+        cdv_log("the log folder %s is not there; logging beside the program", prefs.logdir);
     if (WSAStartup(MAKEWORD(1, 1), &wd) != 0) {
         cdv_log("no WinSock");
         return 1;
     }
-    if (!prefs_load(1))
+    if (!loaded)
         cdv_log("cannot save the settings in %s", prefs_dir());
     prefs_gather_entropy();
     crypto_sign_ed25519_seed_keypair(sign_pk, sign_sk, prefs.seed);
@@ -1323,6 +1507,8 @@ int agent_run(HANDLE stop, int console, int verbose)
     }
     if (strcmp(prefs.files, "off"))
         files_fs = fs_win32(prefs.files);
+    if (prefs.hook)
+        hooks_unpack(); /* now, while no program holds the DLL */
 
     ident.id = prefs.id;
     ident.sign_sk = sign_sk;
@@ -1372,6 +1558,16 @@ int agent_run(HANDLE stop, int console, int verbose)
         int timeout = 100, k, nfds = 0;
         size_t n;
 
+        /* how long the last pass held off the peer's input, not counting
+         * its wait in select() */
+        if (pass_at && now_ms() - pass_at > S.pass_max)
+            S.pass_max = now_ms() - pass_at;
+        if (!desk && now_ms() - idle_report_at >= 60000) {
+            int pct = cpu_percent();
+            idle_report_at = now_ms();
+            if (pct >= 0)
+                cdv_log("no session: cpu %d%%", pct);
+        }
         rdv_step();
         desk_step();
         console_sid_step();
@@ -1412,11 +1608,13 @@ int agent_run(HANDLE stop, int console, int verbose)
             WaitForSingleObject(stop, (DWORD)timeout);
             continue;
         }
+        pass_at = 0;
         if (select(0, &rd, &wr, NULL, &tv) < 0) {
             cdv_log("select failed (%d)", WSAGetLastError());
             Sleep(1000);
             continue;
         }
+        pass_at = now_ms();
         if (tcp_direct != INVALID_SOCKET && FD_ISSET(tcp_direct, &rd)) {
             SOCKET fd = accept(tcp_direct, NULL, NULL);
             if (fd != INVALID_SOCKET)
@@ -1435,11 +1633,15 @@ int agent_run(HANDLE stop, int console, int verbose)
             if (!session_io(sl, readable))
                 continue;
             if (sl == desk && sl->s.state == CDV_LIVE) {
+                /* the screen is background work: the programs here and
+                 * their mouse come first. Back up for the peer's input. */
+                SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
                 clip_step();
                 screenshot_step();
                 frame_step();
                 cursor_step();
                 session_report();
+                SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
             }
             if (sl->fd != INVALID_SOCKET)
                 session_io(sl, 0);
@@ -1450,6 +1652,7 @@ int agent_run(HANDLE stop, int console, int verbose)
     if (reporting)
         report_stop();
     link_stop();
+    hooks_stop();
     prefs_status_write("stopped=1\r\n");
     cdv_log("stopped");
     WSACleanup();

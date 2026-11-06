@@ -22,3 +22,8 @@
 #define IDC_STATUS      1030
 #define IDC_LOG         1031
 #define IDC_APPLY       1032
+#define IDC_HOOK        1033
+#define IDC_LOGDIR      1034
+
+/* cdvhook.dll, inside the program where the build put it (stage.py) */
+#define IDR_HOOKDLL     200

@@ -55,6 +55,8 @@ static void fill(HWND d)
     SetDlgItemText(d, IDC_API, prefs.api);
     SetDlgItemInt(d, IDC_PORT, (UINT)prefs.port, FALSE);
     CheckDlgButton(d, IDC_LAN, prefs.lan ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(d, IDC_HOOK, prefs.hook ? BST_CHECKED : BST_UNCHECKED);
+    SetDlgItemText(d, IDC_LOGDIR, prefs.logdir);
     SetDlgItemText(d, IDC_FILES, prefs.files);
     SetDlgItemInt(d, IDC_QUALITY, (UINT)prefs.q, FALSE);
 }
@@ -103,6 +105,18 @@ static int take(HWND d)
     trim(buf);
     strcpy(prefs.files, buf[0] ? buf : "off");
     prefs.lan = IsDlgButtonChecked(d, IDC_LAN) == BST_CHECKED;
+    prefs.hook = IsDlgButtonChecked(d, IDC_HOOK) == BST_CHECKED;
+    get_text(d, IDC_LOGDIR, buf, sizeof prefs.logdir);
+    trim(buf);
+    if (buf[0]) {
+        DWORD a = GetFileAttributes(buf);
+        if (a == 0xffffffff || !(a & FILE_ATTRIBUTE_DIRECTORY)) {
+            MessageBox(d, "The log folder must be a folder that is there (or empty, for beside "
+                          "the program).", "C-Desk-Vint", MB_ICONEXCLAMATION);
+            return 0;
+        }
+    }
+    strcpy(prefs.logdir, buf);
     return 1;
 }
 
@@ -300,6 +314,16 @@ static int do_install(HWND d)
             error_box(d, "Not installed.", err);
             return 0;
         }
+        /* the screen hooks' DLL, where it came beside the program (a build
+         * that does not carry it inside, PINT's); one inside is written out
+         * by the agent (hooks.c) */
+        {
+            char from[MAX_PATH], to[MAX_PATH];
+            prefs_path(from, sizeof from, "cdvhook.dll");
+            snprintf(to, sizeof to, "%scdvhook.dll", dir);
+            if (GetFileAttributes(from) != 0xffffffff)
+                CopyFile(from, to, FALSE);
+        }
         /* the settings come too: this machine keeps its ID */
         prefs_path(cfg_from, sizeof cfg_from, "C-Desk-Vint.cfg");
         snprintf(cfg_to, sizeof cfg_to, "%sC-Desk-Vint.cfg", dir);
@@ -434,7 +458,7 @@ static BOOL CALLBACK dlg_proc(HWND d, UINT m, WPARAM wp, LPARAM lp)
             char log[MAX_PATH], cmd[MAX_PATH + 16];
             STARTUPINFO si;
             PROCESS_INFORMATION pi;
-            prefs_path(log, sizeof log, "C-Desk-Vint.log");
+            prefs_log_path(log, sizeof log);
             snprintf(cmd, sizeof cmd, "notepad.exe \"%s\"", log);
             memset(&si, 0, sizeof si);
             si.cb = sizeof si;

@@ -353,9 +353,82 @@ Tenox has an NT 4.0 MIPS QEMU image with Visual C++ 4.1
    on. Moving those two into an ACL'd registry key would fix it on any disk;
    not done (the user's call).
 4. **Speed**: 1.3-3 fps under QEMU while things change, most of it reading
-   and comparing the screen; real hardware unmeasured. A mirror driver would
-   give damage regions and motion; NT 4.0 had them (VNC's), but that is a
-   kernel driver per processor.
+   and comparing the screen. On the Alpha (2026-11-05, 800x600, the
+   user's log, 10 s lines averaged): idle, read 4.5 s + convert 1.4 s of
+   every 10 (0.1 fps); busy, read 4.6 + convert 1.6 + encode 1.7 (2.5 fps);
+   a whole-screen read 1.1-2.2 s. Reading through GDI is the cost, which no
+   compiler flag touches. So: with nothing changing for 5 s the screen is
+   looked at once a second, not five times (QUIET_*; the peer's input
+   brings it back at once), and the first-look line logs the depth.
+   **Written, not yet built** (2026-11-05): the screen hooks, WinVNC's
+   way. cdvhook.dll (hook/cdvhook.c; WH_GETMESSAGE: WM_PAINT's update
+   rect, keys and clicks mark their window; WH_CALLWNDPROC: frames, moves,
+   scrolls, owner-drawn items, menus) marks 16-pixel squares in a named
+   shared block (hook.h: InterlockedExchange both sides, no DACL -- the
+   worst a program can do is cost a read). The agent sets the hooks from a
+   thread on Default for each desktop session only (hooks.c; gone between
+   sessions, and when the agent dies); a look then reads the marked
+   squares, +-64 px round the pointer, every ConsoleWindowClass (csrss
+   draws those, unhooked) and 2 rows of a round, as merged rectangles
+   (screen.c collect_hinted); Winlogon is read the old way. Setting hook=1
+   by default; the settings window's checkbox, -hook on|off. The nmake
+   build makes the DLL first and carries it inside the .exe (RCDATA,
+   CDV_HOOK_DLL), written beside it when the agent starts; PINT's build
+   makes it as a DYNLINK component (make-dll.sh, DLLBASE 0x68000000)
+   shipped beside, non-fatal if it fails. Checked: C89 and undeclared
+   calls, as above. Untried: everything at run time, on every processor.
+   Then (same day): the hooks worked on both machines (reads 10x cheaper
+   on the PowerPC, idle reads 0.2 s per 10 on the Alpha, from 4.5), but
+   keys and clicks marked whole windows and consoles were read in full
+   every look; now a key marks a band round the caret (all below it for
+   Enter/Backspace/Delete), consoles are read 300 ms (front) / 2 s (the
+   rest) apart, a look reads at most SPAN_ROWS rows per rectangle and keeps
+   what it had no time for. Profiled (VP8E_PROFILE, vp8e_clock from the
+   performance counter): on the Alpha encoding is then the largest cost,
+   ~2.6 ms a changed macroblock, spread over its phases (transform 32%,
+   mode search 26%, tokens 25%, reconstruct 13%). **Double-clicks broke**
+   (the console too, so not the DLL): the encoder held the loop for 4
+   macroblock rows (~0.5 s on the Alpha) between a click and the next;
+   now it codes a row at a time for at most SLICE_MS between looks at the
+   network, and no new look or frame starts for CLICK_HOLD_MS (300) after
+   the peer's button. Untried yet. The log folder is a setting (logdir,
+   the window, -logdir).
+   Updates came in as blocks (the user's word): a frame coded only 150 ms
+   of macroblocks, from whatever had been read so far. Now FRAME_BUDGET is
+   600 ms (coding is sliced, so input is not held up) and a frame waits up
+   to GATHER_MS (500) for the look's leftovers. Untried.
+   **Double-clicks, the real cause:** `current_cursor()` called
+   AttachThreadInput every 100 ms in a session, to ask GetCursor for the
+   foreground thread's pointer. Windows keeps double-click state in the
+   input queue, and that appears to have wiped it: for the machine's own
+   mouse too (0 of 3 through the KVM during an idle session, against 12 of
+   12 with none) and all 45 scripted tries. Since the first NT release;
+   nobody had tried a double-click. Now GetCursorInfo where there is one
+   (SP3, 98 and later); else attach only when the pointer moved, so an
+   hourglass with no movement shows when the pointer next moves. The user
+   reports double-clicks working on the PowerPC (SP2, the fallback); the
+   Alpha (SP6, GetCursorInfo) is not built yet. Ruled out on the way, by
+   test: the hook DLL, the move before each click, timing, the SYSTEM
+   account (going through the tray failed the same). With none of that,
+   the window is about 0.4 s through the KVM; the setting is 500 ms.
+   Also from that: a desktop session widens the double-click time to 900
+   ms (widen_dblclk, restored at the end), never shown to be needed; the
+   screen work runs below normal priority; a new look waits for twice what
+   the last look and frame took; the log gives cpu % and every click (both
+   for now); a console in front is read 300 ms apart only for 3 s after the
+   peer's input, else every 2 s (it was 60% of the machine in a session).
+   With no session the agent is at 0% cpu.
+   **The PowerPC's network dies** after an hour or two up (ping 3-5 s, then
+   nothing) with the CPU idle and the agent at 0%: the user knows it as a
+   core bug. Shut NT down, reboot the MiSTer, load the core again.
+   Damage without reading, as XTrap gives IRIX: NT 4.0 has no documented
+   mirror drivers (those are Windows 2000's), though NetMeeting's mnmdd
+   did this on NT 4.0 SP3 and later, needing a reboot, and not on our SP0
+   baseline; the user-mode way is WinVNC's, a
+   hook DLL in every GUI process (WM_PAINT, window moves) giving rectangles
+   to read, with polling for what it misses (consoles, carets) -- no
+   kernel code, so every NT processor. A display driver of our own would
+   be per card and per processor.
 5. Chat and the tray: working on the Alpha (above); not on 9x. Lock and
    block input: Windows 2000 only, not tried.
 6. Released (the user asked): build **20261030-feaa6be71**, x86 and PowerPC

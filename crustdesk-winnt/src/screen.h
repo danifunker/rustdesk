@@ -26,6 +26,8 @@ typedef struct {
     uint8_t *flat;        /* mbw*mbh: one colour (cheap to code), as last converted */
     /* the last screen_collect, for the log */
     int rows_read;
+    int rects_read;       /* with the screen hooks: rectangles, and pixels, read */
+    long px_read;
     uint32_t read_ms, convert_ms;
 } cdv_screen;
 
@@ -48,6 +50,9 @@ void screen_start(cdv_screen *s);
  * marks what the encoder must code. `budget_ms`: stop reading bands after
  * about this long (the rest is read next time). */
 void screen_collect(cdv_screen *s, uint32_t budget_ms);
+
+/* The peer pressed a key or a button: its console will want watching. */
+void screen_note_input(void);
 
 /* Is a band of the screen still to be read in this pass? */
 int screen_pending(const cdv_screen *s);

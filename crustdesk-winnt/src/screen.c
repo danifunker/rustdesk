@@ -1,4 +1,5 @@
 #include "screen.h"
+#include "hooks.h"
 #include "log.h"
 #include "plat.h"
 
@@ -207,15 +208,17 @@ static int differ(const uint32_t *a, const uint32_t *b, int n)
     return 0;
 }
 
-/* Compare macroblock rows [r0, r1) with what was there; convert and keep
- * what changed. `all`: everything, changed or not. Most scanlines of a
- * desktop are as they were, so each is compared whole first, and only one
- * that differs is looked at macroblock by macroblock. */
-static void compare_rows(cdv_screen *s, int r0, int r1, int all)
+/* Compare macroblock rows [r0, r1), columns [c0, c1], with what was there;
+ * convert and keep what changed. `all`: everything, changed or not. Most
+ * scanlines of a desktop are as they were, so each is compared whole first
+ * (the span of it), and only one that differs is looked at macroblock by
+ * macroblock. */
+static void compare_span(cdv_screen *s, int r0, int r1, int c0, int c1, int all)
 {
     static uint8_t *changed;
     static int changed_n;
     int my, mx, y;
+    int px0 = c0 * 16, px1 = (c1 + 1) * 16 < s->width ? (c1 + 1) * 16 : s->width;
     if (changed_n < s->mbw) {
         free(changed);
         changed = (uint8_t *)malloc((size_t)s->mbw);
@@ -229,9 +232,9 @@ static void compare_rows(cdv_screen *s, int r0, int r1, int all)
         for (y = y0; y < y1; y++) {
             const uint32_t *a = (const uint32_t *)(bits + (size_t)y * stride);
             const uint32_t *b = (const uint32_t *)(prev + (size_t)y * stride);
-            if (all || !differ(a, b, s->width))
+            if (all || !differ(a + px0, b + px0, px1 - px0))
                 continue;
-            for (mx = 0; mx < s->mbw; mx++) {
+            for (mx = c0; mx <= c1; mx++) {
                 int x, x1 = mx * 16 + 16 < s->width ? mx * 16 + 16 : s->width;
                 if (changed[mx])
                     continue;
@@ -245,7 +248,7 @@ static void compare_rows(cdv_screen *s, int r0, int r1, int all)
         }
         if (!any)
             continue;
-        for (mx = 0; mx < s->mbw; mx++) {
+        for (mx = c0; mx <= c1; mx++) {
             int x0 = mx * 16, bytes = ((x0 + 16 < s->width ? x0 + 16 : s->width) - x0) * 4;
             int i = my * s->mbw + mx;
             size_t off = (size_t)y0 * stride + x0 * 4;
@@ -260,6 +263,11 @@ static void compare_rows(cdv_screen *s, int r0, int r1, int all)
             }
         }
     }
+}
+
+static void compare_rows(cdv_screen *s, int r0, int r1, int all)
+{
+    compare_span(s, r0, r1, 0, s->mbw - 1, all);
 }
 
 static void read_rows(cdv_screen *s, HDC sdc, int r0, int r1)
@@ -288,14 +296,186 @@ void screen_start(cdv_screen *s)
     last_cursor = NULL; /* and the pointer's shape, again */
 }
 
+/* ---- with the screen hooks: read what was drawn on ---------------------------
+ *
+ * hooks.h says where programs drew. A look reads that; around the pointer
+ * when it moved (a hover); every console window (csrss draws those, which
+ * no hook sees); and, at most ROUND_MS apart, ROUND_ROWS rows of a slow
+ * round of the whole screen for anything else the hooks miss (a caret, a
+ * program drawing outside WM_PAINT). Each run of wanted macroblocks is read
+ * as a rectangle of its own and compared over its own columns: a look costs
+ * what was drawn, not the width of the screen. */
+
+#define ROUND_ROWS 2
+#define ROUND_MS 500
+/* Console windows have no hook, so they are read blind, and a console is a
+ * large read: 210,000 pixels for 80x25, over half the machine at three
+ * looks a second on the PowerPC and the Alpha. So the one in front is read
+ * CONSOLE_MS apart only while the peer is typing or clicking (for
+ * CONSOLE_TYPING_MS after it), and any console CONSOLES_MS apart otherwise. */
+#define CONSOLE_MS 300
+#define CONSOLE_TYPING_MS 3000
+#define CONSOLES_MS 2000
+/* The tallest rectangle one BitBlt reads: a big mark (a window that was
+ * clicked) is read in pieces, the look stopping when its time is up and the
+ * rest kept for the next, so the peer's clicks and keys get in between --
+ * a double-click must not have a long read between its two clicks. */
+#define SPAN_ROWS 4
+
+static uint8_t *want; /* mbw*mbh: still to read, kept from look to look */
+static int want_n, want_left, scan_row;
+static uint32_t round_at, console_at, consoles_at, input_at;
+static POINT last_pt;
+static int all_consoles;  /* this look reads the consoles behind too */
+
+static void want_rect(const cdv_screen *s, int l, int t, int r, int b)
+{
+    int x, y, x0, x1, y0, y1;
+    if (l < 0)
+        l = 0;
+    if (t < 0)
+        t = 0;
+    if (r > s->width)
+        r = s->width;
+    if (b > s->height)
+        b = s->height;
+    if (r <= l || b <= t)
+        return;
+    x0 = l / 16;
+    x1 = (r - 1) / 16;
+    y0 = t / 16;
+    y1 = (b - 1) / 16;
+    for (y = y0; y <= y1; y++)
+        for (x = x0; x <= x1; x++)
+            want[y * s->mbw + x] = 1;
+}
+
+static BOOL CALLBACK console_window(HWND h, LPARAM lp)
+{
+    char cls[24];
+    RECT r;
+    if ((all_consoles || h == GetForegroundWindow()) && IsWindowVisible(h) && !IsIconic(h) &&
+        GetClassName(h, cls, sizeof cls) &&
+        !strcmp(cls, "ConsoleWindowClass") && GetWindowRect(h, &r))
+        want_rect((const cdv_screen *)lp, r.left, r.top, r.right, r.bottom);
+    return TRUE;
+}
+
+/* Read rows [r0, r1), macroblock columns [c0, c1], and compare them. */
+static void read_span(cdv_screen *s, HDC sdc, int r0, int r1, int c0, int c1, uint32_t *tr,
+                      uint32_t *tc)
+{
+    int x0 = c0 * 16, x1 = (c1 + 1) * 16 < s->width ? (c1 + 1) * 16 : s->width;
+    int y0 = r0 * 16, y1 = r1 * 16 < s->height ? r1 * 16 : s->height;
+    uint32_t t = cdv_ms();
+    if (x1 <= x0 || y1 <= y0)
+        return;
+    BitBlt(mem, x0, y0, x1 - x0, y1 - y0, sdc, x0, y0, SRCCOPY);
+    GdiFlush();
+    *tr += cdv_ms() - t;
+    s->rows_read += r1 - r0;
+    s->rects_read++;
+    s->px_read += (long)(x1 - x0) * (y1 - y0);
+    t = cdv_ms();
+    compare_span(s, r0, r1, c0, c1, 0);
+    *tc += cdv_ms() - t;
+}
+
+static int collect_hinted(cdv_screen *s, HDC sdc, uint32_t budget_ms, uint32_t *tr,
+                          uint32_t *tc)
+{
+    int n = s->mbw * s->mbh, w = s->mbw, i;
+    uint32_t t0 = cdv_ms();
+    POINT pt;
+    if (want_n != n) {
+        free(want);
+        want = (uint8_t *)calloc((size_t)n, 1);
+        want_n = want ? n : 0;
+        scan_row = 0;
+        if (!want)
+            return 0;
+    }
+    hooks_take(want, s->mbw, s->mbh);
+    if (GetCursorPos(&pt) && (pt.x != last_pt.x || pt.y != last_pt.y)) {
+        want_rect(s, pt.x - 64, pt.y - 32, pt.x + 64, pt.y + 48);
+        last_pt = pt;
+    }
+    all_consoles = cdv_ms() - consoles_at >= CONSOLES_MS;
+    if (all_consoles)
+        consoles_at = cdv_ms();
+    if (all_consoles ||
+        (cdv_ms() - input_at < CONSOLE_TYPING_MS && cdv_ms() - console_at >= CONSOLE_MS)) {
+        console_at = cdv_ms();
+        EnumWindows(console_window, (LPARAM)s);
+    }
+
+    /* the round: a band of whole rows, now and then */
+    if (cdv_ms() - round_at >= ROUND_MS) {
+        int e = next_row + ROUND_ROWS < s->mbh ? next_row + ROUND_ROWS : s->mbh;
+        round_at = cdv_ms();
+        read_span(s, sdc, next_row, e, 0, s->mbw - 1, tr, tc);
+        memset(want + next_row * w, 0, (size_t)((e - next_row) * w)); /* read already */
+        next_row = e < s->mbh ? e : 0;
+    }
+
+    /* each run of wanted macroblocks in a row (a gap of one is read through:
+     * a BitBlt costs more than 16 pixels), grown down while the rows below
+     * want all of the same columns, SPAN_ROWS at most; from where the last
+     * look stopped, until the time is up */
+    for (i = 0; i < s->mbh; i++) {
+        int my = (scan_row + i) % s->mbh, x = 0;
+        uint8_t *row = want + my * w;
+        while (x < w) {
+            int a, b, r1, k;
+            if (!row[x]) {
+                x++;
+                continue;
+            }
+            if (cdv_ms() - t0 >= budget_ms) {
+                scan_row = my;
+                want_left = 1;
+                return 1;
+            }
+            a = x;
+            while (x < w && (row[x] || (x + 1 < w && row[x + 1])))
+                x++;
+            b = x - 1;
+            memset(row + a, 0, (size_t)(b - a + 1));
+            for (r1 = my + 1; r1 < s->mbh && r1 < my + SPAN_ROWS; r1++) {
+                uint8_t *below = want + r1 * w;
+                for (k = a; k <= b && below[k]; k++)
+                    ;
+                if (k <= b)
+                    break;
+                memset(below + a, 0, (size_t)(b - a + 1));
+            }
+            read_span(s, sdc, my, r1, a, b, tr, tc);
+        }
+    }
+    scan_row = 0;
+    want_left = 0;
+    return 1;
+}
+
 void screen_collect(cdv_screen *s, uint32_t budget_ms)
 {
     HDC sdc = GetDC(NULL);
     uint32_t t0 = cdv_ms(), tr = 0, tc = 0, t;
     POINT pt;
     s->rows_read = 0;
+    s->rects_read = 0;
+    s->px_read = 0;
     if (!sdc)
         return;
+    /* The hooks are on the Default desktop: the logon and locked screens
+     * (Winlogon) are read the old way. */
+    if (hooks_active() && (!cur_name[0] || !strcmp(cur_name, "Default")) &&
+        collect_hinted(s, sdc, budget_ms, &tr, &tc)) {
+        ReleaseDC(NULL, sdc);
+        s->read_ms = tr;
+        s->convert_ms = tc;
+        return;
+    }
     /* First where the pointer is: that is where the person is looking. */
     if (GetCursorPos(&pt)) {
         int r = pt.y / 16 - 2, e = pt.y / 16 + 3;
@@ -353,10 +533,15 @@ void screen_rgb_row(const cdv_screen *s, int y, uint8_t *out)
     }
 }
 
+void screen_note_input(void)
+{
+    input_at = cdv_ms();
+}
+
 int screen_pending(const cdv_screen *s)
 {
     (void)s;
-    return next_row != 0;
+    return hooks_active() ? want_left : next_row != 0;
 }
 
 void screen_mark_all(cdv_screen *s)
@@ -424,18 +609,56 @@ int screen_pointer(int *x, int *y)
 /* The cursor some other program set is not ours to see with GetCursor(),
  * which answers for the calling thread's input state; joining the input of
  * the foreground window's thread for a moment makes it answer for that. */
+/* The pointer's shape. GetCursor answers for this thread's input queue, so
+ * the old way is to attach to the foreground thread's for a moment -- but
+ * Windows keeps the double-click state in the queue, and attaching wipes it:
+ * done every 100 ms, it broke double-clicks for everyone at the machine, the
+ * real mouse too, for as long as a session lasted. So: GetCursorInfo, which
+ * touches no queue, where there is one (NT 4.0 SP3, 98 and later); else
+ * attach only when the pointer has moved, as it does not between the two
+ * clicks of a double-click, and keep the last shape otherwise (an hourglass
+ * then shows when the pointer next moves). */
+typedef struct {
+    DWORD cbSize, flags;
+    HCURSOR hCursor;
+    POINT ptScreenPos;
+} cdv_cursorinfo;
+typedef BOOL(WINAPI *GetCursorInfo_t)(cdv_cursorinfo *);
+
 static HCURSOR current_cursor(void)
 {
-    HWND fg = GetForegroundWindow();
-    DWORD me = GetCurrentThreadId(), them = fg ? GetWindowThreadProcessId(fg, NULL) : 0;
-    HCURSOR c;
+    static GetCursorInfo_t info;
+    static int looked;
+    static POINT was;
+    static HCURSOR shape;
+    POINT pt;
+    HWND fg;
+    DWORD me, them;
+    if (!looked) {
+        info = (GetCursorInfo_t)GetProcAddress(GetModuleHandle("user32.dll"), "GetCursorInfo");
+        looked = 1;
+    }
+    if (info) {
+        cdv_cursorinfo ci;
+        ci.cbSize = sizeof ci;
+        if (info(&ci))
+            return ci.hCursor;
+    }
+    if (!GetCursorPos(&pt))
+        return shape;
+    if (shape && pt.x == was.x && pt.y == was.y)
+        return shape;
+    was = pt;
+    fg = GetForegroundWindow();
+    me = GetCurrentThreadId();
+    them = fg ? GetWindowThreadProcessId(fg, NULL) : 0;
     if (them && them != me && AttachThreadInput(me, them, TRUE)) {
-        c = GetCursor();
+        shape = GetCursor();
         AttachThreadInput(me, them, FALSE);
     } else {
-        c = GetCursor();
+        shape = GetCursor();
     }
-    return c;
+    return shape;
 }
 
 int screen_cursor_shape(uint32_t *id, int *hotx, int *hoty, int *w, int *h, uint8_t *rgba)

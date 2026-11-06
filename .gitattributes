@@ -7,4 +7,5 @@ crustdesk-winnt/**/*.c text eol=crlf
 crustdesk-winnt/**/*.h text eol=crlf
 crustdesk-winnt/**/*.rc text eol=crlf
 crustdesk-winnt/**/*.txt text eol=crlf
+crustdesk-winnt/**/*.def text eol=crlf
 crustdesk-winnt/**/*.ico binary

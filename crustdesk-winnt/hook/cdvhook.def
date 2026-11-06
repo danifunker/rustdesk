@@ -1,0 +1,4 @@
+LIBRARY cdvhook
+EXPORTS
+    CdvGetMsgProc
+    CdvCallWndProc

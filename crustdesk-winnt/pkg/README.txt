@@ -66,6 +66,16 @@ agent restarts with it.
                   (D:\Shared) for just that -- only one.
   Picture quality 0 (best) to 127 (smallest); 24 is the default. A client
                   can change it during a session.
+  Read only what changed (screen hooks)
+                  on by default: during a session, cdvhook.dll (beside the
+                  program) is loaded into the programs on the desktop and
+                  tells the agent where they draw, so it reads that and not
+                  the whole screen -- much less work on a slow machine.
+                  Turn it off if a program misbehaves with it; the agent
+                  then reads the whole screen, as before.
+  Log folder      where C-Desk-Vint.log goes (D:\Logs); empty: beside the
+                  program. Note that anyone who can read that folder can
+                  read the log: who connected, from where.
 
 "View log" opens C-Desk-Vint.log, which says what the agent is doing.
 
@@ -115,6 +125,11 @@ From the command line
   C-Desk-Vint -i          print the ID and password
   C-Desk-Vint -install    install and start the service (from where it is)
   C-Desk-Vint -tray       the tray (normally started at logon)
+  C-Desk-Vint -hook off   read the whole screen, without the screen hooks
+                          (-hook on to use them again); restarts the agent
+  C-Desk-Vint -logdir D:\Logs
+                          write the log there (-logdir alone: beside the
+                          program); restarts the agent
   C-Desk-Vint -remove     stop and remove the service
   C-Desk-Vint -start      start the service; -stop to stop it
   C-Desk-Vint -run [-v]   run the agent in a console window instead (testing)

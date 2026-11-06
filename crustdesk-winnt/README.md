@@ -23,6 +23,7 @@ the peer, the screen read back between them.
 | `src/report.c` | the console reporter, a thread |
 | `src/tray.c` | `-tray`: the icon by the clock and the chat window, as the logged-on user |
 | `src/link.c`, `src/link.h` | the agent's end of the named pipe to the tray: only the console user's tray is let in |
+| `hook/cdvhook.c`, `src/hook.h`, `src/hooks.c` | the screen hooks: a DLL in every program on the desktop marks where it draws, so a look reads that (and consoles, and a slow round) instead of the whole screen; carried inside the program by the nmake build, beside it by PINT's |
 | `src/service.c` | the service: install, start, stop, `ServiceMain` |
 | `src/ui.c`, `res/` | the settings window, the icon, the version |
 | `src/prefs.c` | `C-Desk-Vint.cfg` and `.sta`, shared by agent and window |

@@ -29,6 +29,18 @@ void prefs_path(char *out, size_t cap, const char *name)
     snprintf(out, cap, "%s%s", prefs_dir(), name);
 }
 
+void prefs_log_path(char *out, size_t cap)
+{
+    size_t n = strlen(prefs.logdir);
+    DWORD a = n ? GetFileAttributes(prefs.logdir) : 0xffffffff;
+    if (a == 0xffffffff || !(a & FILE_ATTRIBUTE_DIRECTORY)) {
+        prefs_path(out, cap, "C-Desk-Vint.log");
+        return;
+    }
+    snprintf(out, cap, "%s%sC-Desk-Vint.log", prefs.logdir,
+             prefs.logdir[n - 1] == '\\' || prefs.logdir[n - 1] == '/' ? "" : "\\");
+}
+
 static void copy(char *dst, const char *src, size_t cap)
 {
     strncpy(dst, src, cap - 1);
@@ -97,6 +109,10 @@ static void read_file(void)
             copy(prefs.api, eq, sizeof prefs.api);
         else if (!strcmp(line, "lan"))
             prefs.lan = atoi(eq);
+        else if (!strcmp(line, "hook"))
+            prefs.hook = atoi(eq);
+        else if (!strcmp(line, "logdir"))
+            copy(prefs.logdir, eq, sizeof prefs.logdir);
     }
     fclose(f);
 }
@@ -145,6 +161,7 @@ int prefs_save(void)
             prefs.q);
     fprintf(f, "server=%s\nkey=%s\nrelay=%s\nname=%s\nfiles=%s\napi=%s\nlan=%d\n", prefs.server,
             prefs.key, prefs.relay, prefs.name, prefs.files, prefs.api, prefs.lan);
+    fprintf(f, "hook=%d\nlogdir=%s\n", prefs.hook, prefs.logdir);
     fprintf(f, "uuid=%s\nseed=%s\n", hex(prefs.uuid, 16, u), hex(prefs.seed, 32, k));
     if (fclose(f) != 0)
         return 0;
@@ -229,6 +246,7 @@ int prefs_load(int create)
     prefs.port = DEFAULT_PORT;
     prefs.q = DEFAULT_Q;
     prefs.lan = 1;
+    prefs.hook = 1;
     copy(prefs.files, "/", sizeof prefs.files);
     copy(prefs.server, DEFAULT_SERVER, sizeof prefs.server);
     copy(prefs.key, DEFAULT_KEY, sizeof prefs.key);
