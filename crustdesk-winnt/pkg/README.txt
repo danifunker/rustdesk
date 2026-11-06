@@ -92,6 +92,17 @@ What a client can do
 - Take a screenshot, restart the machine.
 
 - Chat with whoever is at the machine (the tray, below, shows it).
+- Open a terminal: a command prompt on this machine, as the user logged on
+  here (the tray runs it; with nobody logged on there is none). It stays
+  running between connections, and a client that comes back sees what it
+  showed before. NT 4.0 has no way to give a program a real console from
+  outside, so it works a line at a time: programs that print text are fine,
+  ones that draw on the screen (edit) are not. There is no Ctrl+C for a
+  program: press it twice to restart the terminal, or use the tray.
+- Tunnel a TCP port through this machine, to a port here or on its network
+  (the client's TCP tunneling). What goes through a tunnel is not
+  encrypted by RustDesk, relay or no: use it for what is safe on the open
+  network, or for what encrypts itself.
 - On Windows 2000 and later: "Insert lock" locks the screen, and "Block
   user input" stops the machine's own keyboard and mouse until it is
   turned off (or Ctrl+Alt+Del is pressed there). Windows NT 4.0 cannot do
@@ -111,6 +122,9 @@ Right-click it for:
                               person connected writes; type below and press
                               Enter to answer.
   Disconnect remote sessions  end every remote session now.
+  Restart terminal            end the terminal's command prompt and start a
+                              new one, leaving the sessions as they are. It
+                              also starts a new one by itself if it ends.
   Settings...                 the settings window.
   Exit tray                   until the next logon.
 
@@ -134,6 +148,8 @@ From the command line
   C-Desk-Vint -start      start the service; -stop to stop it
   C-Desk-Vint -run [-v]   run the agent in a console window instead (testing)
   C-Desk-Vint -selftest   check that this build computes right on this machine
+
+In C-Desk-Vint.cfg, terminal=0 and tunnel=0 turn those off.
 
 Everything lives beside the program: C-Desk-Vint.cfg (the settings),
 C-Desk-Vint.log, C-Desk-Vint.sta (what the settings window shows).

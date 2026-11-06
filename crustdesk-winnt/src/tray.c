@@ -2,7 +2,9 @@
  * service's installer writes) as whoever logs on.
  *
  * An icon by the clock, its tip saying who is connected; its menu: Chat,
- * Disconnect remote sessions, Settings, Exit. The chat window opens by
+ * Disconnect remote sessions, Restart terminal, Settings, Exit. It runs the
+ * terminal's shell too (shell.c), so that runs as the user logged on, and it
+ * restarts it when it ends. The chat window opens by
  * itself when the peer writes, and what is typed in it goes to the peer.
  * It talks to the agent over the pipe in link.h, and keeps trying while the
  * agent is not there.
@@ -17,6 +19,7 @@
 #include "link.h"
 #include "plat.h"
 #include "service.h"
+#include "shell.h"
 #include "text.h"
 #include "resource.h"
 
@@ -34,10 +37,17 @@
 #define ID_DISCONNECT 101
 #define ID_SETTINGS 102
 #define ID_EXIT 103
+#define ID_RESTART_TERM 104
 #define ID_TRANSCRIPT 200
 #define ID_INPUT 201
 
 #define TRAY_MUTEX "C-Desk-Vint tray"
+
+/* tray_msg types of the shell's, posted to the window: the pipe is written
+ * from one thread only */
+#define TRAY_SHELL_OUT 0x100
+#define TRAY_SHELL_ENDED 0x101
+#define OUT_PENDING_MAX 32
 
 typedef struct {
     int type;
@@ -65,6 +75,7 @@ static char peer_names[200];
 static CRITICAL_SECTION pipe_lock;
 static HANDLE pipe = INVALID_HANDLE_VALUE;
 static HANDLE quit_ev, pipe_thr;
+static volatile LONG out_pending; /* shell output posted and not yet sent */
 
 /* ---- the pipe --------------------------------------------------------------- */
 
@@ -105,6 +116,40 @@ static void post_msg(int type, const char *data, size_t n)
     m->data[n] = 0;
     if (!PostMessage(main_wnd, WM_LINKMSG, 0, (LPARAM)m))
         free(m);
+}
+
+/* The shell's output, from its reader's thread: in pieces the pipe takes,
+ * and no faster than they leave, so a long listing is not lost. */
+static void shell_out(const char *s, size_t n)
+{
+    while (n) {
+        size_t k = n < LINK_MAX - 1 ? n : LINK_MAX - 1;
+        while (out_pending >= OUT_PENDING_MAX && WaitForSingleObject(quit_ev, 10) == WAIT_TIMEOUT)
+            ;
+        InterlockedIncrement((LONG *)&out_pending);
+        post_msg(TRAY_SHELL_OUT, s, k);
+        s += k;
+        n -= k;
+    }
+}
+
+static void shell_ended(void)
+{
+    post_msg(TRAY_SHELL_ENDED, "", 0);
+}
+
+/* A peer opened the terminal: the shell, up if it was not, and what it
+ * showed before. */
+static void term_open(void)
+{
+    static char past[64 * 1024];
+    char ready[32];
+    unsigned long pid = shell_start();
+    size_t n = shell_history(past, sizeof past), o;
+    sprintf(ready, "%lu %d", pid, n ? 1 : 0);
+    link_write(LINK_TERM_READY, ready, strlen(ready));
+    for (o = 0; o < n; o += LINK_MAX - 1)
+        link_write(LINK_TERM_OUT, past + o, n - o < LINK_MAX - 1 ? n - o : LINK_MAX - 1);
 }
 
 /* Read from the agent until it goes; then try again, while the tray runs. */
@@ -352,7 +397,7 @@ static void take_status(const char *text)
             p++;
     }
     if (sessions && !peer_names[0])
-        strcpy(peer_names, "a file manager");
+        strcpy(peer_names, "a remote session");
 }
 
 static void lock_workstation(void)
@@ -392,6 +437,19 @@ static void on_link_msg(tray_msg *m)
     case LINK_LOCK:
         lock_workstation();
         break;
+    case LINK_TERM_OPEN:
+        term_open();
+        break;
+    case LINK_TERM_IN:
+        shell_input(m->data, m->n);
+        break;
+    case TRAY_SHELL_OUT:
+        link_write(LINK_TERM_OUT, m->data, m->n);
+        InterlockedDecrement((LONG *)&out_pending);
+        break;
+    case TRAY_SHELL_ENDED:
+        shell_exited();
+        break;
     }
 }
 
@@ -402,6 +460,8 @@ static void menu(void)
     AppendMenu(mu, MF_STRING, ID_CHAT, "&Chat...");
     AppendMenu(mu, MF_STRING | (linked && sessions ? 0 : MF_GRAYED), ID_DISCONNECT,
                "&Disconnect remote sessions");
+    AppendMenu(mu, MF_STRING | (shell_running() ? 0 : MF_GRAYED), ID_RESTART_TERM,
+               "Restart &terminal");
     AppendMenu(mu, MF_SEPARATOR, 0, NULL);
     AppendMenu(mu, MF_STRING, ID_SETTINGS, "S&ettings...");
     AppendMenu(mu, MF_STRING, ID_EXIT, "E&xit tray");
@@ -467,6 +527,9 @@ static LRESULT CALLBACK main_proc(HWND h, UINT m, WPARAM wp, LPARAM lp)
                            MB_OKCANCEL | MB_ICONQUESTION) == IDOK)
                 link_write(LINK_DISCONNECT, NULL, 0);
             break;
+        case ID_RESTART_TERM:
+            shell_restart();
+            break;
         case ID_SETTINGS:
             open_settings();
             break;
@@ -476,6 +539,7 @@ static LRESULT CALLBACK main_proc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         }
         return 0;
     case WM_DESTROY:
+        shell_stop();
         icon_set(NIM_DELETE);
         PostQuitMessage(0);
         return 0;
@@ -533,6 +597,7 @@ int tray_run(HINSTANCE hinst)
 
     InitializeCriticalSection(&pipe_lock);
     quit_ev = CreateEvent(NULL, TRUE, FALSE, NULL);
+    shell_init(shell_out, shell_ended);
     pipe_thr = plat_thread(pipe_thread, NULL);
 
     while (GetMessage(&msg, NULL, 0, 0) > 0) {

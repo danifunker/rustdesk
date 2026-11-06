@@ -43,6 +43,8 @@ typedef struct {
     int lan;              /* answer LAN discovery */
     int hook;             /* read only what changed, with the screen hooks (hooks.h) */
     char logdir[200];     /* where C-Desk-Vint.log goes; "" beside the program */
+    int terminal;         /* a peer may open the terminal */
+    int tunnel;           /* a peer may tunnel TCP through here */
 } cdv_prefs;
 
 extern cdv_prefs prefs;

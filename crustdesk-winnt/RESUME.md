@@ -155,12 +155,30 @@ calls, so those were checked by hand (only through GetProcAddress). The
 core's test_core passes; selftest-host passes. stage.py's NT rules now
 depend on core\*.h too (a changed core struct rebuilds the NT objects).
 
-Next (the user's plan): the terminal, run by the tray as the logged-on
-user (not SYSTEM), with a tray item to restart it; RustDesk's persistent
-terminal sessions (Terminal.service_id, TerminalOpened.replay_terminal_
-output) fit "always running, see earlier output". Then TCP tunneling
-(LoginRequest.port_forward, field 8). Upstream's protocol for both:
-rustdesk/rustdesk libs/base/protos/message.proto.
+**The terminal and tunnels** (2026-11-06). Protocol from upstream's
+libs/base/protos/message.proto and src/server/terminal_service.rs; the
+core has connection kinds (CDV_CONN_*): LoginRequest.terminal (16),
+.port_forward (8). Terminal: PeerInfo.features.terminal, TerminalAction
+(31), TerminalResponse (32); one shell whatever the peer's id, service id
+"cdv-term", closing a tab leaves it running, history replayed. It runs in
+the tray as the logged-on user (shell.c): cmd on pipes, hidden console,
+restarted when it ends, the tray's Restart terminal; through the link as
+LINK_TERM_*. Measured on NT 4.0: cmd prints the prompt, reads a line, then
+writes the line itself, so keys are echoed here and rubbed out on Enter.
+No Ctrl+C reaches a program: twice restarts the shell. Tunnel: after the
+login the connection is raw TCP, **unframed and unencrypted** (upstream's
+set_raw clears the key), cdv_session.raw; the agent connects at login
+(RDP/0 is localhost:3389) and pumps the socket; multiplexing not offered
+(no features.port_forward_mux). NSLOTS is 4. cfg: terminal=0, tunnel=0.
+
+Proven: host/test_connkinds.py against hostagent (terminal, tunnel, a
+refused target; direct and encrypted, the encrypted needs PyNaCl); shell.c
+on the PowerPC by a temporary test (Backspace, Enter, UTF-8 through the
+code page, an arrow dropped, restart, history); all of it builds with VC4
+for PowerPC. **Not tried: a real session on NT** (the agent<->tray link for
+the terminal, the agent's tunnel sockets, a real client's Terminal and TCP
+tunneling windows) -- scripts/session-check.py HOST does the first two.
+Upstream's protocol for both: rustdesk/rustdesk libs/base/protos/message.proto.
 
 ## 2. The build: Visual C++ 4 on the machine, sources staged here
 

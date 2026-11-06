@@ -143,6 +143,7 @@ class Peer:
         self.shot = None
         self.files = []      # FileActions and FileResponses from the agent
         self.file_mode = False
+        self.login_extra = b''  # a LoginRequest union member: terminal, port_forward
 
     def send(self, body):
         if self.box_key:
@@ -252,7 +253,7 @@ class Peer:
         h2 = hashlib.sha256(h1 + challenge).digest()
         ft = field(7, 2, field(1, 2, b'')) if self.file_mode else b''
         self.send(field(7, 2, field(2, 2, h2) + field(4, 2, b'poke') + field(5, 2, b'cdvpoke') +
-                        ft + field(11, 2, b'1.4.9') + field(13, 2, b'Linux')))
+                        ft + self.login_extra + field(11, 2, b'1.4.9') + field(13, 2, b'Linux')))
         lr = parse(self.recv(10)[8][0])
         if 2 not in lr:
             raise SystemExit('login refused: %r' % lr.get(1))
@@ -260,6 +261,9 @@ class Peer:
         if self.file_mode:
             print('logged in for files: %s, %s %s' % (pi[2][0].decode(), pi[3][0].decode(),
                                                       pi[7][0].decode()))
+            return
+        self.peer_info = pi
+        if 4 not in pi:  # a terminal or a tunnel: no display
             return
         d = parse(pi[4][0])
         print('logged in: %s, %s %s, %dx%d' % (pi[2][0].decode(), pi[3][0].decode(),

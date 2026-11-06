@@ -22,6 +22,7 @@ the peer, the screen read back between them.
 | `src/fs_win32.c` | `cdv_fs_ops` over the W calls: drives at "/", `C:\paths` |
 | `src/report.c` | the console reporter, a thread |
 | `src/tray.c` | `-tray`: the icon by the clock and the chat window, as the logged-on user |
+| `src/shell.c` | the terminal's shell: cmd on pipes, run and restarted by the tray, with a console's echo and line editing and 64 KB of history |
 | `src/link.c`, `src/link.h` | the agent's end of the named pipe to the tray: only the console user's tray is let in |
 | `hook/cdvhook.c`, `src/hook.h`, `src/hooks.c` | the screen hooks: a DLL in every program on the desktop marks where it draws, so a look reads that (and consoles, and a slow round) instead of the whole screen; carried inside the program by the nmake build, beside it by PINT's |
 | `src/service.c` | the service: install, start, stop, `ServiceMain` |
@@ -75,7 +76,9 @@ for ARM, so `ntx.py` can drive a PINT machine for `-selftest`.
 
 ## Testing
 
-`make -C ../crustdesk-macos-classic/host test` tests the shared core;
+`make -C ../crustdesk-macos-classic/host test` tests the shared core
+(`host/test_connkinds.py` its terminal and tunnel, against `hostagent`);
+`scripts/session-check.py HOST` tries both on a real machine;
 `-selftest` checks this compiler built it the same (it is in the release
 build, so a machine of any processor can be checked). A session is driven
 from Linux with `../crustdesk-macos-classic/host/cdvpoke.py` (by address)

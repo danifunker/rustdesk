@@ -14,7 +14,8 @@ enum {
     M_TEST_DELAY = 5, M_VIDEO_FRAME = 6, M_LOGIN_REQUEST = 7, M_LOGIN_RESPONSE = 8,
     M_SIGNED_ID = 3, M_PUBLIC_KEY = 4, M_HASH = 9, M_MOUSE_EVENT = 10, M_CURSOR_DATA = 12, M_CURSOR_POSITION = 13,
     M_KEY_EVENT = 15, M_CLIPBOARD = 16, M_MISC = 19, M_MULTI_CLIPBOARDS = 28,
-    M_SCREENSHOT_REQUEST = 29, M_SCREENSHOT_RESPONSE = 30
+    M_SCREENSHOT_REQUEST = 29, M_SCREENSHOT_RESPONSE = 30, M_TERMINAL_ACTION = 31,
+    M_TERMINAL_RESPONSE = 32
 };
 
 #define KEEPALIVE_MS 3000
@@ -260,7 +261,7 @@ static void send_peer_info(cdv_session *s)
     /* "Mac OS" is true on a Mac, and it is what makes a client in Map mode
      * send Mac virtual keycodes -- which are the ADB keycodes it uses. */
     pbw_string(&w, 3, id->platform ? id->platform : "Mac OS");
-    if (!s->file_mode) { /* a file manager has no display */
+    if (s->conn_kind == CDV_CONN_DESKTOP) { /* the others have no display */
         pbw_begin(&w, 4); /* displays */
         pbw_varint(&w, 3, (uint32_t)id->width);
         pbw_varint(&w, 4, (uint32_t)id->height);
@@ -272,6 +273,11 @@ static void send_peer_info(cdv_session *s)
     if (id->sas_enabled)
         pbw_bool(&w, 6, 1);
     pbw_string(&w, 7, REPORTED_VERSION);
+    if (id->has_terminal) {
+        pbw_begin(&w, 9); /* features */
+        pbw_bool(&w, 2, 1);
+        pbw_end(&w);
+    }
     pbw_end(&w);
     pbw_end(&w);
     msg_end(s, &w);
@@ -610,6 +616,7 @@ static void login(cdv_session *s, const uint8_t *b, size_t n)
         } else if (r.field == 7) { /* file_transfer: FileTransfer{dir, show_hidden} */
             pbr ft;
             s->file_mode = 1;
+            s->conn_kind = CDV_CONN_FILES;
             pbr_init(&ft, r.data, r.len);
             while (pbr_next(&ft)) {
                 if (ft.field == 1 && ft.wire == PB_LEN) {
@@ -620,6 +627,31 @@ static void login(cdv_session *s, const uint8_t *b, size_t n)
                     s->ft_hidden = ft.v != 0;
                 }
             }
+        } else if (r.field == 8) { /* port_forward: PortForward{host, port} */
+            pbr pf;
+            s->conn_kind = CDV_CONN_TUNNEL;
+            pbr_init(&pf, r.data, r.len);
+            while (pbr_next(&pf)) {
+                if (pf.field == 1 && pf.wire == PB_LEN) {
+                    size_t k = pf.len < sizeof s->tunnel_host - 1 ? pf.len
+                                                                  : sizeof s->tunnel_host - 1;
+                    memcpy(s->tunnel_host, pf.data, k);
+                    s->tunnel_host[k] = 0;
+                } else if (pf.field == 2) {
+                    s->tunnel_port = (int)pf.v;
+                }
+            }
+        } else if (r.field == 16) { /* terminal: Terminal{service_id} */
+            pbr te;
+            s->conn_kind = CDV_CONN_TERMINAL;
+            pbr_init(&te, r.data, r.len);
+            while (pbr_next(&te))
+                if (te.field == 1 && te.wire == PB_LEN) {
+                    size_t k = te.len < sizeof s->term_service - 1 ? te.len
+                                                                   : sizeof s->term_service - 1;
+                    memcpy(s->term_service, te.data, k);
+                    s->term_service[k] = 0;
+                }
         } else if (r.field == 5 || r.field == 11 || r.field == 13) {
             char *dst = r.field == 5 ? s->peer_name : r.field == 11 ? s->peer_version : s->peer_platform;
             size_t cap = r.field == 5    ? sizeof s->peer_name
@@ -671,14 +703,24 @@ static void login(cdv_session *s, const uint8_t *b, size_t n)
             return;
         }
     }
-    if (s->hooks->login && !s->hooks->login(s->hooks->user, s->file_mode)) {
+    if (s->conn_kind >= CDV_CONN_TERMINAL) {
+        if (!s->hooks->login_kind || !s->hooks->login_kind(s->hooks->user, s->conn_kind)) {
+            send_login_error(s, s->conn_kind == CDV_CONN_TUNNEL
+                                    ? "Failed to access the remote address"
+                                    : "This machine cannot open a terminal now");
+            s->state = CDV_CLOSED;
+            return;
+        }
+    } else if (s->hooks->login && !s->hooks->login(s->hooks->user, s->file_mode)) {
         send_login_error(s, "Another remote desktop session is using this machine's screen");
         s->state = CDV_CLOSED;
         return;
     }
     send_peer_info(s);
     s->state = CDV_LIVE;
-    s->refresh = !s->file_mode;
+    s->refresh = s->conn_kind == CDV_CONN_DESKTOP;
+    if (s->conn_kind == CDV_CONN_TUNNEL)
+        s->raw = 1;
     if (login_option)
         option(s, login_option, login_option_len);
     say3(s, s->peer_name, s->file_mode ? " logged in for files, client " : " logged in, client ",
@@ -822,6 +864,46 @@ static void misc(cdv_session *s, const uint8_t *b, size_t n)
     }
 }
 
+/* TerminalAction: open{id, rows, cols}, data{id, data, compressed},
+ * resize{id, rows, cols}, close{id}. */
+static void terminal_action(cdv_session *s, const uint8_t *b, size_t n)
+{
+    pbr r;
+    if (!s->hooks->term || s->conn_kind != CDV_CONN_TERMINAL)
+        return;
+    pbr_init(&r, b, n);
+    while (pbr_next(&r)) {
+        pbr a;
+        int id = 0, rows = 0, cols = 0, compressed = 0;
+        const uint8_t *data = NULL;
+        size_t len = 0;
+        if (r.wire != PB_LEN || r.field < 1 || r.field > 4)
+            continue;
+        pbr_init(&a, r.data, r.len);
+        while (pbr_next(&a)) {
+            if (a.field == 1)
+                id = (int)a.v;
+            else if (r.field == 2 && a.field == 2 && a.wire == PB_LEN) {
+                data = a.data;
+                len = a.len;
+            } else if (r.field == 2 && a.field == 3)
+                compressed = a.v != 0;
+            else if (a.field == 2)
+                rows = (int)a.v;
+            else if (a.field == 3)
+                cols = (int)a.v;
+        }
+        if (compressed) {
+            say(s, "terminal: compressed input dropped");
+            continue;
+        }
+        s->hooks->term(s->hooks->user,
+                       r.field == 1 ? CDV_TERM_OPEN : r.field == 2 ? CDV_TERM_DATA
+                                      : r.field == 3 ? CDV_TERM_RESIZE : CDV_TERM_CLOSE,
+                       id, data, len, rows, cols);
+    }
+}
+
 static void test_delay(cdv_session *s, const uint8_t *b, size_t n)
 {
     uint64_t t = 0;
@@ -931,6 +1013,7 @@ static void dispatch(cdv_session *s, const uint8_t *b, size_t n)
             break;
         }
         case M_SCREENSHOT_REQUEST: screenshot(s, r.data, r.len); break;
+        case M_TERMINAL_ACTION: terminal_action(s, r.data, r.len); break;
         case 17: /* file_action */
         case 18: /* file_response */
             if (s->file_mode && s->hooks->file)
@@ -946,6 +1029,11 @@ int cdv_feed(cdv_session *s, const uint8_t *data, size_t n)
     while (n && s->state != CDV_CLOSED) {
         size_t take, hl, len, i;
 
+        if (s->raw) {
+            if (s->hooks->tunnel_data)
+                s->hooks->tunnel_data(s->hooks->user, data, n);
+            return 0;
+        }
         if (s->skip) { /* the rest of a frame too big to hold */
             take = n < s->skip ? n : s->skip;
             s->skip -= take;
@@ -966,6 +1054,12 @@ int cdv_feed(cdv_session *s, const uint8_t *data, size_t n)
             uint32_t v = 0;
             if (!s->ilen)
                 break;
+            if (s->raw) { /* what came behind the login is the tunnel's */
+                if (s->hooks->tunnel_data)
+                    s->hooks->tunnel_data(s->hooks->user, s->in, s->ilen);
+                s->ilen = 0;
+                break;
+            }
             hl = (size_t)(s->in[0] & 3) + 1;
             if (s->ilen < hl)
                 break;
@@ -1006,7 +1100,7 @@ void cdv_tick(cdv_session *s, uint32_t now_ms)
 {
     uint32_t waited;
     s->now = now_ms;
-    if (s->state != CDV_LIVE)
+    if (s->state != CDV_LIVE || s->raw) /* a tunnel carries nothing of ours */
         return;
     /* Liveness: without traffic the client gives up on a still screen. */
     waited = now_ms - s->delay_sent;
@@ -1028,6 +1122,80 @@ void cdv_send_chat(cdv_session *s, const char *utf8, size_t n)
     pbw_end(&w);
     pbw_end(&w);
     msg_end(s, &w);
+}
+
+void cdv_term_opened(cdv_session *s, int id, int ok, const char *message, uint32_t pid,
+                     const char *service_id, int replay)
+{
+    pbw w;
+    if (s->state != CDV_LIVE || !msg_begin(s, &w))
+        return;
+    pbw_begin(&w, M_TERMINAL_RESPONSE);
+    pbw_begin(&w, 1); /* opened */
+    pbw_varint(&w, 1, (uint32_t)id);
+    pbw_bool(&w, 2, ok);
+    if (message)
+        pbw_string(&w, 3, message);
+    pbw_varint(&w, 4, pid);
+    if (service_id)
+        pbw_string(&w, 5, service_id);
+    pbw_bool(&w, 7, replay);
+    pbw_end(&w);
+    pbw_end(&w);
+    msg_end(s, &w);
+}
+
+void cdv_term_data(cdv_session *s, int id, const void *data, size_t n)
+{
+    pbw w;
+    if (s->state != CDV_LIVE || !msg_begin(s, &w))
+        return;
+    pbw_begin(&w, M_TERMINAL_RESPONSE);
+    pbw_begin(&w, 2); /* data */
+    pbw_varint(&w, 1, (uint32_t)id);
+    pbw_bytes(&w, 2, data, n);
+    pbw_end(&w);
+    pbw_end(&w);
+    msg_end(s, &w);
+}
+
+void cdv_term_closed(cdv_session *s, int id, int code)
+{
+    pbw w;
+    if (s->state != CDV_LIVE || !msg_begin(s, &w))
+        return;
+    pbw_begin(&w, M_TERMINAL_RESPONSE);
+    pbw_begin(&w, 3); /* closed */
+    pbw_varint(&w, 1, (uint32_t)id);
+    pbw_varint(&w, 2, (uint32_t)code);
+    pbw_end(&w);
+    pbw_end(&w);
+    msg_end(s, &w);
+}
+
+void cdv_term_error(cdv_session *s, int id, const char *message)
+{
+    pbw w;
+    if (s->state != CDV_LIVE || !msg_begin(s, &w))
+        return;
+    pbw_begin(&w, M_TERMINAL_RESPONSE);
+    pbw_begin(&w, 4); /* error */
+    pbw_varint(&w, 1, (uint32_t)id);
+    pbw_string(&w, 2, message);
+    pbw_end(&w);
+    pbw_end(&w);
+    msg_end(s, &w);
+}
+
+int cdv_tunnel_send(cdv_session *s, const void *data, size_t n)
+{
+    if (s->state != CDV_LIVE || !s->raw || s->ctlcap - s->olen < n + MAC)
+        return 0;
+    seal_queued(s); /* the login's answer, ahead of it, is still a message */
+    memcpy(s->out + s->olen, data, n);
+    s->olen += n;
+    s->osealed = s->olen;
+    return 1;
 }
 
 #define BIG_SUFFIX 160 /* the sid and a message after the data, and the MAC */

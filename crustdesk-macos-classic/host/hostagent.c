@@ -206,16 +206,58 @@ static void on_file(void *u, int field, const uint8_t *d, size_t n)
     cdv_files_message(files, field, d, n);
 }
 
+/* A terminal that shouts back, and a tunnel that says what it heard: enough
+ * to prove the core's side of both (test_connkinds.py). */
+static cdv_session *cur;
+
+static int on_login_kind(void *u, int kind)
+{
+    (void)u;
+    printf("login kind %d, host '%s' port %d, service '%s'\n", kind, cur->tunnel_host,
+           cur->tunnel_port, cur->term_service);
+    return strcmp(cur->tunnel_host, "refuse") != 0;
+}
+
+static void on_term(void *u, int what, int id, const uint8_t *d, size_t n, int rows, int cols)
+{
+    (void)u;
+    if (what == CDV_TERM_OPEN) {
+        printf("terminal open %d, %dx%d\n", id, cols, rows);
+        cdv_term_opened(cur, id, 1, "Terminal opened", 4242, "host-term", 0);
+        cdv_term_data(cur, id, "host> ", 6);
+    } else if (what == CDV_TERM_DATA) {
+        char up[256];
+        size_t i, k = n < sizeof up ? n : sizeof up;
+        for (i = 0; i < k; i++)
+            up[i] = (char)(d[i] >= 'a' && d[i] <= 'z' ? d[i] - 32 : d[i]);
+        cdv_term_data(cur, id, up, k);
+    } else if (what == CDV_TERM_CLOSE) {
+        cdv_term_closed(cur, id, 0);
+    }
+}
+
+static void on_tunnel(void *u, const uint8_t *d, size_t n)
+{
+    char m[300];
+    size_t k = n < 256 ? n : 256;
+    (void)u;
+    memcpy(m, "tun:", 4);
+    memcpy(m + 4, d, k);
+    cdv_tunnel_send(cur, m, k + 4);
+}
+
 static int serve(int fd, const char *password, int q, int secure)
 {
     static uint8_t outbuf[1 << 20], inbuf[192 * 1024];
     static uint8_t encmem_raw[4 << 20];
     static const cdv_hooks hooks = { on_mouse, on_key, NULL,    on_log, NULL, NULL,
-                                     NULL,     NULL,   on_login, on_file, NULL };
+                                     NULL,     NULL,   on_login, on_file, NULL,
+                                     NULL,     on_login_kind, on_term, on_tunnel };
     int files_started = 0;
     static uint8_t pk[32], sk[64];
     static int have_keys;
     cdv_ident id = { host_id, host_sk, password, "classicsalt", "Host Quadra", W, H, 1 };
+    id.has_terminal = 1;
     (void)pk;
     (void)sk;
     (void)have_keys;
@@ -226,6 +268,7 @@ static int serve(int fd, const char *password, int q, int secure)
 
     if (vp8e_mem_size(W, H) > sizeof encmem_raw)
         return -1;
+    cur = &s;
     cdv_init(&s, outbuf, sizeof outbuf, inbuf, sizeof inbuf, &hooks, &id, now_ms());
     if (!files)
         files = malloc(cdv_files_size());
@@ -279,7 +322,7 @@ static int serve(int fd, const char *password, int q, int secure)
             continue;
         }
         cdv_out_peek(&s, &n);
-        if (s.state == CDV_LIVE && !n) {
+        if (s.state == CDV_LIVE && !n && s.conn_kind == CDV_CONN_DESKTOP) {
             int key = cdv_take_refresh(&s), mx, my, any = key;
             size_t cap, len;
             uint8_t *dst;

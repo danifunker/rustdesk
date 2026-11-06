@@ -100,6 +100,15 @@ typedef struct {
      * after user, so the agents that fill this struct in order need not
      * change. */
     void (*block_input)(void *user, int on);
+    /* Optional, with block_input and for the same reason at the end. A
+     * connection that is not a desktop or a file manager: a terminal
+     * (LoginRequest.terminal) or a tunnel (.port_forward), in s->conn_kind.
+     * The password was right: may it go ahead? NULL: such a login is refused. */
+    int (*login_kind)(void *user, int kind);
+    /* A terminal's TerminalAction: CDV_TERM_*. `data`: the peer's keys. */
+    void (*term)(void *user, int what, int id, const uint8_t *data, size_t n, int rows, int cols);
+    /* A tunnel's bytes from the peer. */
+    void (*tunnel_data)(void *user, const uint8_t *data, size_t n);
 } cdv_hooks;
 
 typedef struct {
@@ -122,9 +131,13 @@ typedef struct {
      * 100). A client offers "Insert Ctrl + Alt + Del" only for a peer that
      * says so (or one whose platform is "Linux"). */
     int sas_enabled;
+    /* PeerInfo.features.terminal: this agent answers a terminal connection. */
+    int has_terminal;
 } cdv_ident;
 
 enum { CDV_WAIT_PK, CDV_WAIT_LOGIN, CDV_LIVE, CDV_CLOSED };
+enum { CDV_CONN_DESKTOP, CDV_CONN_FILES, CDV_CONN_TERMINAL, CDV_CONN_TUNNEL };
+enum { CDV_TERM_OPEN, CDV_TERM_DATA, CDV_TERM_RESIZE, CDV_TERM_CLOSE };
 
 typedef struct {
     int state;
@@ -164,6 +177,13 @@ typedef struct {
     uint8_t shot_sid[64];     /* the screenshot request's sid, sent back with it */
     size_t shot_sid_len;
     int file_mode;            /* a file-transfer session */
+    int conn_kind;            /* CDV_CONN_*, from the login */
+    char term_service[48];    /* LoginRequest.terminal.service_id: a reconnection */
+    char tunnel_host[128];    /* LoginRequest.port_forward */
+    int tunnel_port;
+    /* After a tunnel's login the connection is the tunnel: raw bytes both
+     * ways, with neither frames nor encryption (upstream's set_raw). */
+    int raw;
     char ft_dir[256];         /* ...the directory it asked to start in */
     int ft_hidden;
 } cdv_session;
@@ -229,6 +249,15 @@ size_t cdv_ctl_room(const cdv_session *s);
 
 /* A chat line to the peer (Misc.chat_message), UTF-8. */
 void cdv_send_chat(cdv_session *s, const char *utf8, size_t n);
+
+/* A terminal's answers: TerminalResponse. `replay`: earlier output follows. */
+void cdv_term_opened(cdv_session *s, int id, int ok, const char *message, uint32_t pid,
+                     const char *service_id, int replay);
+void cdv_term_data(cdv_session *s, int id, const void *data, size_t n);
+void cdv_term_closed(cdv_session *s, int id, int code);
+void cdv_term_error(cdv_session *s, int id, const char *message);
+/* Bytes down a tunnel: 0 if they did not fit (see cdv_ctl_room). */
+int cdv_tunnel_send(cdv_session *s, const void *data, size_t n);
 
 /* The screenshot, in the video frame's buffer (so a big PNG is not copied):
  * cdv_big_begin() reserves it like cdv_video_begin() and says how much fits;

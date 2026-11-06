@@ -195,9 +195,10 @@ static int send_all(SOCKET fd, const uint8_t *b, size_t n)
 
 /* ---- the sessions ------------------------------------------------------------- *
  *
- * Two slots. A connection takes a free one; at login it becomes the desktop
- * (one at a time: it owns the screen, the encoder and the video buffer) or a
- * file manager (a client opens one beside its desktop window). */
+ * A connection takes a free slot; at login it becomes the desktop (one at a
+ * time: it owns the screen, the encoder and the video buffer), a file manager
+ * (a client opens one beside its desktop window), the terminal (one at a time,
+ * its shell in the tray) or a tunnel. */
 
 static cdv_screen scr;
 static int scr_ok;
@@ -210,9 +211,9 @@ static const char *desk_name = "Default";
 #define VID_CAP (2 * 1024 * 1024)
 #define IN_CAP (192 * 1024)
 #define WORK_CAP (192 * 1024)
-#define NSLOTS 2
+#define NSLOTS 4
 
-enum { K_NONE, K_DESKTOP, K_FILES };
+enum { K_NONE, K_DESKTOP, K_FILES, K_TERM, K_TUNNEL };
 
 typedef struct {
     SOCKET fd;            /* INVALID_SOCKET: free */
@@ -226,9 +227,13 @@ typedef struct {
     uint32_t started;
     char how[16];
     int chat_told;        /* the peer has been told nobody reads chat here */
+    SOCKET fwd;           /* a tunnel: where it goes */
+    int fwd_dead;         /* that broke while the peer's bytes were going in */
 } slot;
 static slot slots[NSLOTS];
 static slot *desk;        /* the slot showing the desktop, or NULL */
+static slot *term;        /* the slot with the terminal, or NULL */
+static int term_id;       /* the peer's number for it */
 
 /* The desktop's own state, whichever slot it is in. */
 static struct {
@@ -659,6 +664,89 @@ static int on_login(void *u, int file_transfer)
     return 1;
 }
 
+/* A terminal or a tunnel, at login. */
+static int on_login_kind(void *u, int kind)
+{
+    slot *sl = (slot *)u;
+    if (kind == CDV_CONN_TERMINAL) {
+        if (!prefs.terminal || !link_connected() || term) {
+            cdv_log("refusing a terminal: %s", !prefs.terminal ? "off in the settings"
+                                               : term ? "one is open"
+                                                      : "no tray (nobody logged on?)");
+            return 0;
+        }
+        sl->kind = K_TERM;
+        term = sl;
+        return 1;
+    }
+    if (kind == CDV_CONN_TUNNEL) {
+        const char *host = sl->s.tunnel_host;
+        int port = sl->s.tunnel_port;
+        uint32_t ip;
+        if (!prefs.tunnel) {
+            cdv_log("refusing a tunnel: off in the settings");
+            return 0;
+        }
+        if (!strcmp(host, "RDP") && !port) {
+            host = "";
+            port = 3389;
+        }
+        if (!host[0])
+            host = "localhost";
+        if (!strcmp(host, "localhost"))
+            ip = 0x7f000001;
+        else if (!resolve(host, &ip)) {
+            cdv_log("tunnel: cannot resolve %s", host);
+            return 0;
+        }
+        sl->fwd = tcp_connect(ip, (uint16_t)port, 3000);
+        if (sl->fwd == INVALID_SOCKET) {
+            cdv_log("tunnel: nothing at %s:%d", host, port);
+            return 0;
+        }
+        cdv_log("tunnel to %s:%d", host, port);
+        sl->kind = K_TUNNEL;
+        return 1;
+    }
+    return 0;
+}
+
+/* The peer's terminal: its shell is the tray's. One shell, whatever the
+ * peer's number for it; closing a tab leaves it running for next time. */
+static void on_term(void *u, int what, int id, const uint8_t *d, size_t n, int rows, int cols)
+{
+    slot *sl = (slot *)u;
+    (void)rows;
+    (void)cols;
+    if (sl != term)
+        return;
+    if (what == CDV_TERM_OPEN) {
+        term_id = id;
+        if (link_connected())
+            link_send(LINK_TERM_OPEN, NULL, 0);
+        else
+            cdv_term_error(&sl->s, id, "The tray is not running here");
+    } else if (what == CDV_TERM_DATA) {
+        link_send(LINK_TERM_IN, (const char *)d, n);
+    } else if (what == CDV_TERM_CLOSE) {
+        cdv_term_closed(&sl->s, id, 0);
+    }
+}
+
+/* What the peer sends down its tunnel. */
+static void on_tunnel_data(void *u, const uint8_t *d, size_t n)
+{
+    slot *sl = (slot *)u;
+    if (sl->fwd != INVALID_SOCKET && send_all(sl->fwd, d, n) < 0)
+        sl->fwd_dead = 1;
+}
+
+static const char *kind_name(int kind)
+{
+    return kind == K_FILES ? "files" : kind == K_TERM ? "terminal" : kind == K_TUNNEL ? "tunnel"
+                                                                                      : "desktop";
+}
+
 static void on_file(void *u, int field, const uint8_t *d, size_t n)
 {
     slot *sl = (slot *)u;
@@ -704,8 +792,13 @@ static void session_begin(SOCKET fd, int secure, const char *how)
     sl->hooks.file = on_file;
     sl->hooks.chat = on_chat;
     sl->hooks.block_input = on_block_input;
+    sl->hooks.login_kind = on_login_kind;
+    sl->hooks.term = on_term;
+    sl->hooks.tunnel_data = on_tunnel_data;
     sl->hooks.user = sl;
     sl->chat_told = 0;
+    sl->fwd = INVALID_SOCKET;
+    sl->fwd_dead = 0;
     ident.username = console_user();
     cdv_init2(&sl->s, sl->ctl, CTL_CAP, NULL, 0, sl->in, IN_CAP, &sl->hooks, &ident, now_ms());
     cdv_start(&sl->s, now_ms(), secure);
@@ -730,7 +823,13 @@ static void session_end(slot *sl, const char *why)
     }
     if (sl->kind == K_FILES)
         cdv_files_close(sl->files);
-    cdv_log("%s session over: %s", sl->kind == K_FILES ? "file" : "desktop", why);
+    if (sl == term)
+        term = NULL;
+    if (sl->fwd != INVALID_SOCKET) {
+        closesocket(sl->fwd);
+        sl->fwd = INVALID_SOCKET;
+    }
+    cdv_log("%s session over: %s", kind_name(sl->kind), why);
     sl->kind = K_NONE;
     status_dirty = 1;
 }
@@ -783,7 +882,7 @@ static int session_io(slot *sl, int readable)
             }
             if (!was_live && sl->s.state == CDV_LIVE) {
                 cdv_log("logged in: %s (%s %s), %s", sl->s.peer_name, sl->s.peer_platform,
-                        sl->s.peer_version, sl->kind == K_FILES ? "file manager" : "desktop");
+                        sl->s.peer_version, kind_name(sl->kind));
                 status_dirty = 1;
                 if (sl == desk) {
                     desktop_started(sl);
@@ -1417,8 +1516,8 @@ static void status_step(void)
         slot *sl = &slots[i];
         if (sl->fd == INVALID_SOCKET || sl->s.state != CDV_LIVE)
             continue;
-        snprintf(line, sizeof line, "session=%s %s (%s)\r\n",
-                 sl->kind == K_FILES ? "files" : "desktop", sl->s.peer_name, sl->how);
+        snprintf(line, sizeof line, "session=%s %s (%s)\r\n", kind_name(sl->kind),
+                 sl->s.peer_name, sl->how);
         strncat(text, line, sizeof text - strlen(text) - 1);
     }
     prefs_status_write(text);
@@ -1431,8 +1530,20 @@ static void link_step(void)
     static char m[LINK_MAX];
     int type, i;
     long n;
-    while ((n = link_take(&type, m, sizeof m)) >= 0) {
-        if (type == LINK_JOINED) {
+    /* a terminal's output waits in the link until its queue has room */
+    while ((!term || cdv_ctl_room(&term->s) > LINK_MAX + 256) &&
+           (n = link_take(&type, m, sizeof m)) >= 0) {
+        if (type == LINK_TERM_READY) {
+            unsigned long pid = strtoul(m, NULL, 10);
+            const char *sp = strchr(m, ' ');
+            if (term)
+                cdv_term_opened(&term->s, term_id, pid != 0,
+                                pid ? "Terminal opened" : "cmd would not start", pid, "cdv-term",
+                                sp && sp[1] == '1');
+        } else if (type == LINK_TERM_OUT) {
+            if (term)
+                cdv_term_data(&term->s, term_id, m, (size_t)n);
+        } else if (type == LINK_JOINED) {
             status_dirty = 1; /* it wants to know who is connected */
         } else if (type == LINK_CHAT) {
             if (desk && desk->s.state == CDV_LIVE) {
@@ -1494,6 +1605,7 @@ int agent_run(HANDLE stop, int console, int verbose)
     vidbuf = (uint8_t *)malloc(VID_CAP);
     for (i = 0; i < NSLOTS; i++) {
         slots[i].fd = INVALID_SOCKET;
+        slots[i].fwd = INVALID_SOCKET;
         slots[i].ctl = (uint8_t *)malloc(CTL_CAP);
         slots[i].in = (uint8_t *)malloc(IN_CAP);
         slots[i].work = (uint8_t *)malloc(WORK_CAP);
@@ -1523,6 +1635,7 @@ int agent_run(HANDLE stop, int console, int verbose)
     /* Ctrl-Alt-Del reaches Winlogon only from SYSTEM, which the NT service
      * is (input_sas); 9x has none to send, and -run is an Administrator */
     ident.sas_enabled = plat_nt() && !console;
+    ident.has_terminal = plat_nt() && prefs.terminal;
 
     if (prefs.port) {
         tcp_direct = listen_on((uint16_t)prefs.port, 0);
@@ -1596,9 +1709,13 @@ int agent_run(HANDLE stop, int console, int verbose)
             FD_SET(slots[k].fd, &rd);
             if (cdv_out_peek(&slots[k].s, &n), n)
                 FD_SET(slots[k].fd, &wr);
-            /* a download keeps the file manager busy */
-            if (slots[k].kind == K_FILES && timeout > 10)
+            /* a download keeps the file manager busy; a terminal and a tunnel
+             * are answered at once */
+            if (slots[k].kind >= K_FILES && timeout > 10)
                 timeout = 10;
+            /* a tunnel's far end, while there is room for what it sends */
+            if (slots[k].fwd != INVALID_SOCKET && cdv_ctl_room(&slots[k].s) > 16384)
+                FD_SET(slots[k].fwd, &rd);
             nfds++;
         }
         tv.tv_sec = 0;
@@ -1630,8 +1747,21 @@ int agent_run(HANDLE stop, int console, int verbose)
             if (sl->fd == INVALID_SOCKET)
                 continue;
             readable = FD_ISSET(sl->fd, &rd) != 0;
+            if (sl->fwd != INVALID_SOCKET && FD_ISSET(sl->fwd, &rd)) {
+                static char fbuf[16384];
+                int r = recv(sl->fwd, fbuf, sizeof fbuf, 0);
+                if (r > 0)
+                    cdv_tunnel_send(&sl->s, fbuf, (size_t)r);
+                else
+                    sl->fwd_dead = 1;
+            }
             if (!session_io(sl, readable))
                 continue;
+            if (sl->fwd_dead) {
+                session_io(sl, 0); /* what it said last */
+                session_end(sl, "the tunnel's far end closed");
+                continue;
+            }
             if (sl == desk && sl->s.state == CDV_LIVE) {
                 /* the screen is background work: the programs here and
                  * their mouse come first. Back up for the peer's input. */

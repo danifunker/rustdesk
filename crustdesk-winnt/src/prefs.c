@@ -111,6 +111,10 @@ static void read_file(void)
             prefs.lan = atoi(eq);
         else if (!strcmp(line, "hook"))
             prefs.hook = atoi(eq);
+        else if (!strcmp(line, "terminal"))
+            prefs.terminal = atoi(eq);
+        else if (!strcmp(line, "tunnel"))
+            prefs.tunnel = atoi(eq);
         else if (!strcmp(line, "logdir"))
             copy(prefs.logdir, eq, sizeof prefs.logdir);
     }
@@ -161,7 +165,8 @@ int prefs_save(void)
             prefs.q);
     fprintf(f, "server=%s\nkey=%s\nrelay=%s\nname=%s\nfiles=%s\napi=%s\nlan=%d\n", prefs.server,
             prefs.key, prefs.relay, prefs.name, prefs.files, prefs.api, prefs.lan);
-    fprintf(f, "hook=%d\nlogdir=%s\n", prefs.hook, prefs.logdir);
+    fprintf(f, "hook=%d\nlogdir=%s\nterminal=%d\ntunnel=%d\n", prefs.hook, prefs.logdir,
+            prefs.terminal, prefs.tunnel);
     fprintf(f, "uuid=%s\nseed=%s\n", hex(prefs.uuid, 16, u), hex(prefs.seed, 32, k));
     if (fclose(f) != 0)
         return 0;
@@ -247,6 +252,8 @@ int prefs_load(int create)
     prefs.q = DEFAULT_Q;
     prefs.lan = 1;
     prefs.hook = 1;
+    prefs.terminal = 1;
+    prefs.tunnel = 1;
     copy(prefs.files, "/", sizeof prefs.files);
     copy(prefs.server, DEFAULT_SERVER, sizeof prefs.server);
     copy(prefs.key, DEFAULT_KEY, sizeof prefs.key);
