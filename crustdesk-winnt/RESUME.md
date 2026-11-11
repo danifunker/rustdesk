@@ -101,6 +101,17 @@ that published it, so no -selftest, session or check-imports.py; the
 MANIFEST says so. Next on a PINT machine: those three, then the tray,
 terminal and a tunnel.
 
+**On a real Pi** (2026-11-11, that build, PINT over Wi-Fi, 4x Cortex-A53,
+1280x1024 32-bit, by the user, through their own servers and console):
+terminal, chat and double-click work. But the installed copy had no
+cdvhook.dll beside it ("no cdvhook.dll beside the program"), so the old
+path ran: about 7 MB/s reading the Pi's screen (770 ms for the first whole
+look), 6-8 s of every 10 s reading, cpu 50-60% with nothing changing. And
+the pointer flashed on the Pi's own screen: its pointer is drawn by GDI
+(no hardware pointer), which takes it off for every read that covers it,
+and the old path reads the rows round the pointer every look
+(screen.c screen_collect). Hence the DLL inside the ARM .exe since.
+
 **Alpha** (2026-11-05, build 20261105-e32184f8b): the staged tree built
 unchanged by Visual C++ 6.0 on NT 4.0 for Alpha (`nmake` in `build\stage`;
 the only change it needed was CRLF in the staged sources, for NT's editors).
@@ -402,7 +413,10 @@ Tenox has an NT 4.0 MIPS QEMU image with Visual C++ 4.1
    build makes the DLL first and carries it inside the .exe (RCDATA,
    CDV_HOOK_DLL), written beside it when the agent starts; PINT's build
    makes it as a DYNLINK component (make-dll.sh, DLLBASE 0x68000000)
-   shipped beside, non-fatal if it fails. Checked: C89 and undeclared
+   before the program, puts it beside cdv.rc and gives cdv/exe
+   RCOPTIONS=-DCDV_HOOK_DLL (rc.sh passes those to RC), so the ARM .exe
+   carries it too (since 2026-11-11: before, it was shipped beside, and
+   Install from a lone .exe left the hooks off); non-fatal if it fails. Checked: C89 and undeclared
    calls, as above. Untried: everything at run time, on every processor.
    Then (same day): the hooks worked on both machines (reads 10x cheaper
    on the PowerPC, idle reads 0.2 s per 10 on the Alpha, from 4.5), but

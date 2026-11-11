@@ -87,16 +87,21 @@ say "stage"
 python3 $HERE/scripts/stage-pint.py $HERE/build/pint
 rm -rf $R/apps/cdv && cp -R $HERE/build/pint/cdv $R/apps/cdv
 for c in sodium bssl zstd; do say "lib cdv/$c"; ROOT=/work/RASPI/apps bash $B/make-lib.sh cdv/$c; done
-say "exe cdv"; ROOT=/work/RASPI/apps bash $B/make-exe.sh cdv/exe cdv
-say "exe ntexec"; ROOT=/work/RASPI/apps bash $B/make-exe.sh cdv/ntexec ntexec
-# the screen hooks' DLL, shipped beside the program; the agent reads the whole
-# screen without it, so a failure here does not stop the build
+# the screen hooks' DLL first: the program carries it (cdv.rc's RCDATA, as the
+# stage's nmake does), so Install, which copies only the program, still has it.
+# RC finds it beside cdv.rc, as it finds cdv.ico; rc.sh gives RC the defines of
+# the RCOPTIONS. The agent reads the whole screen without it, so a failure here
+# does not stop the build: the program is then made without it.
 say "dll cdvhook"
 if ROOT=/work/RASPI/apps bash $B/make-dll.sh cdv/hook && [ -f $R/obj/CDVHOOK.DLL ]; then
     cp $R/obj/CDVHOOK.DLL $OUTDIR/cdvhook.dll
+    cp $R/obj/CDVHOOK.DLL $R/apps/cdv/cdvhook.dll
+    printf 'RCOPTIONS=-DCDV_HOOK_DLL\r\n' >> $R/apps/cdv/exe/sources
 else
     say "  cdvhook.dll did not build: the ARM agent reads the whole screen"
 fi
+say "exe cdv"; ROOT=/work/RASPI/apps bash $B/make-exe.sh cdv/exe cdv
+say "exe ntexec"; ROOT=/work/RASPI/apps bash $B/make-exe.sh cdv/ntexec ntexec
 
 cp $R/obj/CDV.EXE $OUTDIR/C-Desk-Vint.exe
 cp $R/obj/NTEXEC.EXE $OUTDIR/ntexec.exe

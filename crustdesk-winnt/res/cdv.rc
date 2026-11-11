@@ -5,7 +5,8 @@
 IDI_CDV ICON "cdv.ico"
 
 /* The screen hooks' DLL, written beside the program when it runs (hooks.c).
- * The stage's nmake builds it first and says so; PINT's build does not. */
+ * The stage's nmake builds it first and says so; so does PINT's build
+ * (pint-build.sh, by RCOPTIONS). */
 #ifdef CDV_HOOK_DLL
 IDR_HOOKDLL RCDATA "cdvhook.dll"
 #endif

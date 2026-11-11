@@ -18,9 +18,11 @@ directories under it, each a SOURCES file:
     cdv/bssl     BearSSL                  LIBRARY cdvbssl
     cdv/zstd     the zstd decoder         LIBRARY cdvzstd
     cdv/exe      the agent: src/, core    PROGRAM cdv (CDV.EXE: C-Desk-Vint.exe)
-    cdv/hook     hook/cdvhook.c           DYNLINK cdvhook (the screen hooks' DLL, shipped
-                                          beside the program: PINT's build does not
-                                          put it inside, as the stage's nmake does)
+    cdv/hook     hook/cdvhook.c           DYNLINK cdvhook (the screen hooks' DLL: built
+                                          first by pint-build.sh, which puts it beside
+                                          cdv.rc and gives cdv/exe RCOPTIONS=-DCDV_HOOK_DLL,
+                                          so the program carries it, as the stage's
+                                          nmake does)
     cdv/ntexec   tools/nt/ntexec.c        PROGRAM ntexec (scripts/ntx.py's server)
 
     stage-pint.py [OUT]     (default build/pint; OUT/cdv goes to PINT's apps/cdv)
