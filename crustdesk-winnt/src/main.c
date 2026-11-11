@@ -15,8 +15,10 @@
  *                            the program); restarts the service to apply it
  *   C-Desk-Vint -i           this machine's ID and password
  *   C-Desk-Vint -selftest    check the compiler got the core right
+ *   C-Desk-Vint -bench       time reading the screen against plain memory
  */
 #include "agent.h"
+#include "bench.h"
 #include "prefs.h"
 #include "selftest.h"
 #include "service.h"
@@ -81,6 +83,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     }
     if (has(cmd, "-selftest"))
         return selftest(out);
+    if (has(cmd, "-bench"))
+        return bench(out);
     if (has(cmd, "-logdir")) {
         const char *p = strstr(cmd, "-logdir") + 7;
         char dir[200];
