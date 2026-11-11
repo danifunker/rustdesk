@@ -92,6 +92,15 @@ place of the service on the same PINT machine, passed -selftest and the
 session by ID through the public relay again. The release files are the
 run's artifact plus a MANIFEST.txt written by hand.
 
+**Released** 2026-11-11 as `vintage-winnt-arm-20261106-505189b36`, the
+artifact of run 42247980447 (the tray, chat, Ctrl+Alt+Del, terminal,
+tunnels, screen hooks, double-clicks), plus `cdvhook.dll` as its own file
+(NT 4.0 has no unzip; Install copies it from beside the program).
+**Released without being run on ARM**: no PINT card image was on the Mac
+that published it, so no -selftest, session or check-imports.py; the
+MANIFEST says so. Next on a PINT machine: those three, then the tray,
+terminal and a tunnel.
+
 **Alpha** (2026-11-05, build 20261105-e32184f8b): the staged tree built
 unchanged by Visual C++ 6.0 on NT 4.0 for Alpha (`nmake` in `build\stage`;
 the only change it needed was CRLF in the staged sources, for NT's editors).
