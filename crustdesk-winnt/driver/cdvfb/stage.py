@@ -24,14 +24,24 @@ EDITS = {
          "    BOOL    bSupportDCI;                // Does the miniport support DCI?\n"
          "    PBYTE   pjShadow;                   // cdvfb: the shadow's memory, or NULL\n"
          "    HSURF   hsurfShadow;                // cdvfb: the shadow as a bitmap\n"
-         "    SURFOBJ *psoShadow;                 // cdvfb: that bitmap, locked\n"),
+         "    SURFOBJ *psoShadow;                 // cdvfb: that bitmap, locked\n"
+         "    BOOL    bPtrVisible;                // cdvfb: its pointer is on the screen\n"
+         "    POINTL  ptlPtr;                     // cdvfb: the pointer's top left\n"
+         "    POINTL  ptlPtrHot;                  // cdvfb: its hot spot\n"
+         "    SIZEL   sizlPtr;                    // cdvfb: its size, 0 when there is none\n"
+         "    ULONG   *pulPtrAnd;                 // cdvfb: what stays of the screen\n"
+         "    ULONG   *pulPtrXor;                 // cdvfb: what is put on it\n"),
         ("VOID vDisableSURF(PPDEV);\n",
          "VOID vDisableSURF(PPDEV);\n"
          "HSURF hsurfShadowEnable(PPDEV, SIZEL, ULONG, FLONG);\n"
          "VOID vShadowDisable(PPDEV);\n"
          "VOID vShadowFlush(PPDEV, RECTL *);\n"
          "VOID vShadowFlushAll(PPDEV);\n"
-         "VOID ShadowPrint(PCHAR, ...);\n"),
+         "VOID ShadowPrint(PCHAR, ...);\n"
+         "VOID FbMovePointer(SURFOBJ *, LONG, LONG, RECTL *);\n"
+         "ULONG FbSetPointerShape(SURFOBJ *, SURFOBJ *, SURFOBJ *, XLATEOBJ *, LONG, LONG, LONG,\n"
+         "                        LONG, RECTL *, FLONG);\n"
+         "#define PTR_MAX 64                      // cdvfb: the largest pointer it draws\n"),
         ('L"framebuf"', 'L"cdvfb"'),
         ('"FRAMEBUF: "', '"CDVFB: "'),
     ],
@@ -90,6 +100,12 @@ EDITS = {
         return TRUE;
 """),
     ],
+    # framebuf's pointer, a miniport's hardware one: cdvfb's own calls it
+    # when there is no shadow
+    "pointer.c": [
+        ("VOID DrvMovePointer\n", "VOID FbMovePointer\n"),
+        ("ULONG DrvSetPointerShape\n", "ULONG FbSetPointerShape\n"),
+    ],
     "framebuf.rc": [
         ('"Framebuffer Display Driver"', '"C-Desk-Vint shadow frame buffer display driver"'),
         ('#define VER_INTERNALNAME_STR        "framebuf.dll"',
@@ -98,7 +114,7 @@ EDITS = {
          '#define VER_ORIGINALFILENAME_STR    "cdvfb.dll"'),
     ],
 }
-COPIED = ["color.c", "debug.c", "debug.h", "palette.c", "pointer.c", "screen.c", "makefile"]
+COPIED = ["color.c", "debug.c", "debug.h", "palette.c", "screen.c", "makefile"]
 RENAMED = {"framebuf.rc": "cdvfb.rc"}
 
 SOURCES = """MAJORCOMP=ntos

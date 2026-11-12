@@ -169,8 +169,19 @@ clip (CLIPOBJ_bEnum), and DrvBitBlt sends a plain SRCCOPY to DrvCopyBits.
 copy out, 42 ms a screen, so the copy out to the frame buffer is some
 25 ms a screen (about 330 MB/s): writes to it are not slow, only reads were.
 
-Left: the pointer in the driver (DrvSetPointerShape/DrvMovePointer, drawn only in the
-frame buffer, SPS_ACCEPT_NOEXCLUDE); a DrvEscape with what changed, and
+The pointer (same day, after the commit of the above): the driver's own
+DrvSetPointerShape and DrvMovePointer keep the shape (64x64 at most, mono or
+colour of any depth through the XLATEOBJ; two words a pixel, and/xor) and
+vShadowFlush puts it over what it copies out, so it is only ever in the
+frame buffer: what is under it is always in the shadow, a move copies out
+where it was and where it is, nothing reads it, and SPS_ACCEPT_NOEXCLUDE
+has GDI leave it alone. Other shapes are declined (GDI's pointer, as
+before); without a shadow framebuf's code runs (FbSetPointerShape). Seen in
+QEMU (the arrow, moved, no trail); on the Pi it runs and -bench is as
+before; the user looked at the Pi's own screen (2026-11-12): the pointer is
+there, moves without trails and no longer flickers.
+
+Left: a DrvEscape with what changed, and
 screen.c using it in place of cdvhook.dll; install from the settings window;
 the new agent (build/arm of m900's `cdv-build/src`, on the Pi as
 `C:\APPS\cdv-new.exe`) is not installed nor run in a session.

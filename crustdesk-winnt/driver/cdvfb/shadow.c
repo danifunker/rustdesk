@@ -9,6 +9,8 @@
  * banked VGA drivers do (displays\vga64k), and then copies the rectangle that
  * changed out to the frame buffer. Nothing ever reads the frame buffer.
  *
+ * The pointer is the driver's too, drawn only on the frame buffer (below).
+ *
  * The rest of the driver is framebuf's, with the few edits of stage.py.
  * If the shadow cannot be had (no memory), it is framebuf: see
  * hsurfShadowEnable. */
@@ -41,6 +43,8 @@ HSURF hsurfShadowEnable(PPDEV ppdev, SIZEL sizl, ULONG ulBitmapType, FLONG flHoo
     ppdev->pjShadow = NULL;
     ppdev->psoShadow = NULL;
     ppdev->hsurfShadow = (HSURF)0;
+    ppdev->pulPtrAnd = ppdev->pulPtrXor = NULL;
+    ppdev->bPtrVisible = FALSE;
 
     ppdev->pjShadow = (PBYTE)EngAllocMem(FL_ZERO_MEMORY, cj, ALLOC_TAG);
     if (ppdev->pjShadow != NULL) {
@@ -51,6 +55,11 @@ HSURF hsurfShadowEnable(PPDEV ppdev, SIZEL sizl, ULONG ulBitmapType, FLONG flHoo
             hsurf = EngCreateDeviceSurface((DHSURF)ppdev, sizl, ulBitmapType);
             if (hsurf != (HSURF)0 && EngAssociateSurface(hsurf, ppdev->hdevEng, SHADOW_HOOKS)) {
                 ppdev->hsurfShadow = hsurfBm;
+                ppdev->bPtrVisible = FALSE;
+                ppdev->sizlPtr.cx = ppdev->sizlPtr.cy = 0;
+                ppdev->pulPtrAnd = (ULONG *)EngAllocMem(0, 2 * PTR_MAX * PTR_MAX * sizeof(ULONG),
+                                                        ALLOC_TAG);
+                ppdev->pulPtrXor = ppdev->pulPtrAnd ? ppdev->pulPtrAnd + PTR_MAX * PTR_MAX : NULL;
                 ShadowPrint("shadow of %ld bytes at %p for the frame buffer at %p\n", cj,
                             ppdev->pjShadow, ppdev->pjScreen);
                 vShadowFlushAll(ppdev);
@@ -80,6 +89,11 @@ HSURF hsurfShadowEnable(PPDEV ppdev, SIZEL sizl, ULONG ulBitmapType, FLONG flHoo
 
 VOID vShadowDisable(PPDEV ppdev)
 {
+    ppdev->bPtrVisible = FALSE;
+    if (ppdev->pulPtrAnd != NULL) {
+        EngFreeMem(ppdev->pulPtrAnd);
+        ppdev->pulPtrAnd = ppdev->pulPtrXor = NULL;
+    }
     if (ppdev->psoShadow != NULL) {
         EngUnlockSurface(ppdev->psoShadow);
         ppdev->psoShadow = NULL;
@@ -94,13 +108,20 @@ VOID vShadowDisable(PPDEV ppdev)
     }
 }
 
-/* Copy a rectangle of the shadow out to the frame buffer. */
+/* Copy a rectangle of the shadow out to the frame buffer, with the pointer
+ * over it where the pointer is: the pointer is never in the shadow, so what
+ * is under it is always there to put back, and a program reading the screen
+ * never sees it. */
 VOID vShadowFlush(PPDEV ppdev, RECTL *prcl)
 {
     SURFOBJ *pso = ppdev->psoShadow;
-    LONG l = prcl->left, t = prcl->top, r = prcl->right, b = prcl->bottom, y;
-    ULONG cjPel = ppdev->ulBitCount / 8, cj;
-    PBYTE pj;
+    LONG l = prcl->left, t = prcl->top, r = prcl->right, b = prcl->bottom, y, x, x0, x1;
+    LONG pl = 0, pt = 0, pr = 0, pb = 0;
+    ULONG cjPel = ppdev->ulBitCount / 8, cj, ul;
+    ULONG aul[PTR_MAX];
+    ULONG *pulAnd, *pulXor, *pulSrc;
+    PBYTE pj, pjOut;
+    BOOL bPtr;
 
     if (pso == NULL)
         return;
@@ -125,11 +146,41 @@ VOID vShadowFlush(PPDEV ppdev, RECTL *prcl)
     if (l >= r || t >= b)
         return;
 
+    /* the pointer's part of this rectangle */
+    bPtr = ppdev->bPtrVisible;
+    if (bPtr) {
+        pl = ppdev->ptlPtr.x > l ? ppdev->ptlPtr.x : l;
+        pt = ppdev->ptlPtr.y > t ? ppdev->ptlPtr.y : t;
+        pr = ppdev->ptlPtr.x + ppdev->sizlPtr.cx < r ? ppdev->ptlPtr.x + ppdev->sizlPtr.cx : r;
+        pb = ppdev->ptlPtr.y + ppdev->sizlPtr.cy < b ? ppdev->ptlPtr.y + ppdev->sizlPtr.cy : b;
+        if (pl >= pr || pt >= pb)
+            bPtr = FALSE;
+    }
+
     cj = (ULONG)(r - l) * cjPel;
     pj = (PBYTE)pso->pvScan0 + t * pso->lDelta + (ULONG)l * cjPel;
     for (y = t; y < b; y++) {
         /* the frame buffer is laid out as the shadow is */
-        RtlMoveMemory(ppdev->pjScreen + (pj - ppdev->pjShadow), pj, cj);
+        pjOut = ppdev->pjScreen + (pj - ppdev->pjShadow);
+        if (!bPtr || y < pt || y >= pb) {
+            RtlMoveMemory(pjOut, pj, cj);
+        } else {
+            /* left of the pointer, the pointer over what is under it, right of it */
+            x0 = pl - l;
+            x1 = pr - l;
+            if (x0 > 0)
+                RtlMoveMemory(pjOut, pj, (ULONG)x0 * 4);
+            pulSrc = (ULONG *)pj + x0;
+            pulAnd = ppdev->pulPtrAnd + (y - ppdev->ptlPtr.y) * PTR_MAX + (pl - ppdev->ptlPtr.x);
+            pulXor = ppdev->pulPtrXor + (y - ppdev->ptlPtr.y) * PTR_MAX + (pl - ppdev->ptlPtr.x);
+            for (x = 0; x < x1 - x0; x++) {
+                ul = pulSrc[x];
+                aul[x] = (ul & pulAnd[x]) ^ pulXor[x];
+            }
+            RtlMoveMemory(pjOut + (ULONG)x0 * 4, aul, (ULONG)(x1 - x0) * 4);
+            if (x1 < r - l)
+                RtlMoveMemory(pjOut + (ULONG)x1 * 4, pj + (ULONG)x1 * 4, (ULONG)(r - l - x1) * 4);
+        }
         pj += pso->lDelta;
     }
 }
@@ -367,4 +418,156 @@ BOOL DrvPaint(SURFOBJ *pso, CLIPOBJ *pco, BRUSHOBJ *pbo, POINTL *pptlBrushOrg, M
     b = EngPaint(ppdev->psoShadow, pco, pbo, pptlBrushOrg, mix);
     vFlushClip(ppdev, pco);
     return b;
+}
+
+/* ---- the pointer ---------------------------------------------------------------
+ *
+ * framebuf has GDI draw the pointer when the miniport has none in hardware,
+ * as PINT's has not: GDI then takes it off the screen for every drawing and
+ * every read that touches it (the flicker), and a program reading the screen
+ * gets it in the picture. Here the driver keeps the shape and puts it over
+ * what it copies out (vShadowFlush), so it accepts every shape it can hold
+ * with SPS_ACCEPT_NOEXCLUDE: GDI need not move it out of the way of
+ * anything. GCAPS_ASYNCMOVE is not set, so moves come under the same lock as
+ * drawing. A shape is two words a pixel, PTR_MAX square at most: what stays
+ * of the screen (and), then what is put on it (xor). */
+
+static VOID vPtrRect(PPDEV ppdev, RECTL *prcl)
+{
+    prcl->left = ppdev->ptlPtr.x;
+    prcl->top = ppdev->ptlPtr.y;
+    prcl->right = ppdev->ptlPtr.x + ppdev->sizlPtr.cx;
+    prcl->bottom = ppdev->ptlPtr.y + ppdev->sizlPtr.cy;
+}
+
+/* A pixel of a bitmap of any depth, as it is stored. */
+static ULONG ulPel(SURFOBJ *pso, LONG x, LONG y)
+{
+    PBYTE pj = (PBYTE)pso->pvScan0 + y * pso->lDelta;
+    switch (pso->iBitmapFormat) {
+    case BMF_1BPP:
+        return (pj[x >> 3] >> (7 - (x & 7))) & 1;
+    case BMF_4BPP:
+        return (x & 1) ? (ULONG)(pj[x >> 1] & 15) : (ULONG)(pj[x >> 1] >> 4);
+    case BMF_8BPP:
+        return pj[x];
+    case BMF_16BPP:
+        return (ULONG)pj[x * 2] | (ULONG)pj[x * 2 + 1] << 8;
+    case BMF_24BPP:
+        return (ULONG)pj[x * 3] | (ULONG)pj[x * 3 + 1] << 8 | (ULONG)pj[x * 3 + 2] << 16;
+    default:
+        return ((ULONG *)pj)[x];
+    }
+}
+
+/* Take the shape in. FALSE: not one this driver draws. */
+static BOOL bPtrShape(PPDEV ppdev, SURFOBJ *psoMask, SURFOBJ *psoColor, XLATEOBJ *pxlo)
+{
+    LONG cx, cy, x, y;
+    ULONG a, c;
+
+    if (ppdev->pulPtrAnd == NULL || ppdev->ulBitCount != 32 || psoMask->iType != STYPE_BITMAP ||
+        psoMask->iBitmapFormat != BMF_1BPP || psoMask->pvScan0 == NULL)
+        return FALSE;
+    cx = psoMask->sizlBitmap.cx;
+    cy = psoMask->sizlBitmap.cy / 2;
+    if (cx <= 0 || cy <= 0 || cx > PTR_MAX || cy > PTR_MAX)
+        return FALSE;
+    if (psoColor != NULL) {
+        if (psoColor->iType != STYPE_BITMAP || psoColor->pvScan0 == NULL ||
+            psoColor->sizlBitmap.cx < cx || psoColor->sizlBitmap.cy < cy)
+            return FALSE;
+        switch (psoColor->iBitmapFormat) {
+        case BMF_1BPP:
+        case BMF_4BPP:
+        case BMF_8BPP:
+        case BMF_16BPP:
+        case BMF_24BPP:
+        case BMF_32BPP:
+            break;
+        default:
+            return FALSE;
+        }
+    }
+    for (y = 0; y < cy; y++)
+        for (x = 0; x < cx; x++) {
+            a = ulPel(psoMask, x, y); /* 1: the screen stays */
+            if (psoColor != NULL) {
+                c = ulPel(psoColor, x, y);
+                if (pxlo != NULL && !(pxlo->flXlate & XO_TRIVIAL))
+                    c = XLATEOBJ_iXlate(pxlo, c);
+                c &= 0x00FFFFFF;
+            } else {
+                c = ulPel(psoMask, x, y + cy) ? 0x00FFFFFF : 0; /* white, or inverted */
+            }
+            ppdev->pulPtrAnd[y * PTR_MAX + x] = a ? 0xFFFFFFFF : 0;
+            ppdev->pulPtrXor[y * PTR_MAX + x] = c;
+        }
+    ppdev->sizlPtr.cx = cx;
+    ppdev->sizlPtr.cy = cy;
+    return TRUE;
+}
+
+VOID DrvMovePointer(SURFOBJ *pso, LONG x, LONG y, RECTL *prcl)
+{
+    PPDEV ppdev = (PPDEV)pso->dhpdev;
+    RECTL rclOld;
+    BOOL bWas;
+
+    if (ppdev->psoShadow == NULL) {
+        FbMovePointer(pso, x, y, prcl);
+        return;
+    }
+    bWas = ppdev->bPtrVisible;
+    vPtrRect(ppdev, &rclOld);
+    if (x == -1 || ppdev->sizlPtr.cx == 0) {
+        ppdev->bPtrVisible = FALSE;
+    } else {
+        ppdev->ptlPtr.x = x - ppdev->ptlPtrHot.x;
+        ppdev->ptlPtr.y = y - ppdev->ptlPtrHot.y;
+        ppdev->bPtrVisible = TRUE;
+    }
+    /* where it was, as the screen is now; then where it is */
+    if (bWas)
+        vShadowFlush(ppdev, &rclOld);
+    if (ppdev->bPtrVisible) {
+        vPtrRect(ppdev, &rclOld);
+        vShadowFlush(ppdev, &rclOld);
+        if (prcl != NULL)
+            *prcl = rclOld;
+    }
+}
+
+ULONG DrvSetPointerShape(SURFOBJ *pso, SURFOBJ *psoMask, SURFOBJ *psoColor, XLATEOBJ *pxlo,
+                         LONG xHot, LONG yHot, LONG x, LONG y, RECTL *prcl, FLONG fl)
+{
+    PPDEV ppdev = (PPDEV)pso->dhpdev;
+    RECTL rcl;
+
+    if (ppdev->psoShadow == NULL)
+        return FbSetPointerShape(pso, psoMask, psoColor, pxlo, xHot, yHot, x, y, prcl, fl);
+
+    /* the old one off */
+    if (ppdev->bPtrVisible) {
+        ppdev->bPtrVisible = FALSE;
+        vPtrRect(ppdev, &rcl);
+        vShadowFlush(ppdev, &rcl);
+    }
+    ppdev->sizlPtr.cx = ppdev->sizlPtr.cy = 0;
+    if (psoMask == NULL)
+        return SPS_ACCEPT_NOEXCLUDE; /* no pointer at all */
+    if (!bPtrShape(ppdev, psoMask, psoColor, pxlo))
+        return SPS_DECLINE; /* GDI draws this one, through the calls above */
+    ppdev->ptlPtrHot.x = xHot;
+    ppdev->ptlPtrHot.y = yHot;
+    if (x != -1) {
+        ppdev->ptlPtr.x = x - xHot;
+        ppdev->ptlPtr.y = y - yHot;
+        ppdev->bPtrVisible = TRUE;
+        vPtrRect(ppdev, &rcl);
+        vShadowFlush(ppdev, &rcl);
+        if (prcl != NULL)
+            *prcl = rcl;
+    }
+    return SPS_ACCEPT_NOEXCLUDE;
 }
