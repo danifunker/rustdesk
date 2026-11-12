@@ -12,7 +12,9 @@
 
 static HDC mem;
 static HBITMAP dib, old_bm;
-static uint8_t *bits;      /* the DIB section: top-down BGRX */
+static uint8_t *bits;      /* the DIB section: top-down BGRX, or RGBX (red_at) */
+static int red_at = 2;     /* the byte of a pixel that is red: 2, or 0 on a screen
+                            * of red-first pixels (blue is at 2 - red_at) */
 static uint8_t *prev;      /* what the peer was last given the chance to see */
 static int stride;         /* bytes per row of both */
 static int next_row;       /* the band the round of the screen reads next */
@@ -66,7 +68,47 @@ int screen_open(cdv_screen *s)
     bi.bmiHeader.biCompression = BI_RGB;
     sdc = GetDC(NULL);
     mem = CreateCompatibleDC(sdc);
-    dib = CreateDIBSection(sdc, &bi, DIB_RGB_COLORS, (void **)&bits, NULL, 0);
+    /* A screen whose 32-bit pixels have red in the low byte (PINT's, on a
+     * real Pi) into the usual DIB, blue there, has GDI translate every pixel
+     * through a function: half of a read's time there, and all of it once a
+     * display driver keeps the screen in ordinary memory. A DIB section with
+     * the screen's own masks is copied as it is; the planes are made from
+     * either order. The masks: a compatible bitmap asked for its format
+     * twice (the header, then the masks). */
+    red_at = 2;
+    dib = NULL;
+    {
+        struct {
+            BITMAPINFOHEADER h;
+            DWORD m[256];
+        } own;
+        HBITMAP cb = CreateCompatibleBitmap(sdc, 1, 1);
+        memset(&own, 0, sizeof own);
+        own.h.biSize = sizeof own.h;
+        if (cb) {
+            GetDIBits(sdc, cb, 0, 0, NULL, (BITMAPINFO *)&own, DIB_RGB_COLORS);
+            GetDIBits(sdc, cb, 0, 0, NULL, (BITMAPINFO *)&own, DIB_RGB_COLORS);
+            DeleteObject(cb);
+            if (own.h.biBitCount == 32 && own.h.biCompression == BI_BITFIELDS &&
+                own.m[0] == 0x000000ffUL && own.m[1] == 0x0000ff00UL && own.m[2] == 0x00ff0000UL) {
+                own.h.biWidth = s->width;
+                own.h.biHeight = -s->height;
+                own.h.biPlanes = 1;
+                own.h.biSizeImage = 0;
+                dib = CreateDIBSection(sdc, (BITMAPINFO *)&own, DIB_RGB_COLORS, (void **)&bits, NULL,
+                                       0);
+                if (dib && bits) {
+                    red_at = 0;
+                    cdv_log("screen: red-first pixels, read as they are");
+                } else if (dib) {
+                    DeleteObject(dib);
+                    dib = NULL;
+                }
+            }
+        }
+    }
+    if (!dib)
+        dib = CreateDIBSection(sdc, &bi, DIB_RGB_COLORS, (void **)&bits, NULL, 0);
     ReleaseDC(NULL, sdc);
     if (!mem || !dib || !bits) {
         cdv_log("screen: no DIB section for %dx%d (error %lu)", s->width, s->height,
@@ -151,7 +193,7 @@ static uint8_t clamp8(int v)
     return (uint8_t)(v < 0 ? 0 : v > 255 ? 255 : v);
 }
 
-/* One macroblock of BGRX at (mx, my), into the planes; the screen's edge
+/* One macroblock of BGRX (or RGBX: red_at) at (mx, my), into the planes; the screen's edge
  * repeats into a macroblock it only partly covers. 1 if it is one colour. */
 static int convert_mb(cdv_screen *s, int mx, int my)
 {
@@ -174,7 +216,7 @@ static int convert_mb(cdv_screen *s, int mx, int my)
             p[2] = r1 + sx0 * 4;
             p[3] = r1 + sx1 * 4;
             for (i = 0; i < 4; i++) {
-                int b = p[i][0], g = p[i][1], r = p[i][2];
+                int b = p[i][2 - red_at], g = p[i][1], r = p[i][red_at];
                 uint8_t *dst = yp + (y + (i >> 1)) * s->ystride + x + (i & 1);
                 *dst = clamp8(((66 * r + 129 * g + 25 * b + 128) >> 8) + 16);
                 R += r;
@@ -555,9 +597,9 @@ void screen_rgb_row(const cdv_screen *s, int y, uint8_t *out)
     const uint8_t *p = bits + (size_t)y * stride;
     int x;
     for (x = 0; x < s->width; x++, p += 4) {
-        *out++ = p[2];
+        *out++ = p[red_at];
         *out++ = p[1];
-        *out++ = p[0];
+        *out++ = p[2 - red_at];
     }
 }
 

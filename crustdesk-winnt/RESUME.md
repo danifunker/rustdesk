@@ -112,6 +112,81 @@ the pointer flashed on the Pi's own screen: its pointer is drawn by GDI
 and the old path reads the rows round the pointer every look
 (screen.c screen_collect). Hence the DLL inside the ARM .exe since.
 
+PINT already maps the frame buffer as normal noncacheable memory (tbarm.c
+KiInstallTbEntry, the VideoCore pages) and moves memory in 32-byte LDM
+blocks (rtl/xxmvmem.asm), so no mapping change is left to make. `-bench`
+(bench.c, build 20261111-06c92add9) on the real Pi at 1920x1080 32-bit:
+
+    RAM copy              14.2 ms   556 MB/s
+    DIB -> DIB            13.2 ms   601 MB/s   (GDI costs nothing)
+    screen -> DIB        787 ms      10 MB/s   (60x slower)
+    screen, 256x64 pieces 857 ms      9 MB/s   (136 BitBlts: calls cheap)
+    128x80 at pointer     4.9 ms       8 MB/s   (the pointer: +0.7 ms)
+    128x80 away from it   4.2 ms       9 MB/s
+
+So the frame buffer itself is the cost: reading it uncached is 60 times
+slower than cached memory, and nothing in GDI or the agent adds much. A
+display driver that keeps the screen in cached memory (a shadow frame
+buffer, copying what changed out to the VideoCore's) would make a whole
+screen about 14 ms instead of 790; NT 4.0 has no mirror drivers.
+
+**cdvfb, that driver** (2026-11-11, `driver/cdvfb`: `shadow.c` and
+`stage.py`, which stages NT's framebuf with a few edits as a PINT driver
+component; no NT source is kept here). A device surface over a bitmap in
+pool memory; DrvCopyBits, DrvBitBlt, DrvTextOut, DrvStrokePath and DrvPaint
+hand each call to GDI's Eng routine on that bitmap (as displays\vga64k
+does) and copy the rectangle out to the frame buffer at once. Without the
+memory it is framebuf. The pointer is still GDI's (framebuf's code declines
+it). Built on m900 (`/run/media/dani/BigDisk/cdv-build`, a copy of the
+user's PINT build tree: `ROOT=/work/RASPI/drivers build/make-driver.sh
+cdvfb`), run in QEMU raspi2b on 1 and 4 processors (`cdv-kd/boot.sh`), then
+on the real Pi (192.168.99.199), installed as `InstalledDisplayDrivers` =
+"cdvfb" "framebuf" under `Services\Bcmvideo\Device0` (USER tries each in
+turn: ntuser\kernel\drvsup.c UserLoadDisplayDriver), so deleting
+`WINNT\System32\cdvfb.dll` from the card is the way back.
+
+What the first run showed: the shadow alone only halved a read (787 to
+423 ms). **The Pi's pixels are red-first** (masks ff, ff00, ff0000;
+bcmvideo, the firmware's pixel order) and the agent's DIB is blue-first, so
+GDI translated every pixel through a function. Two answers, both in:
+DrvCopyBits swaps red and blue itself for a screen-to-32-bit-DIB copy
+(`bCopySwapped`), and screen.c reads into a DIB section with the screen's
+own masks when they are those (`red_at`; convert_mb and screen_rgb_row take
+either order). `-bench` gained "screen -> own DIB" and two writes
+(DIB -> screen). On the Pi, 1920x1080:
+
+                          framebuf   cdvfb    + read swap   + write swap
+    screen -> DIB          787 ms    337 ms     44 ms         33 ms  (237 MB/s)
+    screen, 136 pieces     857 ms    343 ms     48 ms         39 ms
+    screen -> own DIB         -       15 ms     23 ms         23 ms  (345 MB/s)
+    128x80 by the pointer   4.9 ms   1.8 ms    0.21 ms       0.21 ms
+    DIB -> screen             -      380 ms    383 ms         66 ms  (119 MB/s)
+    own DIB -> screen         -        -         -            42 ms  (188 MB/s)
+
+The write swap (same day): `bCopySwapped` goes both ways and through any
+clip (CLIPOBJ_bEnum), and DrvBitBlt sends a plain SRCCOPY to DrvCopyBits.
+"own DIB -> screen" has nothing to translate: a copy into the shadow and the
+copy out, 42 ms a screen, so the copy out to the frame buffer is some
+25 ms a screen (about 330 MB/s): writes to it are not slow, only reads were.
+
+Left: the pointer in the driver (DrvSetPointerShape/DrvMovePointer, drawn only in the
+frame buffer, SPS_ACCEPT_NOEXCLUDE); a DrvEscape with what changed, and
+screen.c using it in place of cdvhook.dll; install from the settings window;
+the new agent (build/arm of m900's `cdv-build/src`, on the Pi as
+`C:\APPS\cdv-new.exe`) is not installed nor run in a session.
+
+**pintkd** (`tools/pintkd.py`): a host for NT 4.0's kernel debugger on ARM,
+which had none; serial, TCP or a unix socket (QEMU). Shows DbgPrint, module
+loads, stops with registers and names from .map files, memory, a stack scan,
+breakpoints. It found two things in PINT's kernel: with DEBUG and more than
+one processor, a debugger event while another processor runs user code ends
+in STOP 0x2B (KiPanicStackSwitch at that processor's next system call), so
+NUMPROC=1 or CRASHDEBUG; and no clock tick polls for a break-in. The Pi's
+OSLOADOPTIONS are `SOS CRASHDEBUG BAUDRATE=115200` (`C:\SDKTOOLS\NVRAM.EXE
+/set OSLOADOPTIONS = "..."`); the debug probe's UART is /dev/cu.usbmodem2102
+on the Mac. The agent's terminal does not open on the Pi (the tray never
+answers); commands were typed into a cmd window on its desktop instead.
+
 **Alpha** (2026-11-05, build 20261105-e32184f8b): the staged tree built
 unchanged by Visual C++ 6.0 on NT 4.0 for Alpha (`nmake` in `build\stage`;
 the only change it needed was CRLF in the staged sources, for NT's editors).

@@ -15,6 +15,16 @@
  *   screen, at pointer  128x80 round the pointer (GDI takes a pointer it
  *                       draws itself off the screen for that), and the same
  *                       size far from it
+ *   screen -> own DIB   the whole screen into a DIB section with the screen's
+ *                       own colour masks (a screen of red-first pixels, as
+ *                       PINT's is, into the usual blue-first DIB has GDI
+ *                       translate every pixel)
+ *   DIB -> screen       the picture just read, put back: what a write to the
+ *                       frame buffer costs, which a shadow frame buffer pays
+ *                       for everything drawn (its copy out)
+ *   DIB -> scr, pieces  the same in 256x64 pieces
+ *   own DIB -> screen   the same from the own-order DIB: nothing to translate,
+ *                       so what a shadow's copy out costs by itself
  *
  * Each runs for a second or more. MB/s is of the 32-bit pixels delivered,
  * whatever the screen's depth. The pointer flickers while it runs. */
@@ -27,7 +37,7 @@
 
 #define RUN_MS 1000
 
-static HDC sdc, dc_a, dc_b;
+static HDC sdc, dc_a, dc_b, dc_n;
 static int sw, sh;
 static uint8_t *ram_a, *ram_b;
 static int px, py; /* the rectangle of the pointer tests */
@@ -63,6 +73,12 @@ static void screen_whole(void)
     GdiFlush();
 }
 
+static void screen_native(void)
+{
+    BitBlt(dc_n, 0, 0, sw, sh, sdc, 0, 0, SRCCOPY);
+    GdiFlush();
+}
+
 static long pieces;
 
 static void screen_pieces(void)
@@ -82,6 +98,34 @@ static void screen_pieces(void)
 static void screen_rect(void)
 {
     BitBlt(dc_a, px, py, 128, 80, sdc, px, py, SRCCOPY);
+    GdiFlush();
+}
+
+/* The other way: the picture in dc_a (the screen's own, read just before) put
+ * back on the screen, so nothing changes to the eye. */
+static void write_whole(void)
+{
+    BitBlt(sdc, 0, 0, sw, sh, dc_a, 0, 0, SRCCOPY);
+    GdiFlush();
+}
+
+static void write_native(void)
+{
+    BitBlt(sdc, 0, 0, sw, sh, dc_n, 0, 0, SRCCOPY);
+    GdiFlush();
+}
+
+static void write_pieces(void)
+{
+    int x, y, w, h;
+    pieces = 0;
+    for (y = 0; y < sh; y += 64)
+        for (x = 0; x < sw; x += 256) {
+            w = sw - x < 256 ? sw - x : 256;
+            h = sh - y < 64 ? sh - y : 64;
+            BitBlt(sdc, x, y, w, h, dc_a, x, y, SRCCOPY);
+            pieces++;
+        }
     GdiFlush();
 }
 
@@ -114,9 +158,39 @@ static HBITMAP dib(int w, int h)
     return CreateDIBSection(sdc, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
 }
 
+/* A DIB section laid out as the screen's pixels are: a compatible bitmap,
+ * asked for its format twice (the header, then the masks). NULL when the
+ * screen is not 16- or 32-bit with masks. */
+static HBITMAP dib_like_screen(int w, int h, char *what)
+{
+    struct {
+        BITMAPINFOHEADER h;
+        DWORD m[256];
+    } bi;
+    HBITMAP cb;
+    void *bits;
+    memset(&bi, 0, sizeof bi);
+    bi.h.biSize = sizeof bi.h;
+    cb = CreateCompatibleBitmap(sdc, 1, 1);
+    if (!cb)
+        return NULL;
+    GetDIBits(sdc, cb, 0, 0, NULL, (BITMAPINFO *)&bi, DIB_RGB_COLORS);
+    GetDIBits(sdc, cb, 0, 0, NULL, (BITMAPINFO *)&bi, DIB_RGB_COLORS);
+    DeleteObject(cb);
+    sprintf(what, "the screen's pixels: %d-bit, %s, masks %08lx %08lx %08lx\r\n", bi.h.biBitCount,
+            bi.h.biCompression == BI_BITFIELDS ? "bit fields" : "RGB", (unsigned long)bi.m[0],
+            (unsigned long)bi.m[1], (unsigned long)bi.m[2]);
+    if (bi.h.biCompression != BI_BITFIELDS || (bi.h.biBitCount != 32 && bi.h.biBitCount != 16))
+        return NULL;
+    bi.h.biWidth = w;
+    bi.h.biHeight = -h;
+    bi.h.biSizeImage = 0;
+    return CreateDIBSection(sdc, (BITMAPINFO *)&bi, DIB_RGB_COLORS, &bits, NULL, 0);
+}
+
 int bench(void (*out)(const char *))
 {
-    HBITMAP bm_a, bm_b, old_a, old_b;
+    HBITMAP bm_a, bm_b, bm_n, old_a, old_b, old_n;
     SYSTEM_INFO si;
     POINT pt;
     long n;
@@ -160,6 +234,15 @@ int bench(void (*out)(const char *))
     ms = timed(screen_pieces, &n);
     line("screen, pieces", ms, n, whole, pieces);
 
+    bm_n = dib_like_screen(sw, sh, b);
+    strcat(report, b);
+    if (bm_n) {
+        dc_n = CreateCompatibleDC(sdc);
+        old_n = (HBITMAP)SelectObject(dc_n, bm_n);
+        ms = timed(screen_native, &n);
+        line("screen -> own DIB", ms, n, whole, 1);
+    }
+
     if (GetCursorPos(&pt)) {
         px = pt.x - 64;
         py = pt.y - 32;
@@ -179,6 +262,24 @@ int bench(void (*out)(const char *))
         ms = timed(screen_rect, &n);
         line("screen, no pointer", ms, n, 128.0 * 80 * 4, 1);
     }
+
+    /* The writes last: what changed on the screen while they ran is drawn
+     * again afterwards. */
+    screen_whole();
+    ms = timed(write_whole, &n);
+    line("DIB -> screen", ms, n, whole, 1);
+    screen_whole();
+    ms = timed(write_pieces, &n);
+    line("DIB -> scr, pieces", ms, n, whole, pieces);
+    if (bm_n) {
+        screen_native();
+        ms = timed(write_native, &n);
+        line("own DIB -> screen", ms, n, whole, 1);
+        SelectObject(dc_n, old_n);
+        DeleteDC(dc_n);
+        DeleteObject(bm_n);
+    }
+    InvalidateRect(NULL, NULL, TRUE);
 
     SelectObject(dc_a, old_a);
     SelectObject(dc_b, old_b);
