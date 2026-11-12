@@ -59,6 +59,9 @@ int screen_settling(void);
 
 /* Is a band of the screen still to be read in this pass? */
 int screen_pending(const cdv_screen *s);
+/* 1 when the display driver says what changes (cdvfb on PINT): the screen
+ * hooks are not wanted then. */
+int screen_driver(void);
 
 void screen_mark_all(cdv_screen *s);
 /* Only the macroblocks marked in `sent` were sent: the rest stay dirty. */

@@ -18,6 +18,8 @@
 #include "driver.h"
 
 #undef RtlMoveMemory
+#undef RtlZeroMemory
+#define RtlZeroMemory(p, n) memset((p), 0, (n))
 VOID NTAPI RtlMoveMemory(PVOID Destination, CONST VOID *Source, ULONG Length);
 
 #define SHADOW_HOOKS (HOOK_BITBLT | HOOK_TEXTOUT | HOOK_COPYBITS | HOOK_STROKEPATH | HOOK_PAINT)
@@ -45,6 +47,7 @@ HSURF hsurfShadowEnable(PPDEV ppdev, SIZEL sizl, ULONG ulBitmapType, FLONG flHoo
     ppdev->hsurfShadow = (HSURF)0;
     ppdev->pulPtrAnd = ppdev->pulPtrXor = NULL;
     ppdev->bPtrVisible = FALSE;
+    ppdev->pjDirty = NULL;
 
     ppdev->pjShadow = (PBYTE)EngAllocMem(FL_ZERO_MEMORY, cj, ALLOC_TAG);
     if (ppdev->pjShadow != NULL) {
@@ -55,6 +58,10 @@ HSURF hsurfShadowEnable(PPDEV ppdev, SIZEL sizl, ULONG ulBitmapType, FLONG flHoo
             hsurf = EngCreateDeviceSurface((DHSURF)ppdev, sizl, ulBitmapType);
             if (hsurf != (HSURF)0 && EngAssociateSurface(hsurf, ppdev->hdevEng, SHADOW_HOOKS)) {
                 ppdev->hsurfShadow = hsurfBm;
+                ppdev->cxTiles = ((ULONG)sizl.cx + DIRTY_TILE - 1) / DIRTY_TILE;
+                ppdev->cyTiles = ((ULONG)sizl.cy + DIRTY_TILE - 1) / DIRTY_TILE;
+                ppdev->cjDirty = (ppdev->cxTiles * ppdev->cyTiles + 7) / 8;
+                ppdev->pjDirty = (PBYTE)EngAllocMem(FL_ZERO_MEMORY, ppdev->cjDirty, ALLOC_TAG);
                 ppdev->bPtrVisible = FALSE;
                 ppdev->sizlPtr.cx = ppdev->sizlPtr.cy = 0;
                 ppdev->pulPtrAnd = (ULONG *)EngAllocMem(0, 2 * PTR_MAX * PTR_MAX * sizeof(ULONG),
@@ -89,6 +96,10 @@ HSURF hsurfShadowEnable(PPDEV ppdev, SIZEL sizl, ULONG ulBitmapType, FLONG flHoo
 
 VOID vShadowDisable(PPDEV ppdev)
 {
+    if (ppdev->pjDirty != NULL) {
+        EngFreeMem(ppdev->pjDirty);
+        ppdev->pjDirty = NULL;
+    }
     ppdev->bPtrVisible = FALSE;
     if (ppdev->pulPtrAnd != NULL) {
         EngFreeMem(ppdev->pulPtrAnd);
@@ -112,7 +123,7 @@ VOID vShadowDisable(PPDEV ppdev)
  * over it where the pointer is: the pointer is never in the shadow, so what
  * is under it is always there to put back, and a program reading the screen
  * never sees it. */
-VOID vShadowFlush(PPDEV ppdev, RECTL *prcl)
+VOID vShadowOut(PPDEV ppdev, RECTL *prcl)
 {
     SURFOBJ *pso = ppdev->psoShadow;
     LONG l = prcl->left, t = prcl->top, r = prcl->right, b = prcl->bottom, y, x, x0, x1;
@@ -183,6 +194,71 @@ VOID vShadowFlush(PPDEV ppdev, RECTL *prcl)
         }
         pj += pso->lDelta;
     }
+}
+
+/* What was drawn: marked for whoever asks what changed (DrvEscape), then
+ * copied out. The marks are a bit a tile of DIRTY_TILE pixels square. */
+VOID vShadowFlush(PPDEV ppdev, RECTL *prcl)
+{
+    LONG l = prcl->left, t = prcl->top, r = prcl->right, b = prcl->bottom, x, y;
+    ULONG i;
+
+    if (ppdev->pjDirty != NULL) {
+        if (l > r) {
+            x = l;
+            l = r;
+            r = x;
+        }
+        if (t > b) {
+            y = t;
+            t = b;
+            b = y;
+        }
+        if (l < 0)
+            l = 0;
+        if (t < 0)
+            t = 0;
+        if (r > (LONG)ppdev->cxScreen)
+            r = (LONG)ppdev->cxScreen;
+        if (b > (LONG)ppdev->cyScreen)
+            b = (LONG)ppdev->cyScreen;
+        if (l < r && t < b)
+            for (y = t / DIRTY_TILE; y <= (b - 1) / DIRTY_TILE; y++)
+                for (x = l / DIRTY_TILE; x <= (r - 1) / DIRTY_TILE; x++) {
+                    i = (ULONG)y * ppdev->cxTiles + (ULONG)x;
+                    ppdev->pjDirty[i >> 3] |= (BYTE)(1 << (i & 7));
+                }
+    }
+    vShadowOut(ppdev, prcl);
+}
+
+/* What changed since the last asking, for a program that shows the screen
+ * somewhere else (C-Desk-Vint): ExtEscape(hdc, CDVFB_ESC_TAKE, 0, NULL, n,
+ * out) on a screen DC. out gets four words (CDVFB_ESC_TAKE, tiles across,
+ * tiles down, bytes of marks) and, when it is large enough, the marks, a bit
+ * a tile, low bit first, which are then cleared; the result is the bytes
+ * given. GDI holds the lock drawing holds, so a mark made after the answer
+ * is in the next. */
+ULONG DrvEscape(SURFOBJ *pso, ULONG iEsc, ULONG cjIn, PVOID pvIn, ULONG cjOut, PVOID pvOut)
+{
+    PPDEV ppdev = (PPDEV)pso->dhpdev;
+    ULONG *pul = (ULONG *)pvOut;
+
+    if (ppdev == NULL || ppdev->pjDirty == NULL)
+        return 0;
+    if (iEsc == QUERYESCSUPPORT)
+        return cjIn >= sizeof(ULONG) && pvIn != NULL && *(ULONG *)pvIn == CDVFB_ESC_TAKE;
+    if (iEsc != CDVFB_ESC_TAKE || pvOut == NULL || cjOut < 4 * sizeof(ULONG))
+        return 0;
+    pul[0] = CDVFB_ESC_TAKE;
+    pul[1] = ppdev->cxTiles;
+    pul[2] = ppdev->cyTiles;
+    pul[3] = ppdev->cjDirty;
+    if (cjOut < 4 * sizeof(ULONG) + ppdev->cjDirty)
+        return 4 * sizeof(ULONG);
+    RtlMoveMemory(pul + 4, ppdev->pjDirty, ppdev->cjDirty);
+    RtlZeroMemory(ppdev->pjDirty, ppdev->cjDirty);
+    return 4 * sizeof(ULONG) + ppdev->cjDirty;
 }
 
 VOID vShadowFlushAll(PPDEV ppdev)
@@ -426,7 +502,7 @@ BOOL DrvPaint(SURFOBJ *pso, CLIPOBJ *pco, BRUSHOBJ *pbo, POINTL *pptlBrushOrg, M
  * as PINT's has not: GDI then takes it off the screen for every drawing and
  * every read that touches it (the flicker), and a program reading the screen
  * gets it in the picture. Here the driver keeps the shape and puts it over
- * what it copies out (vShadowFlush), so it accepts every shape it can hold
+ * what it copies out (vShadowOut), so it accepts every shape it can hold
  * with SPS_ACCEPT_NOEXCLUDE: GDI need not move it out of the way of
  * anything. GCAPS_ASYNCMOVE is not set, so moves come under the same lock as
  * drawing. A shape is two words a pixel, PTR_MAX square at most: what stays
@@ -529,10 +605,10 @@ VOID DrvMovePointer(SURFOBJ *pso, LONG x, LONG y, RECTL *prcl)
     }
     /* where it was, as the screen is now; then where it is */
     if (bWas)
-        vShadowFlush(ppdev, &rclOld);
+        vShadowOut(ppdev, &rclOld);
     if (ppdev->bPtrVisible) {
         vPtrRect(ppdev, &rclOld);
-        vShadowFlush(ppdev, &rclOld);
+        vShadowOut(ppdev, &rclOld);
         if (prcl != NULL)
             *prcl = rclOld;
     }
@@ -551,7 +627,7 @@ ULONG DrvSetPointerShape(SURFOBJ *pso, SURFOBJ *psoMask, SURFOBJ *psoColor, XLAT
     if (ppdev->bPtrVisible) {
         ppdev->bPtrVisible = FALSE;
         vPtrRect(ppdev, &rcl);
-        vShadowFlush(ppdev, &rcl);
+        vShadowOut(ppdev, &rcl);
     }
     ppdev->sizlPtr.cx = ppdev->sizlPtr.cy = 0;
     if (psoMask == NULL)
@@ -565,7 +641,7 @@ ULONG DrvSetPointerShape(SURFOBJ *pso, SURFOBJ *psoMask, SURFOBJ *psoColor, XLAT
         ppdev->ptlPtr.y = y - yHot;
         ppdev->bPtrVisible = TRUE;
         vPtrRect(ppdev, &rcl);
-        vShadowFlush(ppdev, &rcl);
+        vShadowOut(ppdev, &rcl);
         if (prcl != NULL)
             *prcl = rcl;
     }

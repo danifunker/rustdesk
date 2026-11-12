@@ -648,7 +648,8 @@ static int on_login(void *u, int file_transfer)
     sl->kind = K_DESKTOP;
     desk = sl;
     /* only while someone is looking: nothing is hooked between sessions */
-    hooks_start(scr.width, scr.height);
+    if (!screen_driver())
+        hooks_start(scr.width, scr.height);
     widen_dblclk();
     cdv_set_video(&sl->s, vidbuf, VID_CAP);
     S.enc = vp8e_init(encmem, scr.width, scr.height, prefs.q);

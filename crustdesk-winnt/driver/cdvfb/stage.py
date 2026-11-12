@@ -30,7 +30,11 @@ EDITS = {
          "    POINTL  ptlPtrHot;                  // cdvfb: its hot spot\n"
          "    SIZEL   sizlPtr;                    // cdvfb: its size, 0 when there is none\n"
          "    ULONG   *pulPtrAnd;                 // cdvfb: what stays of the screen\n"
-         "    ULONG   *pulPtrXor;                 // cdvfb: what is put on it\n"),
+         "    ULONG   *pulPtrXor;                 // cdvfb: what is put on it\n"
+         "    PBYTE   pjDirty;                    // cdvfb: a bit a tile drawn on since asked\n"
+         "    ULONG   cxTiles;                    // cdvfb: tiles across\n"
+         "    ULONG   cyTiles;                    // cdvfb: tiles down\n"
+         "    ULONG   cjDirty;                    // cdvfb: bytes of pjDirty\n"),
         ("VOID vDisableSURF(PPDEV);\n",
          "VOID vDisableSURF(PPDEV);\n"
          "HSURF hsurfShadowEnable(PPDEV, SIZEL, ULONG, FLONG);\n"
@@ -41,7 +45,10 @@ EDITS = {
          "VOID FbMovePointer(SURFOBJ *, LONG, LONG, RECTL *);\n"
          "ULONG FbSetPointerShape(SURFOBJ *, SURFOBJ *, SURFOBJ *, XLATEOBJ *, LONG, LONG, LONG,\n"
          "                        LONG, RECTL *, FLONG);\n"
-         "#define PTR_MAX 64                      // cdvfb: the largest pointer it draws\n"),
+         "#define PTR_MAX 64                      // cdvfb: the largest pointer it draws\n"
+         "VOID vShadowOut(PPDEV, RECTL *);\n"
+         "#define DIRTY_TILE 16                   // cdvfb: pixels a side of a tile of pjDirty\n"
+         "#define CDVFB_ESC_TAKE 0x43445630       // cdvfb: the escape that says what changed\n"),
         ('L"framebuf"', 'L"cdvfb"'),
         ('"FRAMEBUF: "', '"CDVFB: "'),
     ],
@@ -52,7 +59,8 @@ EDITS = {
          "    {   INDEX_DrvBitBlt,                (PFN) DrvBitBlt             },\n"
          "    {   INDEX_DrvTextOut,               (PFN) DrvTextOut            },\n"
          "    {   INDEX_DrvStrokePath,            (PFN) DrvStrokePath         },\n"
-         "    {   INDEX_DrvPaint,                 (PFN) DrvPaint              }\n"),
+         "    {   INDEX_DrvPaint,                 (PFN) DrvPaint              },\n"
+         "    {   INDEX_DrvEscape,                (PFN) DrvEscape             }\n"),
         # DrvEnableSurface: the surface is the shadow's
         ("""    hsurf = (HSURF) EngCreateBitmap(sizl,
                                     ppdev->lDeltaScreen,

@@ -22,6 +22,8 @@ static HDESK cur_desk;
 static char cur_name[64];
 static HCURSOR last_cursor;
 
+static void drv_detect(HDC sdc, const cdv_screen *s);
+
 static void free_all(cdv_screen *s)
 {
     if (mem) {
@@ -109,6 +111,7 @@ int screen_open(cdv_screen *s)
     }
     if (!dib)
         dib = CreateDIBSection(sdc, &bi, DIB_RGB_COLORS, (void **)&bits, NULL, 0);
+    drv_detect(sdc, s);
     ReleaseDC(NULL, sdc);
     if (!mem || !dib || !bits) {
         cdv_log("screen: no DIB section for %dx%d (error %lu)", s->width, s->height,
@@ -376,6 +379,58 @@ static int want_n, want_left, scan_row, echo_left;
 static uint32_t echo_at;
 static uint32_t round_at, console_at, consoles_at, input_at;
 static POINT last_pt;
+
+/* cdvfb, the shadow frame buffer display driver of PINT (driver/cdvfb), says
+ * what was drawn on: an escape gives a bit a 16-pixel tile -- a macroblock --
+ * drawn on since the last asking, whoever drew it (a console, the logon
+ * desktop, a program outside WM_PAINT) and after it was drawn. With it there
+ * is nothing to guess: no hooks, no second read, no round. */
+#define CDVFB_ESC_TAKE 0x43445630
+static int drv_on;
+static uint32_t *drv_buf;
+static int drv_bytes;
+
+static void drv_detect(HDC sdc, const cdv_screen *s)
+{
+    DWORD code = CDVFB_ESC_TAKE;
+    uint32_t hdr[4];
+    drv_on = 0;
+    free(drv_buf);
+    drv_buf = NULL;
+    memset(hdr, 0, sizeof hdr);
+    if (ExtEscape(sdc, QUERYESCSUPPORT, sizeof code, (LPCSTR)&code, 0, NULL) <= 0)
+        return;
+    if (ExtEscape(sdc, CDVFB_ESC_TAKE, 0, NULL, sizeof hdr, (LPSTR)hdr) != (int)sizeof hdr ||
+        hdr[0] != CDVFB_ESC_TAKE || (int)hdr[1] != s->mbw || (int)hdr[2] != s->mbh ||
+        hdr[3] > 1u << 20)
+        return;
+    drv_bytes = (int)(sizeof hdr + hdr[3]);
+    drv_buf = (uint32_t *)malloc((size_t)drv_bytes);
+    if (!drv_buf)
+        return;
+    drv_on = 1;
+    cdv_log("screen: the display driver says what changes (cdvfb)");
+}
+
+/* The driver's marks into fresh[]; 1 if there are any. */
+static int drv_take(HDC sdc, uint8_t *marks, int n)
+{
+    const uint8_t *bitsmap = (const uint8_t *)(drv_buf + 4);
+    int i, any = 0;
+    if (ExtEscape(sdc, CDVFB_ESC_TAKE, 0, NULL, drv_bytes, (LPSTR)drv_buf) != drv_bytes)
+        return 0;
+    for (i = 0; i < n; i++)
+        if (bitsmap[i >> 3] >> (i & 7) & 1) {
+            marks[i] = 1;
+            any = 1;
+        }
+    return any;
+}
+
+int screen_driver(void)
+{
+    return drv_on;
+}
 static int all_consoles;  /* this look reads the consoles behind too */
 
 static void want_rect(const cdv_screen *s, int l, int t, int r, int b)
@@ -450,6 +505,16 @@ static int collect_hinted(cdv_screen *s, HDC sdc, uint32_t budget_ms, uint32_t *
         if (!want_n)
             return 0;
     }
+    if (drv_on) {
+        /* marked once drawn, and all of it: read what is marked, no more */
+        if (drv_take(sdc, fresh, n))
+            for (i = 0; i < n; i++)
+                if (fresh[i]) {
+                    want[i] = 1;
+                    fresh[i] = 0;
+                }
+        goto read_wanted;
+    }
     if (hooks_take(fresh, s->mbw, s->mbh)) {
         for (i = 0; i < n; i++)
             if (fresh[i]) {
@@ -488,6 +553,7 @@ static int collect_hinted(cdv_screen *s, HDC sdc, uint32_t budget_ms, uint32_t *
         next_row = e < s->mbh ? e : 0;
     }
 
+read_wanted:
     /* each run of wanted macroblocks in a row (a gap of one is read through:
      * a BitBlt costs more than 16 pixels), grown down while the rows below
      * want all of the same columns, SPAN_ROWS at most; from where the last
@@ -539,7 +605,7 @@ void screen_collect(cdv_screen *s, uint32_t budget_ms)
         return;
     /* The hooks are on the Default desktop: the logon and locked screens
      * (Winlogon) are read the old way. */
-    if (hooks_active() && (!cur_name[0] || !strcmp(cur_name, "Default")) &&
+    if ((drv_on || (hooks_active() && (!cur_name[0] || !strcmp(cur_name, "Default")))) &&
         collect_hinted(s, sdc, budget_ms, &tr, &tc)) {
         ReleaseDC(NULL, sdc);
         s->read_ms = tr;
@@ -616,7 +682,7 @@ int screen_settling(void)
 int screen_pending(const cdv_screen *s)
 {
     (void)s;
-    return hooks_active() ? want_left : next_row != 0;
+    return drv_on || hooks_active() ? want_left : next_row != 0;
 }
 
 void screen_mark_all(cdv_screen *s)

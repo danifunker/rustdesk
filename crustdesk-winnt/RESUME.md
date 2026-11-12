@@ -181,10 +181,26 @@ QEMU (the arrow, moved, no trail); on the Pi it runs and -bench is as
 before; the user looked at the Pi's own screen (2026-11-12): the pointer is
 there, moves without trails and no longer flickers.
 
-Left: a DrvEscape with what changed, and
-screen.c using it in place of cdvhook.dll; install from the settings window;
-the new agent (build/arm of m900's `cdv-build/src`, on the Pi as
-`C:\APPS\cdv-new.exe`) is not installed nor run in a session.
+What changed (2026-11-12): vShadowFlush marks the 16-pixel tiles of what
+it copies out (not the pointer's moves: vShadowOut), and DrvEscape
+(CDVFB_ESC_TAKE, 0x43445630, through ExtEscape on a screen DC) gives four
+words (the code, tiles across and down, bytes of marks) and the marks, a
+bit a tile, clearing them; QUERYESCSUPPORT says it is there. screen.c
+(drv_detect, drv_take) asks at screen_open and, with the driver, a look
+reads exactly the marked macroblocks: no hooks (agent.c does not start
+them), no echo, no console guessing, no round, on any desktop. That is the
+answer to the hooks' lazy refresh the user saw in a session (what no hook
+saw waited for the round, 17 s a screen, or for the pointer to come by). On
+the Pi: the agent's log says "red-first pixels, read as they are" and "the
+display driver says what changes (cdvfb)", and a cdvpoke session got its
+frames while a console was typed into; the user then ran a session
+(2026-11-12): it refreshes properly and quickly, the laziness gone. The service there is `C:\Program Files\C-Desk-Vint\
+cdv-new.exe` (build 20261112-dirty of m900's cdv-build, -install from that
+folder so the settings are the same; the old C-Desk-Vint.exe is beside it).
+
+Left: install and
+remove of the driver from the settings window; cdvhook.dll out of the ARM
+build (the user chose that); a release.
 
 **pintkd** (`tools/pintkd.py`): a host for NT 4.0's kernel debugger on ARM,
 which had none; serial, TCP or a unix socket (QEMU). Shows DbgPrint, module
